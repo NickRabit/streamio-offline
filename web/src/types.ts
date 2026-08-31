@@ -14,5 +14,4 @@ export interface Stream {
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; proxyHeaders?: { request?: Record<string, string> } };
 }
-export interface Download { id: string; title: string; status: string; target: string; received: number; total?: number; speed: number; error?: string }
-
+export interface Download { id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed"; target: string; received: number; total?: number; speed: number; error?: string; order: number; createdAt: string; updatedAt: string }

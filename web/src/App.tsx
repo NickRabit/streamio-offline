@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { Check, ChevronRight, CirclePlay, Download, Film, Library, PackagePlus, Plus, Search, Settings, Subtitles, Trash2, Tv, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronRight, CirclePlay, Download, Film, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { Player } from "./Player";
 import type { Addon, Catalog, Download as DownloadJob, Meta, Stream, Subtitle, Video } from "./types";
@@ -15,6 +15,7 @@ export function App() {
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
+  const [concurrentDownloads, setConcurrentDownloads] = useState(1);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
@@ -25,8 +26,9 @@ export function App() {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if (!selectedCatalog && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
-  useEffect(() => { refresh().catch(fail); }, []);
-  useEffect(() => { if (view !== "downloads") return; const load = () => api.downloads().then(setDownloads).catch(fail); load(); const timer = setInterval(load, 1200); return () => clearInterval(timer); }, [view]);
+  const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
+  useEffect(() => { refresh().catch(fail); loadDownloads(); api.settings().then((value) => setConcurrentDownloads(value.concurrentDownloads)).catch(fail); }, []);
+  useEffect(() => { if (view !== "downloads") return; loadDownloads(); const timer = setInterval(loadDownloads, 1200); return () => clearInterval(timer); }, [view]);
 
   const loadCatalog = async (event?: FormEvent) => {
     event?.preventDefault(); if (!currentCatalog) return;
@@ -80,8 +82,8 @@ export function App() {
         </>}
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
-      {view === "downloads" && <Downloads jobs={downloads}/>} 
-      {view === "settings" && <section><Heading eyebrow="NASTAVENÍ" title="Docker a úložiště"/><div className="panel settings-card"><h3>Adresář pro stažené soubory</h3><code>/downloads</code><p>Namapujte tento adresář v <code>compose.yml</code> na sdílenou složku svého NAS. Nastavení download workeru a přímé Real-Debrid API doplníme v dalším milníku.</p></div></section>}
+      {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
+      {view === "settings" && <section><Heading eyebrow="NASTAVENÍ" title="Docker a úložiště"/><div className="panel settings-card"><h3>Adresář pro stažené soubory</h3><code>/downloads</code><p>Namapujte tento adresář v <code>compose.yml</code> na sdílenou složku svého NAS.</p><label className="setting-row"><span><strong>Souběžná stahování</strong><small>Na slabším NAS doporučujeme 1–2 soubory současně.</small></span><select value={concurrentDownloads} onChange={async (event) => { const value = Number(event.target.value); setConcurrentDownloads(value); try { await api.updateSettings(value); notify("Nastavení fronty uloženo."); } catch (e) { fail(e); } }}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></label></div></section>}
     </main>
     <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} onClose={() => setPlayerOpen(false)}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
@@ -102,4 +104,10 @@ function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onC
   </section>;
 }
 
-function Downloads({ jobs }: { jobs: DownloadJob[] }) { const active = jobs.filter((j)=>j.status === "downloading"); const totalSpeed = active.reduce((sum,j)=>sum+j.speed,0); return <section><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div><strong>{job.title}</strong><small>{job.target}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{job.status}</span><div><span>{bytes(job.received)} / {bytes(job.total)}</span><div className="progress"><i style={{width:`${job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span>{speed(job.speed)}</span></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte přímý HTTP stream a použijte tlačítko Stáhnout."/>}</div></section>; }
+function Downloads({ jobs, refresh, onError }: { jobs: DownloadJob[]; refresh: () => Promise<void>; onError: (e: unknown) => void }) {
+  const active = jobs.filter((job) => job.status === "downloading"); const totalSpeed = active.reduce((sum, job) => sum + job.speed, 0); const eta = (job: DownloadJob) => job.speed > 0 && job.total ? fmtEta((job.total - job.received) / job.speed) : "—";
+  const action = async (operation: () => Promise<void>) => { try { await operation(); await refresh(); } catch (error) { onError(error); } };
+  return <section><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div><div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div><strong>{job.title}</strong><small>{job.target}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div><span>{bytes(job.received)} / {bytes(job.total)}</span><div className="progress"><i style={{width:`${job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span>{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions"><button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte přímý HTTP stream a použijte tlačítko Stáhnout."/>}</div></section>;
+}
+const fmtEta = (seconds: number) => seconds < 60 ? `${Math.ceil(seconds)} s` : seconds < 3600 ? `${Math.ceil(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.ceil((seconds % 3600) / 60)} min`;
+const statusLabel = (status: DownloadJob["status"]) => ({ queued: "Ve frontě", downloading: "Stahuji", paused: "Pozastaveno", completed: "Dokončeno", failed: "Chyba" })[status];

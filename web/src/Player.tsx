@@ -1,45 +1,36 @@
+import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { Maximize, Pause, Play, RotateCcw, RotateCw, Volume2, X } from "lucide-react";
-import StremioVideo from "@stremio/stremio-video";
-import { playableStream } from "./api";
+import { api, subtitleUrl } from "./api";
 import type { Stream, Subtitle } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; onClose: () => void }
-const fmt = (ms: number | null) => !Number.isFinite(ms) ? "0:00" : `${Math.floor((ms ?? 0) / 3600000) ? `${Math.floor((ms ?? 0) / 3600000)}:` : ""}${String(Math.floor(((ms ?? 0) % 3600000) / 60000)).padStart(2, "0")}:${String(Math.floor(((ms ?? 0) % 60000) / 1000)).padStart(2, "0")}`;
+const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
 export function Player({ open, title, stream, subtitles, onClose }: Props) {
-  const host = useRef<HTMLDivElement>(null); const engine = useRef<StremioVideo | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null); const sessionRef = useRef<string | null>(null);
   const [paused, setPaused] = useState(true); const [time, setTime] = useState(0); const [duration, setDuration] = useState(0); const [buffering, setBuffering] = useState(false); const [error, setError] = useState("");
-  const dispatch = (action: Record<string, unknown>) => engine.current?.dispatch(action, { containerElement: host.current });
-  const setProp = (name: string, value: unknown) => dispatch({ type: "setProp", propName: name, propValue: value });
+  const allSubtitles = [...(stream?.subtitles ?? []), ...subtitles]; const preferred = allSubtitles.find((item) => /^(cs|cz|cze)$/i.test(item.lang ?? "")) ?? allSubtitles[0];
 
   useEffect(() => {
-    const video = new StremioVideo(); engine.current = video;
-    const prop = (name: string, value: unknown) => { if (name === "paused") setPaused(Boolean(value)); if (name === "time") setTime(Number(value) || 0); if (name === "duration") setDuration(Number(value) || 0); if (name === "buffering") setBuffering(Boolean(value)); };
-    video.on("implementationChanged", (manifest: { props?: string[] }) => manifest.props?.forEach((propName) => video.dispatch({ type: "observeProp", propName }))); video.on("propChanged", prop); video.on("propValue", prop);
-    video.on("error", (value: unknown) => setError(typeof value === "object" ? JSON.stringify(value) : String(value)));
-    return () => { try { video.destroy(); } catch { /* already closed */ } engine.current = null; };
-  }, []);
-
-  useEffect(() => {
-    if (!open || !stream || !host.current) return;
-    setError(""); const prepared = playableStream(stream);
-    dispatch({ type: "command", commandName: "load", commandArgs: { stream: { ...prepared, subtitles: [...(stream.subtitles ?? []), ...subtitles] }, autoplay: true, time: 0, platform: "web", streamingServerURL: null, maxAudioChannels: 2 } });
-    return () => dispatch({ type: "command", commandName: "unload" });
-  }, [open, stream, subtitles]);
+    if (!open || !stream?.url || !videoRef.current) return;
+    let disposed = false; let hls: Hls | null = null; const video = videoRef.current; setError(""); setBuffering(true); setTime(0); setDuration(0);
+    api.startPlayback(stream).then((session) => {
+      if (disposed) { void api.stopPlayback(session.id); return; } sessionRef.current = session.id;
+      if (Hls.isSupported()) {
+        hls = new Hls({ maxBufferLength: 30, backBufferLength: 30 }); hls.loadSource(session.url); hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => void video.play()); hls.on(Hls.Events.ERROR, (_event, data) => { if (data.fatal) setError(`Přehrávání selhalo: ${data.details}`); });
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = session.url; void video.play(); }
+      else setError("Tento prohlížeč nepodporuje HLS přehrávání.");
+    }).catch((value) => setError(value instanceof Error ? value.message : String(value))).finally(() => { if (!disposed) setBuffering(false); });
+    return () => { disposed = true; hls?.destroy(); video.pause(); video.removeAttribute("src"); video.load(); const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id); };
+  }, [open, stream]);
   if (!open) return null;
-  const close = () => { dispatch({ type: "command", commandName: "unload" }); onClose(); };
+  const video = videoRef.current;
   return <div className="player-overlay" role="dialog" aria-modal="true">
-    <div className="player-head"><div><small>PŘEHRÁVÁNÍ</small><strong>{title}</strong></div><button className="icon-button" onClick={close}><X /></button></div>
-    <div ref={host} className="player-host">{buffering && <div className="player-buffer">Načítám…</div>}{error && <div className="player-error">{error}</div>}</div>
-    <div className="timeline"><span>{fmt(time)}</span><input type="range" min="0" max={duration || 1} value={Math.min(time, duration || 1)} onChange={(event) => setProp("time", Number(event.target.value))}/><span>{fmt(duration)}</span></div>
-    <div className="player-controls">
-      <button onClick={() => setProp("time", Math.max(0, time - 10000))}><RotateCcw/> 10</button>
-      <button className="play-toggle" onClick={() => setProp("paused", !paused)}>{paused ? <Play/> : <Pause/>}</button>
-      <button onClick={() => setProp("time", Math.min(duration, time + 10000))}>10 <RotateCw/></button>
-      <Volume2/><input className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => setProp("volume", Number(event.target.value))}/>
-      <button onClick={() => setProp("fullscreen", true)}><Maximize/> Celá obrazovka</button>
-    </div>
+    <div className="player-head"><div><small>PŘEHRÁVÁNÍ · KOMPATIBILNÍ REŽIM</small><strong>{title}</strong></div><button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button></div>
+    <div className="player-host"><video ref={videoRef} playsInline onPlay={() => setPaused(false)} onPause={() => setPaused(true)} onTimeUpdate={(e) => setTime(e.currentTarget.currentTime)} onDurationChange={(e) => setDuration(e.currentTarget.duration)} onWaiting={() => setBuffering(true)} onPlaying={() => setBuffering(false)} onError={() => setError("Prohlížeč nedokázal přehrát převedený stream.")}>{preferred && <track key={preferred.url} kind="subtitles" src={subtitleUrl(preferred.url)} srcLang={preferred.lang || "cs"} label={(preferred.lang || "Titulky").toUpperCase()} default/>}</video>{buffering && !error && <div className="player-buffer">Připravuji kompatibilní stream…</div>}{error && <div className="player-error">{error}</div>}</div>
+    <div className="timeline"><span>{fmt(time)}</span><input aria-label="Pozice videa" type="range" min="0" max={Number.isFinite(duration) && duration > 0 ? duration : Math.max(time, 1)} value={time} onChange={(event) => { if (video) video.currentTime = Number(event.target.value); }}/><span>{fmt(duration)}</span></div>
+    <div className="player-controls"><button onClick={() => { if (video) video.currentTime = Math.max(0, video.currentTime - 10); }}><RotateCcw/> 10</button><button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={() => { if (video) paused ? void video.play() : video.pause(); }}>{paused ? <Play/> : <Pause/>}</button><button onClick={() => { if (video) video.currentTime = Math.min(duration || Infinity, video.currentTime + 10); }}>10 <RotateCw/></button><Volume2/><input aria-label="Hlasitost" className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { if (video) video.volume = Number(event.target.value) / 100; }}/>{preferred && <span>CC {preferred.lang?.toUpperCase() || "ON"}</span>}<button onClick={() => void video?.requestFullscreen()}><Maximize/> Celá obrazovka</button></div>
   </div>;
 }
-

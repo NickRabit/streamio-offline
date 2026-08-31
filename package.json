@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "workspaces": ["server", "web"],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",
@@ -11,4 +11,3 @@
   },
   "engines": { "node": ">=22" }
 }
-

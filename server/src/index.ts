@@ -4,12 +4,14 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, streams, subtitles } from "./addons.js";
 import { DownloadQueue } from "./downloads.js";
+import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
-const app = express(); const store = new Store(); const queue = new DownloadQueue();
+const app = express(); const store = new Store();
 await store.load();
+const queue = new DownloadQueue(() => store.settings().concurrentDownloads); const playback = new PlaybackManager();
 if (!store.defaultsInstalled()) {
   const defaults = [
     { url: "https://v3-cinemeta.strem.io/manifest.json", role: "catalog" as const },
@@ -22,10 +24,11 @@ if (!store.defaultsInstalled()) {
   });
 }
 await queue.load();
+await playback.load();
 app.use(express.json({ limit: "256kb" }));
 const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.1.0" }));
+app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.2.0" }));
 app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)));
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
@@ -46,8 +49,28 @@ app.get("/api/catalog", asyncRoute(async (req, res) => {
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
 app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(await streams(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
+app.get("/api/subtitle", asyncRoute(async (req, res) => {
+  const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await safeFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
+  let text = await response.text(); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
+}));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
 app.post("/api/downloads", asyncRoute(async (req, res) => res.status(201).json(await queue.add(String(req.body.title ?? "video"), req.body.stream as StreamItem))));
+app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
+app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
+app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));
+app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
+app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
+app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
+app.get("/api/settings", (_req, res) => res.json(store.settings()));
+app.patch("/api/settings", asyncRoute(async (req, res) => { const concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1)); await store.update((state) => { state.settings.concurrentDownloads = concurrentDownloads; }); queue.changed(); res.json(store.settings()); }));
+app.post("/api/playback", asyncRoute(async (req, res) => res.status(201).json(await playback.start(req.body.stream as StreamItem))));
+app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
+app.get("/api/playback/:id/:file", asyncRoute(async (req, res) => {
+  const directory = playback.directory(String(req.params.id)); if (!directory) return res.status(404).end(); const file = String(req.params.file);
+  if (!/^(index\.m3u8|segment-\d{6}\.ts)$/.test(file)) return res.status(400).end(); res.setHeader("cache-control", file.endsWith(".m3u8") ? "no-store" : "public, max-age=3600");
+  res.sendFile(path.join(directory, file), (error) => { if (error && !res.headersSent) res.status(404).end(); });
+}));
 
 app.get("/api/proxy", asyncRoute(async (req, res) => {
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw);

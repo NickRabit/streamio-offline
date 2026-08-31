@@ -22,6 +22,14 @@ export const api = {
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: () => request<Download[]>("/api/downloads"),
   download: (title: string, stream: Stream) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, stream }) }),
+  downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
+  moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
+  removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
+  clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
+  settings: () => request<{ concurrentDownloads: number }>("/api/settings"),
+  updateSettings: (concurrentDownloads: number) => request<{ concurrentDownloads: number }>("/api/settings", { method: "PATCH", body: JSON.stringify({ concurrentDownloads }) }),
+  startPlayback: (stream: Stream) => request<{ id: string; url: string; mode: string }>("/api/playback", { method: "POST", body: JSON.stringify({ stream }) }),
+  stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
 };
 
 export function playableStream(stream: Stream): Stream {
@@ -31,4 +39,4 @@ export function playableStream(stream: Stream): Stream {
   if (headers && Object.keys(headers).length) params.set("headers", btoa(unescape(encodeURIComponent(JSON.stringify(headers)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
   return { ...stream, url: `/api/proxy?${params}` };
 }
-
+export const subtitleUrl = (url: string) => `/api/subtitle?${new URLSearchParams({ url })}`;

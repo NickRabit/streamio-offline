@@ -12,10 +12,12 @@ services:
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
+      FFMPEG_PRESET: "${FFMPEG_PRESET:-veryfast}"
+      FFMPEG_CRF: "${FFMPEG_CRF:-23}"
+      FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
     volumes:
       - stremio-offline-data:/data
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
 
 volumes:
   stremio-offline-data:
-
