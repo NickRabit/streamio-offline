@@ -28,6 +28,7 @@ export const api = {
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
   settings: () => request<{ concurrentDownloads: number }>("/api/settings"),
   updateSettings: (concurrentDownloads: number) => request<{ concurrentDownloads: number }>("/api/settings", { method: "PATCH", body: JSON.stringify({ concurrentDownloads }) }),
+  logs: () => fetch("/api/logs").then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
   startPlayback: (stream: Stream) => request<{ id: string; url: string; mode: string }>("/api/playback", { method: "POST", body: JSON.stringify({ stream }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
 };

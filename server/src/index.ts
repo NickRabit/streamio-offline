@@ -7,10 +7,12 @@ import { DownloadQueue } from "./downloads.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
+import { initLogger, log, readLog } from "./logger.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
 const app = express(); const store = new Store();
 await store.load();
+await initLogger(); log("INFO", "Server startuje", { version: "0.2.0" });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads); const playback = new PlaybackManager();
 if (!store.defaultsInstalled()) {
   const defaults = [
@@ -63,6 +65,7 @@ app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
+app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
 app.patch("/api/settings", asyncRoute(async (req, res) => { const concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1)); await store.update((state) => { state.settings.concurrentDownloads = concurrentDownloads; }); queue.changed(); res.json(store.settings()); }));
 app.post("/api/playback", asyncRoute(async (req, res) => res.status(201).json(await playback.start(req.body.stream as StreamItem))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
