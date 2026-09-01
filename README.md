@@ -57,7 +57,13 @@ V seznamu zdrojů se jazyk odhaduje z názvu, který poslal doplněk. U vybrané
 
 ### Hardwarová akcelerace
 
-Na Synology s Intel iGPU lze poslední řádek tabulky odbavit přes QuickSync. V `compose.yml` odkomentujte `devices` a `group_add` (správné GID zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`) a v `.env` nastavte `VAAPI_DEVICE=/dev/dri/renderD128`. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image.
+Na Synology s Intel iGPU (Celeron s QuickSync, např. DS220+/DS920+) stačí spustit aplikaci s připraveným override souborem:
+
+```bash
+docker compose -f compose.yml -f compose.synology.yml up -d --build
+```
+
+Override předá kontejneru `/dev/dri`, nastaví `VAAPI_DEVICE` a přidá procesu skupinu render nodu. Výchozí GID 937 odpovídá skupině `videodriver` na DSM 7; pokud se liší, zjistěte ho na NASu příkazem `stat -c "%g" /dev/dri/renderD128` a nastavte v `.env` jako `RENDER_GID`. Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici` a v přehrávači podle štítku `VAAPI`. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image. Bez akcelerace jede přímé přehrávání i remux naplno, softwarové překódování 1080p ale Celeron nemusí stíhat v reálném čase.
 
 ## Fronta stahování
 
