@@ -93,7 +93,7 @@ export function App() {
   const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
   // Změna katalogu, dotazu nebo filtru začíná od první stránky.
   useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
-    [submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+    [submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
   // Mřížka je vlastní posuvník. Obyčejný posluchač scrollu funguje i tam,
   // kde IntersectionObserver mlčí (skrytý dokument, úsporné režimy).
@@ -104,7 +104,7 @@ export function App() {
     grid.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => grid.removeEventListener("scroll", onScroll);
-  }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+  }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
   /** Tentýž film vede každý doplněk pod svým ID. Slučujeme podle názvu a roku a držíme se
    *  položky s IMDb ID, protože podle něj hledají zdrojové doplňky streamy. */
