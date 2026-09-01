@@ -3,7 +3,7 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { loadAddon, catalog, metadata, streams, subtitles } from "./addons.js";
+import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streams, subtitles } from "./addons.js";
 import { DownloadQueue } from "./downloads.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
@@ -49,8 +49,15 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
 app.get("/api/catalog", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new Error("Doplněk nebyl nalezen.");
-  res.json(await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0));
+  res.json(await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined));
 }));
+app.get("/api/search", asyncRoute(async (req, res) => {
+  const query = String(req.query.query ?? "").trim();
+  if (!query) throw new Error("Zadejte hledaný výraz.");
+  const type = req.query.type ? String(req.query.type) : undefined;
+  res.json(await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined));
+}));
+app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons(), undefined).map(({ addon, definition }) => ({ addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
 app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(await streams(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
@@ -75,6 +82,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
+    if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
   });
   queue.changed(); res.json(store.settings());
 }));

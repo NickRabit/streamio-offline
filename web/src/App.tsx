@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronRight, CirclePlay, Download, Film, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { Player } from "./Player";
@@ -16,9 +16,12 @@ export function App() {
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs" });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [submittedQuery, setSubmittedQuery] = useState(""); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
+  const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
+  const loadingRef = useRef(false); const gridRef = useRef<HTMLDivElement>(null);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
@@ -43,15 +46,83 @@ export function App() {
     setSettings((current: AppSettings) => ({ ...current, ...patch }));
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
-  useEffect(() => { if (view !== "downloads") return; loadDownloads(); const timer = setInterval(loadDownloads, 1200); return () => clearInterval(timer); }, [view]);
+  // Odznak u Stahování musí sedět i mimo tuto záložku, jen se tam nemusí obnovovat tak často.
+  useEffect(() => { loadDownloads(); const timer = setInterval(loadDownloads, view === "downloads" ? 1200 : 5000); return () => clearInterval(timer); }, [view]);
 
-  const loadCatalog = async (event?: FormEvent) => {
-    event?.preventDefault(); if (!currentCatalog) return;
-    if (searchRequired && !search.trim()) { setItems([]); setSelected(null); setStreams([]); return; }
-    setBusy(true); setSelected(null); setStreams([]);
-    try { setItems(await api.catalog(currentCatalog, search)); } catch (e) { fail(e); } finally { setBusy(false); }
+  const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
+
+  /** Stejné položky se můžou vrátit z víc doplňků i z víc stránek. */
+  const merge = (previous: Meta[], incoming: Meta[]) => {
+    const seen = new Set(previous.map((item) => `${item.type}:${item.id}`));
+    return [...previous, ...incoming.filter((item) => !seen.has(`${item.type}:${item.id}`))];
   };
-  useEffect(() => { if (currentCatalog && items.length === 0) loadCatalog(); }, [currentCatalog?.addonKey, currentCatalog?.id]);
+
+  const loadPage = async (reset: boolean) => {
+    if (loadingRef.current) return;
+    if (!submittedQuery && !currentCatalog) return;
+    loadingRef.current = true;
+    const from = reset ? 0 : skip;
+    if (reset) { setBusy(true); setSelected(null); setStreams([]); } else setLoadingMore(true);
+    try {
+      if (submittedQuery) {
+        const result = await api.search(submittedQuery, typeFilter, reset ? "" : cursor);
+        setItems((previous) => reset ? result.items : merge(previous, result.items));
+        setSourceCount(result.sources);
+        setCursor(result.cursor); setHasMore(result.hasMore);
+      } else {
+        const metas = await api.catalog(currentCatalog!, "", from, genre);
+        setItems((previous) => reset ? metas : merge(previous, metas));
+        setSkip(from + metas.length); setHasMore(metas.length > 0);
+      }
+    } catch (e) { fail(e); setHasMore(false); }
+    finally { loadingRef.current = false; setBusy(false); setLoadingMore(false); }
+  };
+
+  const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
+  // Změna katalogu, dotazu nebo filtru začíná od první stránky.
+  useEffect(() => { setItems([]); setSkip(0); setCursor(""); setHasMore(false); void loadPage(true); },
+    [submittedQuery, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+
+  // Mřížka je vlastní posuvník. Obyčejný posluchač scrollu funguje i tam,
+  // kde IntersectionObserver mlčí (skrytý dokument, úsporné režimy).
+  useEffect(() => {
+    const grid = gridRef.current;
+    if (!grid || !hasMore) return;
+    const onScroll = () => { if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 400) void loadPage(false); };
+    grid.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => grid.removeEventListener("scroll", onScroll);
+  }, [hasMore, skip, cursor, submittedQuery, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+
+  /** Tentýž film vede každý doplněk pod svým ID. Slučujeme podle názvu a roku a držíme se
+   *  položky s IMDb ID, protože podle něj hledají zdrojové doplňky streamy. */
+  const groupByName = (list: Meta[]) => {
+    const groups = new Map<string, Meta>();
+    for (const item of list) {
+      const year = String(item.releaseInfo ?? item.year ?? "").slice(0, 4);
+      const key = `${item.type}|${item.name.trim().toLowerCase()}|${year}`;
+      const sources = item.sources ?? [item.addonName].filter(Boolean) as string[];
+      const existing = groups.get(key);
+      if (!existing) { groups.set(key, { ...item, sources: [...sources] }); continue; }
+      const merged = existing.sources ?? [];
+      for (const source of sources) if (!merged.includes(source)) merged.push(source);
+      const preferIncoming = !String(existing.id).startsWith("tt") && String(item.id).startsWith("tt");
+      const winner = preferIncoming ? { ...item } : existing;
+      winner.sources = merged;
+      winner.poster = existing.poster || item.poster;
+      winner.description = existing.description || item.description;
+      groups.set(key, winner);
+    }
+    return [...groups.values()];
+  };
+
+  const visibleItems = useMemo(() => {
+    const year = (item: Meta) => Number(String(item.releaseInfo ?? item.year ?? "").slice(0, 4)) || 0;
+    const list = settings.mergeByName ? groupByName(items) : [...items];
+    if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, "cs"));
+    else if (sort === "year") list.sort((a, b) => year(b) - year(a));
+    return list;
+  }, [items, sort, settings.mergeByName]);
   const fetchSources = async (type: string, id: string, video?: Video) => {
     setSelectedVideo(video ?? null); setSourcesLoaded(false); setBusy(true);
     try { const [nextStreams, nextSubtitles] = await Promise.all([api.streams(type, id), api.subtitles(type, id)]); setStreams(nextStreams); setSelectedStream(nextStreams[0] ?? null); setSubtitles(nextSubtitles); setSourcesLoaded(true); } catch (e) { fail(e); } finally { setBusy(false); }
@@ -66,7 +137,7 @@ export function App() {
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
   };
-  const enqueue = async () => { if (!selectedStream) return; try { await api.download(videoTitle, selectedStream); notify("Přidáno do stahovací fronty."); } catch (e) { fail(e); } };
+  const enqueue = async () => { if (!selectedStream) return; try { await api.download(videoTitle, selectedStream); notify("Přidáno do stahovací fronty."); await loadDownloads(); } catch (e) { fail(e); } };
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></div><div className="online"><i/> Docker server online</div></header>
@@ -79,12 +150,35 @@ export function App() {
     <main>
       {view === "catalog" && <section><Heading eyebrow="KATALOG" title="Co chcete sledovat?"/>
         {!catalogs.length ? <Onboarding onOpen={() => setView("addons")}/> : <>
-          <form className="searchbar" onSubmit={loadCatalog}><select value={selectedCatalog} onChange={(e) => { setSelectedCatalog(e.target.value); setItems([]); }}>
-            {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
-          </select><div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hledat v katalogu…"/></div><button className="primary" disabled={busy}>Vyhledat</button></form>
-          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>Výsledky</h3><span>{items.length} položek</span></div>
-            <div className="poster-grid">{items.map((item) => <button key={`${item.type}:${item.id}`} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <div className="poster-fallback"><Film/></div>}<strong>{item.name}</strong><small>{item.releaseInfo || item.year || item.type}</small></button>)}</div>
-            {!items.length && !busy && <Empty icon={<Search/>} title={searchRequired && !search.trim() ? "Zadejte hledaný název" : "Katalog je prázdný"} text={searchRequired && !search.trim() ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>} {busy && <div className="loading">Načítám…</div>}
+          <form className="searchbar" onSubmit={submitSearch}>
+            <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hledat ve všech doplňcích naráz…"/></div>
+            <button className="primary" disabled={busy}><Search/> Vyhledat</button>
+            {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> Zrušit</button>}
+          </form>
+          <div className="filterbar">
+            {submittedQuery
+              ? <>
+                  <span className="scope-badge">Prohledáno {sourceCount} katalogů ve všech doplňcích</span>
+                  <label><span>Typ</span><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">Vše</option><option value="movie">Filmy</option><option value="series">Seriály</option></select></label>
+                </>
+              : <>
+                  <label><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
+                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
+                  </select></label>
+                  {genreOptions.length > 0 && <label><span>Žánr</span><select value={genre} onChange={(e) => setGenre(e.target.value)}><option value="">Všechny</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
+                </>}
+            <label><span>Řazení</span><select value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">Podle doplňku</option><option value="name">Název A–Ž</option><option value="year">Rok sestupně</option></select></label>
+            {sort !== "default" && <small className="filter-note">Řadí se jen už načtené položky.</small>}
+          </div>
+          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? `Hledání: ${submittedQuery}` : "Výsledky"}</h3><span>{visibleItems.length} položek{hasMore ? "+" : ""}</span></div>
+            <div className="poster-grid" ref={gridRef}>
+              {visibleItems.map((item) => <button key={`${item.type}:${item.id}`} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <div className="poster-fallback"><Film/></div>}<strong>{item.name}</strong><small>{[item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type}</small></button>)}
+              {hasMore && <div className="load-more">{loadingMore ? <span>Načítám další…</span> : <button onClick={() => void loadPage(false)}>Načíst další</button>}</div>}
+            </div>
+            {!items.length && !busy && <Empty icon={<Search/>}
+              title={submittedQuery ? "Nic se nenašlo" : searchRequired ? "Zadejte hledaný název" : "Katalog je prázdný"}
+              text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
+            {busy && <div className="loading">Načítám…</div>}
           </section><section className="panel detail-panel">{selected ? <>
             <div className="hero" style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div></div>
             {selected.videos?.length ? <div className="episodes"><div className="subhead"><h3>Epizody</h3><span>{selected.videos.length}</span></div><div className="episode-list">{selected.videos.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => loadSources(video)}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
@@ -103,6 +197,7 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
       {view === "settings" && <section><Heading eyebrow="NASTAVENÍ" title="Docker a úložiště"/><div className="panel settings-card"><h3>Adresář pro stažené soubory</h3><code>/downloads</code><p>Namapujte tento adresář v <code>compose.yml</code> na sdílenou složku svého NAS.</p><label className="setting-row"><span><strong>Souběžná stahování</strong><small>Na slabším NAS doporučujeme 1–2 soubory současně.</small></span><select value={settings.concurrentDownloads} onChange={(event) => void saveSettings({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
       <label className="setting-row"><span><strong>Preferovaný jazyk zvuku</strong><small>Přehrávač vybere tuto stopu, jinak sáhne po angličtině.</small></span><select value={settings.audioLanguage} onChange={(event) => void saveSettings({ audioLanguage: event.target.value })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+      <label className="setting-row"><span><strong>Slučovat stejné tituly</strong><small>Tentýž film vede každý doplněk pod svým ID. Sloučí se položky se shodným názvem a rokem.</small></span><select value={settings.mergeByName ? "1" : "0"} onChange={(event) => void saveSettings({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></label>
       <label className="setting-row"><span><strong>Preferovaný jazyk titulků</strong><small>Zapne vestavěné titulky v tomto jazyce, jinak zkusí titulky z doplňků.</small></span><select value={settings.subtitleLanguage} onChange={(event) => void saveSettings({ subtitleLanguage: event.target.value })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button className="button" onClick={async () => { try { await navigator.clipboard.writeText(await api.logs()); notify("Log zkopírován do schránky."); } catch (e) { fail(e); } }}>Kopírovat log</button></div><small>Log obsahuje stav přenosů, rychlost a HTTP chyby; URL streamů ani přístupové tokeny se nezapisují.</small></div></section>}
     </main>
     <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onClose={() => setPlayerOpen(false)}/>
@@ -120,7 +215,7 @@ function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onC
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify("Manifest byl přidán."); } catch (err) { onError(err); } finally { setBusy(false); } };
   return <section><Heading eyebrow="DOPLŇKY" title="Knihovny a zdroje"/><p className="lead">Vložte adresu končící na <code>manifest.json</code>. Personalizovaná URL může obsahovat citlivý token; v rozhraní ji po uložení skryjeme.</p>
     <form className="panel addon-form" onSubmit={submit}><label><span>URL manifestu</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>Úloha</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">Automaticky / obojí</option><option value="catalog">Pouze knihovna</option><option value="source">Pouze zdroje</option></select></label><button className="primary" disabled={busy}><Plus/> Přidat</button></form>
-    <div className="addon-grid">{addons.map((addon) => <article className="panel addon-card" key={addon.key}>{addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}<div><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div><div className="addon-actions"><label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (e)=>{await api.toggleAddon(addon.key,e.target.checked);await onChanged();}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{await api.deleteAddon(addon.key);await onChanged();}}><Trash2/></button></div></article>)}</div>
+    <div className="addon-grid">{addons.map((addon) => <article className="panel addon-card" key={addon.key}>{addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}<div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div><div className="addon-actions"><label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (e)=>{await api.toggleAddon(addon.key,e.target.checked);await onChanged();}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{await api.deleteAddon(addon.key);await onChanged();}}><Trash2/></button></div></article>)}</div>
   </section>;
 }
 

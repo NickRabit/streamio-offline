@@ -9,6 +9,16 @@ export interface AddonRecord {
   manifest: StremioManifest;
 }
 
+export interface CatalogDefinition {
+  type: string;
+  id: string;
+  name?: string;
+  extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }>;
+  /** Starší zápis téhož, doplňky ho pořád posílají. */
+  extraSupported?: string[];
+  extraRequired?: string[];
+}
+
 export interface StremioManifest {
   id: string;
   name: string;
@@ -18,12 +28,7 @@ export interface StremioManifest {
   resources?: Array<string | { name: string; types?: string[]; idPrefixes?: string[] }>;
   types?: string[];
   idPrefixes?: string[];
-  catalogs?: Array<{
-    type: string;
-    id: string;
-    name?: string;
-    extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }>;
-  }>;
+  catalogs?: CatalogDefinition[];
   behaviorHints?: { configurable?: boolean; configurationRequired?: boolean; p2p?: boolean };
 }
 
