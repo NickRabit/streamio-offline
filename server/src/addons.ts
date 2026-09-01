@@ -141,8 +141,13 @@ export async function metadata(addons: AddonRecord[], type: string, id: string) 
   return null;
 }
 
-export async function streams(addons: AddonRecord[], type: string, id: string): Promise<StreamItem[]> {
-  const candidates = addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
+/** Doplňky, které pro tenhle titul umí vrátit streamy. Klient se jich pak ptá jednoho po druhém. */
+export function streamCandidates(addons: AddonRecord[], type: string, id: string) {
+  return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
+}
+
+export async function streams(addons: AddonRecord[], type: string, id: string, addonKey?: string): Promise<StreamItem[]> {
+  const candidates = streamCandidates(addons, type, id).filter((a) => !addonKey || a.key === addonKey);
   const results = await Promise.allSettled(candidates.map(async (addon) => {
     const response = await jsonFetch<{ streams?: StreamItem[] }>(resourceUrl(addon, "stream", type, id), STREAM_TIMEOUT_MS);
     return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
