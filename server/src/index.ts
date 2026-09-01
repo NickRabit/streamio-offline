@@ -16,7 +16,7 @@ import type { AddonRole, StreamItem } from "./types.js";
 
 const app = express(); const store = new Store();
 await store.load();
-await initLogger(); log("INFO", "Server startuje", { version: "0.2.0" });
+await initLogger(); log("INFO", "Server startuje", { version: "0.3.0" });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads); const playback = new PlaybackManager();
 if (!store.defaultsInstalled()) {
   const defaults = [
@@ -34,7 +34,7 @@ await playback.load();
 app.use(express.json({ limit: "256kb" }));
 const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.2.0" }));
+app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.3.0" }));
 app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)));
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;

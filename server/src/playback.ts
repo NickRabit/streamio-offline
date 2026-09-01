@@ -28,11 +28,26 @@ export interface PlaybackDescriptor {
   audioTrack: number; subtitleTrack: number | null;
 }
 
+/** Jednoduchá fronta operací pro jednu relaci. Seek a změna stopy nesmějí
+ * běžet souběžně, protože každý restart vytváří a uklízí vlastní HLS generaci. */
+export class SerialOperations {
+  private tail: Promise<void> = Promise.resolve();
+
+  run<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.tail.then(operation, operation);
+    this.tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  wait() { return this.tail; }
+}
+
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
   audioTrack: number; subtitleTrack: number | null;
   process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
+  operations: SerialOperations; stopped: boolean;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -103,7 +118,7 @@ export class PlaybackManager {
 
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, lastAccess: Date.now(),
+      audioTrack, subtitleTrack, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false,
     };
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
@@ -123,18 +138,25 @@ export class PlaybackManager {
   }
 
   /** Posun mimo už vyrobenou část: FFmpeg se restartuje od nové pozice, klient si posune časovou osu. */
-  async seek(id: string, time: number) { return this.restart(id, time, "Posun v přehrávání"); }
+  async seek(id: string, time: number) {
+    const session = this.require(id);
+    return session.operations.run(() => this.restart(session, time, "Posun v přehrávání"));
+  }
 
   /** Přepnutí zvukové nebo titulkové stopy znamená nové mapování, tedy taky restart od aktuální pozice. */
   async track(id: string, changes: { audio?: number; subtitle?: number | null; time?: number }) {
     const session = this.require(id);
-    if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
-    if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
-    return this.restart(id, changes.time ?? session.offset, "Přepnuta stopa");
+    return session.operations.run(async () => {
+      this.assertActive(session);
+      if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
+      if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
+      return this.restart(session, changes.time ?? session.offset, "Přepnuta stopa");
+    });
   }
 
-  private async restart(id: string, time: number, message: string) {
-    const session = this.require(id);
+  private async restart(session: Session, time: number, message: string) {
+    this.assertActive(session);
+    const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
     // Starý FFmpeg dobíhá na pozadí; nový píše do jiné generace, takže se nemají o co přetahovat.
@@ -143,8 +165,10 @@ export class PlaybackManager {
     let url: string;
     try { url = await this.spawnAt(session, target); }
     catch (error) {
+      this.assertActive(session);
       log("WARN", "Restart převodu selhal, zkouším ještě jednou", { id, offset: Math.round(target), reason: error instanceof Error ? error.message : String(error) });
       await sleep(1000);
+      this.assertActive(session);
       url = await this.spawnAt(session, target);
     }
     log("INFO", message, { id, offset: Math.round(target), mode: session.mode, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
@@ -154,7 +178,10 @@ export class PlaybackManager {
   async stop(id: string) {
     const session = this.sessions.get(id);
     if (!session) return;
+    session.stopped = true;
     this.sessions.delete(id);
+    await this.kill(session);
+    await session.operations.wait();
     await this.kill(session);
     await this.purge(path.join(this.root, id));
   }
@@ -168,8 +195,12 @@ export class PlaybackManager {
 
   private require(id: string) {
     const session = this.sessions.get(id);
-    if (!session) throw new Error("Relace přehrávání už neexistuje.");
+    if (!session || session.stopped) throw new Error("Relace přehrávání už neexistuje.");
     return session;
+  }
+
+  private assertActive(session: Session) {
+    if (session.stopped || this.sessions.get(session.id) !== session) throw new Error("Relace přehrávání už neexistuje.");
   }
 
   private describe(session: Session, url: string): PlaybackDescriptor {
@@ -231,11 +262,13 @@ export class PlaybackManager {
   }
 
   private async spawnAt(session: Session, offset: number): Promise<string> {
+    this.assertActive(session);
     const previous = session.directory;
     session.generation += 1;
     session.offset = offset;
     const directory = path.join(this.root, session.id, String(session.generation));
     await mkdir(directory, { recursive: true });
+    this.assertActive(session);
     session.directory = directory;
     session.lastAccess = Date.now();
     // Uklidit se dá až po skutečném konci starého procesu, jinak si sahají do stejného adresáře.
@@ -245,6 +278,7 @@ export class PlaybackManager {
     session.mode = copyVideo ? "remux" : "transcode";
     const attempts = !copyVideo && this.vaapiDevice ? [true, false] : [false];
     for (const hardware of attempts) {
+      this.assertActive(session);
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
       if (hardware) log("WARN", "VAAPI selhalo, zkouším softwarový převod", { id: session.id, reason: session.error });
@@ -265,6 +299,7 @@ export class PlaybackManager {
     // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
     const ready = path.join(directory, "index-0.m3u8");
     for (let attempt = 0; attempt < 160; attempt += 1) {
+      if (session.stopped) { child.kill("SIGTERM"); break; }
       try { await access(ready); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; }
       catch { if (finished) break; await sleep(250); }
     }

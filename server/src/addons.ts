@@ -9,7 +9,7 @@ async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS): Promise<T> 
   const url = await validateRemoteUrl(rawUrl);
   const response = await safeFetch(url.toString(), {
     signal: AbortSignal.timeout(timeoutMs),
-    headers: { accept: "application/json", "user-agent": "StremioOffline/0.1" },
+    headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.0" },
   });
   if (!response.ok) throw new Error(`Doplněk odpověděl HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
