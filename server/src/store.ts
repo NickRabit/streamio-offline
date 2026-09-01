@@ -2,8 +2,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
 
-interface State { addons: AddonRecord[]; settings: { concurrentDownloads: number }; defaultsInstalled: boolean }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1 }, defaultsInstalled: false };
+interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string }
+interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean }
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs" }, defaultsInstalled: false };
 
 export class Store {
   private state: State = structuredClone(initialState);
@@ -11,7 +12,10 @@ export class Store {
   constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.filename = path.join(dataDir, "state.json"); }
   async load() {
     await mkdir(path.dirname(this.filename), { recursive: true });
-    try { this.state = { ...structuredClone(initialState), ...JSON.parse(await readFile(this.filename, "utf8")) }; }
+    try {
+      const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
+      this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...loaded.settings } };
+    }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }
   addons() { return this.state.addons; }

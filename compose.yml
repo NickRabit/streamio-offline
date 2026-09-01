@@ -15,6 +15,15 @@ services:
       FFMPEG_PRESET: "${FFMPEG_PRESET:-veryfast}"
       FFMPEG_CRF: "${FFMPEG_CRF:-23}"
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
+      FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-8}"
+      VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
+    # Hardwarový převod na Synology s Intel iGPU (QuickSync): odkomentujte
+    # a v .env nastavte VAAPI_DEVICE=/dev/dri/renderD128.
+    # Správné GID zjistíte na NASu příkazem: stat -c "%g" /dev/dri/renderD128
+    # devices:
+    #   - /dev/dri:/dev/dri
+    # group_add:
+    #   - "937"
     volumes:
       - stremio-offline-data:/data
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
