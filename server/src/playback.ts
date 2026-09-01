@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
 import { probe, type MediaInfo, type Track } from "./probe.js";
@@ -229,7 +230,10 @@ export class PlaybackManager {
     if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
     return `/api/proxy?${params}`;
   }
-  private localUrl(relative: string) { return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}`; }
+  /** Volání zevnitř serveru se prokazuje procesním tokenem, protože cookie prohlížeče nemá. */
+  private localUrl(relative: string) {
+    return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}${relative.includes("?") ? "&" : "?"}token=${INTERNAL_TOKEN}`;
+  }
 
   private extension(stream: StreamItem) {
     let name = stream.behaviorHints?.filename ?? "";

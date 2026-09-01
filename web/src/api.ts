@@ -1,10 +1,15 @@
-import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+
+/** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
+}
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...options?.headers } });
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.error ?? `HTTP ${response.status}`);
+    const body = await response.json().catch(() => ({} as { error?: string; code?: string }));
+    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code);
   }
   return response.status === 204 ? undefined as T : response.json();
 }
@@ -38,6 +43,10 @@ export const api = {
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
+  me: () => request<Session>("/api/auth/me"),
+  login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
+  logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
+  changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),
 };
 
 export const subtitleUrl = (url: string, offset = 0) => `/api/subtitle?${new URLSearchParams(offset ? { url, offset: offset.toFixed(3) } : { url })}`;

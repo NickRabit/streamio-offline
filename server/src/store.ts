@@ -1,10 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
+import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 
 interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean }
-interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean }
+interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState }
 const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true }, defaultsInstalled: false };
 
 export class Store {
@@ -23,6 +24,7 @@ export class Store {
   addons() { return this.state.addons; }
   settings() { return this.state.settings; }
   defaultsInstalled() { return this.state.defaultsInstalled; }
+  auth() { return this.state.auth; }
   private chain: Promise<void> = Promise.resolve();
   /** Zápisy jdou za sebou, jinak si dvě souběžná uložení přeberou stejný .tmp soubor. */
   async update(mutator: (state: State) => void) {
