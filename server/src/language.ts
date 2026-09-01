@@ -60,14 +60,22 @@ export function pickByLanguage<T extends { language?: string; default?: boolean 
   return marked >= 0 ? marked : 0;
 }
 
-/** Záchrana pro soubory bez značky jazyka: leckdy je jazyk aspoň v popisku stopy. */
+/** Záchrana pro soubory bez značky jazyka: leckdy je jazyk aspoň v popisku stopy.
+ *  Delší aliasy hledáme bez ohledu na velikost písmen, dvoupísmenné jen jako
+ *  samostatné velké slovo — "CZ dabing" je jazyk, "no" ve větě není norština. */
 export function detectLanguage(text?: string): string | undefined {
   if (!text) return undefined;
   const haystack = text.toLowerCase();
   for (const [code, aliases] of Object.entries(ALIASES)) {
     for (const alias of aliases) {
-      if (alias.length > 2 && new RegExp(`(^|[^a-z])${alias}([^a-z]|$)`).test(haystack)) return code;
+      if (alias.length <= 2) continue;
+      if (new RegExp(`(^|[^a-z])${alias}([^a-z]|$)`).test(haystack)) return code;
     }
+  }
+  const upper = new Set(text.match(/\b[A-Z]{2}\b/g) ?? []);
+  for (const token of upper) {
+    const code = LOOKUP.get(token.toLowerCase());
+    if (code) return code;
   }
   return undefined;
 }
