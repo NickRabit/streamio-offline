@@ -11,7 +11,11 @@ RUN npm run build
 FROM node:22-bookworm-slim AS runtime
 ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+ARG TARGETARCH
+# Ovladače Intel QuickSync existují jen pro amd64; na arm64 se image staví bez nich.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo \
+    && if [ "$TARGETARCH" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
+    && rm -rf /var/lib/apt/lists/*
 COPY package.json ./
 COPY server/package.json server/package.json
 COPY web/package.json web/package.json
