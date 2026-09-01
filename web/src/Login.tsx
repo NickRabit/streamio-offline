@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { CirclePlay, KeyRound, LogOut, ShieldAlert } from "lucide-react";
 import { api } from "./api";
 import type { Session } from "./types";
+import { SettingControl, SettingsSectionHead } from "./settings-ui";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -78,22 +79,27 @@ export function AccountSettings({ session, onSession, onNotify, onError }: {
     finally { setBusy(false); }
   };
 
-  return <div className="panel settings-card account-card">
-    <h3>Přihlášení</h3>
-    <p>Přihlášen jako <strong>{session.username}</strong>. Změna údajů odhlásí všechna ostatní zařízení.</p>
-    <form className="account-form" onSubmit={submit}>
-      <label><span>Uživatelské jméno</span><input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/></label>
-      <label><span>Stávající heslo</span><input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/></label>
-      <label><span>Nové heslo</span><input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/></label>
+  const signOut = async (everywhere: boolean) => {
+    if (everywhere && !confirm("Odhlásit i všechna ostatní zařízení? Uložená přihlášení v jiných prohlížečích přestanou platit.")) return;
+    try { await api.logout(everywhere); } finally { location.reload(); }
+  };
+
+  return <form className="panel settings-section" onSubmit={submit}>
+    <SettingsSectionHead icon={<KeyRound/>} title="Přihlášení" text={`Přihlášen jako ${session.username}`}/>
+    <SettingControl title="Uživatelské jméno" text="Používá se při přihlášení do tohoto serveru.">
+      <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/>
+    </SettingControl>
+    <SettingControl title="Stávající heslo" text="Ověří, že údaje mění opravdu vy.">
+      <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/>
+    </SettingControl>
+    <SettingControl title="Nové heslo" text="Aspoň 6 znaků. Změna odhlásí všechna ostatní zařízení.">
+      <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/>
+    </SettingControl>
+    <div className="setting-actions">
       <button className="primary" disabled={busy}><KeyRound/> Změnit údaje</button>
-    </form>
-    <div className="log-actions">
-      <button onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit se</button>
-      <button className="danger" onClick={async () => {
-        if (!confirm("Odhlásit i všechna ostatní zařízení? Uložená přihlášení v jiných prohlížečích přestanou platit.")) return;
-        try { await api.logout(true); } finally { location.reload(); }
-      }}><ShieldAlert/> Odhlásit všude</button>
+      <button type="button" onClick={() => void signOut(false)}><LogOut/> Odhlásit se</button>
+      <button type="button" className="danger" onClick={() => void signOut(true)}><ShieldAlert/> Odhlásit všude</button>
     </div>
-    <small>Odhlášení zneplatní relaci i na serveru, takže zachycená cookie už dovnitř nepustí. Záložní údaje z proměnných ADMIN_USERNAME a ADMIN_PASSWORD platí souběžně a tímto formulářem se nemění.</small>
-  </div>;
+    <small className="setting-note">Odhlášení zneplatní relaci i na serveru, takže zachycená cookie už dovnitř nepustí. Záložní údaje z ADMIN_USERNAME a ADMIN_PASSWORD platí souběžně a tímto formulářem se nemění.</small>
+  </form>;
 }
