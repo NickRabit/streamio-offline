@@ -21,10 +21,15 @@ export class Store {
   addons() { return this.state.addons; }
   settings() { return this.state.settings; }
   defaultsInstalled() { return this.state.defaultsInstalled; }
+  private chain: Promise<void> = Promise.resolve();
+  /** Zápisy jdou za sebou, jinak si dvě souběžná uložení přeberou stejný .tmp soubor. */
   async update(mutator: (state: State) => void) {
     mutator(this.state);
-    const temp = `${this.filename}.tmp`;
-    await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-    await rename(temp, this.filename);
+    this.chain = this.chain.then(async () => {
+      const temp = `${this.filename}.tmp`;
+      await writeFile(temp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
+      await rename(temp, this.filename);
+    });
+    return this.chain;
   }
 }

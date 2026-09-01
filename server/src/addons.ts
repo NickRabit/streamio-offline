@@ -70,8 +70,8 @@ function requiredExtras(definition: CatalogDefinition): string[] {
 }
 
 /** Katalogy, do kterých má smysl poslat dotaz: umí search a nechtějí nic, co neumíme dodat. */
-export function searchableCatalogs(addons: AddonRecord[], type?: string) {
-  return addons.filter((addon) => addon.enabled && addon.role !== "source").flatMap((addon) =>
+export function searchableCatalogs(addons: AddonRecord[], type?: string, addonKey?: string) {
+  return addons.filter((addon) => addon.enabled && addon.role !== "source" && (!addonKey || addon.key === addonKey)).flatMap((addon) =>
     (addon.manifest.catalogs ?? [])
       .filter((definition) => (!type || definition.type === type) && declaresExtra(definition, "search"))
       .filter((definition) => requiredExtras(definition).every((name) => name === "search"))
@@ -90,8 +90,8 @@ const decodeCursor = (cursor?: string): Record<string, number> => {
 const encodeCursor = (offsets: Record<string, number>) => Buffer.from(JSON.stringify(offsets)).toString("base64url");
 
 /** Stremio se ptá všech doplňků naráz; jeden pomalý nebo rozbitý nesmí shodit zbytek. */
-export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string): Promise<SearchResult> {
-  const targets = searchableCatalogs(addons, type);
+export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, addonKey?: string): Promise<SearchResult> {
+  const targets = searchableCatalogs(addons, type, addonKey);
   const offsets = decodeCursor(cursor);
   const nextOffsets: Record<string, number> = {};
 

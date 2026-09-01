@@ -19,9 +19,9 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
-  const [submittedQuery, setSubmittedQuery] = useState(""); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
+  const [submittedQuery, setSubmittedQuery] = useState(""); const [searchAddon, setSearchAddon] = useState(""); const [searchable, setSearchable] = useState<Array<{ addonKey: string; addonName: string }>>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
-  const loadingRef = useRef(false); const gridRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
@@ -34,6 +34,8 @@ export function App() {
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
   useEffect(() => { refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, []);
+  // Nabídka doplňků, ve kterých má smysl hledat, se mění s jejich zapínáním.
+  useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Přesné jazyky zná až rozbor souboru, tak ho uděláme pro vybraný stream.
   useEffect(() => {
     setInspection(null);
@@ -58,30 +60,39 @@ export function App() {
   };
 
   const loadPage = async (reset: boolean) => {
-    if (loadingRef.current) return;
     if (!submittedQuery && !currentCatalog) return;
+    // Donačítání se smí zahodit, ale nové zadání ne — to musí předchozí běh přebít.
+    if (!reset && loadingRef.current) return;
+    const request = reset ? ++requestRef.current : requestRef.current;
+    const stale = () => request !== requestRef.current;
     loadingRef.current = true;
     const from = reset ? 0 : skip;
     if (reset) { setBusy(true); setSelected(null); setStreams([]); } else setLoadingMore(true);
     try {
       if (submittedQuery) {
-        const result = await api.search(submittedQuery, typeFilter, reset ? "" : cursor);
-        setItems((previous) => reset ? result.items : merge(previous, result.items));
-        setSourceCount(result.sources);
-        setCursor(result.cursor); setHasMore(result.hasMore);
+        const result = await api.search(submittedQuery, typeFilter, reset ? "" : cursor, searchAddon);
+        if (stale()) return;
+        const next = reset ? result.items : merge(itemsRef.current, result.items);
+        // Doplněk může vracet pořád totéž; bez téhle pojistky by se donačítalo donekonečna.
+        const gainedNothing = !reset && next.length === itemsRef.current.length;
+        itemsRef.current = next; setItems(next);
+        setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, genre);
-        setItems((previous) => reset ? metas : merge(previous, metas));
-        setSkip(from + metas.length); setHasMore(metas.length > 0);
+        if (stale()) return;
+        const next = reset ? metas : merge(itemsRef.current, metas);
+        const gainedNothing = !reset && next.length === itemsRef.current.length;
+        itemsRef.current = next; setItems(next);
+        setSkip(from + metas.length); setHasMore(metas.length > 0 && !gainedNothing);
       }
-    } catch (e) { fail(e); setHasMore(false); }
-    finally { loadingRef.current = false; setBusy(false); setLoadingMore(false); }
+    } catch (e) { if (!stale()) { fail(e); setHasMore(false); } }
+    finally { if (!stale()) { loadingRef.current = false; setBusy(false); setLoadingMore(false); } }
   };
 
   const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
   // Změna katalogu, dotazu nebo filtru začíná od první stránky.
-  useEffect(() => { setItems([]); setSkip(0); setCursor(""); setHasMore(false); void loadPage(true); },
-    [submittedQuery, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+  useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
+    [submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
 
   // Mřížka je vlastní posuvník. Obyčejný posluchač scrollu funguje i tam,
   // kde IntersectionObserver mlčí (skrytý dokument, úsporné režimy).
@@ -92,7 +103,7 @@ export function App() {
     grid.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
     return () => grid.removeEventListener("scroll", onScroll);
-  }, [hasMore, skip, cursor, submittedQuery, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
+  }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, genre, currentCatalog?.addonKey, currentCatalog?.id]);
 
   /** Tentýž film vede každý doplněk pod svým ID. Slučujeme podle názvu a roku a držíme se
    *  položky s IMDb ID, protože podle něj hledají zdrojové doplňky streamy. */
@@ -137,7 +148,14 @@ export function App() {
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
   };
-  const enqueue = async () => { if (!selectedStream) return; try { await api.download(videoTitle, selectedStream); notify("Přidáno do stahovací fronty."); await loadDownloads(); } catch (e) { fail(e); } };
+  const enqueue = async () => {
+    if (!selectedStream) return;
+    // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
+    const media = selectedVideo
+      ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name }
+      : { kind: "movie", title: selected?.name };
+    try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); } catch (e) { fail(e); }
+  };
 
   return <div className="app-shell">
     <header className="topbar"><div className="brand"><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></div><div className="online"><i/> Docker server online</div></header>
@@ -152,13 +170,17 @@ export function App() {
         {!catalogs.length ? <Onboarding onOpen={() => setView("addons")}/> : <>
           <form className="searchbar" onSubmit={submitSearch}>
             <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hledat ve všech doplňcích naráz…"/></div>
+            <label className="scope-select"><span>v</span><select aria-label="Kde hledat" value={searchAddon} onChange={(e) => setSearchAddon(e.target.value)}>
+              <option value="">všech doplňcích</option>
+              {[...new Map(searchable.map((item) => [item.addonKey, item.addonName])).entries()].map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+            </select></label>
             <button className="primary" disabled={busy}><Search/> Vyhledat</button>
             {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> Zrušit</button>}
           </form>
           <div className="filterbar">
             {submittedQuery
               ? <>
-                  <span className="scope-badge">Prohledáno {sourceCount} katalogů ve všech doplňcích</span>
+                  <span className="scope-badge">Prohledáno {sourceCount} {sourceCount === 1 ? "katalog" : sourceCount >= 2 && sourceCount <= 4 ? "katalogy" : "katalogů"} {searchAddon ? `v doplňku ${searchable.find((item) => item.addonKey === searchAddon)?.addonName ?? ""}` : "ve všech doplňcích"}</span>
                   <label><span>Typ</span><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">Vše</option><option value="movie">Filmy</option><option value="series">Seriály</option></select></label>
                 </>
               : <>
