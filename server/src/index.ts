@@ -11,6 +11,7 @@ import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, normalizeDownloadSettings } from "./naming.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
@@ -44,7 +45,7 @@ app.post("/api/addons", asyncRoute(async (req, res) => {
 }));
 app.delete("/api/addons/:key", asyncRoute(async (req, res) => { await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); }); res.status(204).end(); }));
 app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
-  await store.update((state) => { const addon = state.addons.find((a) => a.key === req.params.key); if (!addon) throw new Error("Doplněk nebyl nalezen."); if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled; });
+  await store.update((state) => { const addon = state.addons.find((a) => a.key === req.params.key); if (!addon) throw new Error("Doplněk nebyl nalezen."); if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled; if (req.body.downloadSettings !== undefined) addon.downloadSettings = normalizeDownloadSettings(req.body.downloadSettings); });
   res.json(publicAddon(store.addons().find((a) => a.key === req.params.key)!));
 }));
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
@@ -69,7 +70,14 @@ app.get("/api/subtitle", asyncRoute(async (req, res) => {
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
-app.post("/api/downloads", asyncRoute(async (req, res) => res.status(201).json(await queue.add(String(req.body.title ?? "video"), req.body.stream as StreamItem, req.body.media as MediaInfo | undefined))));
+app.post("/api/downloads", asyncRoute(async (req, res) => {
+  const stream = req.body.stream as StreamItem;
+  const media = req.body.media as MediaInfo | undefined;
+  const addon = store.addons().find((item) => item.key === stream.addonKey);
+  const settings = addon?.downloadSettings ?? defaultDownloadSettings();
+  const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
+  res.status(201).json(await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings));
+}));
 app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));

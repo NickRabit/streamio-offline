@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { joinTarget, safeName, targetPath } from "./naming.js";
+import { joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, targetPath } from "./naming.js";
 
 test("film jde do vlastní složky se stejným názvem", () => {
   const { directory, base } = targetPath({ kind: "movie", title: "The Matrix" }, "cokoli", ".mkv");
@@ -71,4 +71,30 @@ test("prázdný nebo jen tečkový název nespadne", () => {
 
 test("příliš dlouhý název se ořízne", () => {
   assert.ok(safeName("a".repeat(400)).length <= 150);
+});
+
+test("film lze uložit naplocho do podsložky doplňku", () => {
+  const target = targetPath({ kind: "movie", title: "The Matrix" }, "x", ".mkv", { subfolder: "Webshare/Filmy", layout: "flat" });
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Webshare/Filmy/The Matrix.mkv");
+});
+
+test("seriál lze uložit naplocho bez kolize názvů epizod", () => {
+  const target = targetPath({ kind: "episode", title: "Simpsonovi", season: 1, episode: 7, episodeTitle: "Vánoce" }, "x", ".mkv", { subfolder: "Sosac", layout: "flat" });
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Sosac/Simpsonovi - S01E07 - Vánoce.mkv");
+});
+
+test("strukturované ukládání přidá podsložku před běžnou strukturou", () => {
+  const target = targetPath({ kind: "episode", title: "Simpsonovi", season: 2, episode: 3, episodeTitle: "Díl" }, "x", ".mkv", { subfolder: "Streamy/Seriály", layout: "structured" });
+  assert.equal(joinTarget(target.directory, target.base, ".mkv"), "Streamy/Seriály/Simpsonovi/02 serie/03 - Díl.mkv");
+});
+
+test("výchozí nastavení migruje na základní složku a strukturu", () => {
+  assert.deepEqual(normalizeDownloadSettings(undefined), {
+    movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" },
+  });
+});
+
+test("podsložka nesmí uniknout mimo downloads", () => {
+  for (const value of ["../tajne", "/etc", "C:\\Windows", "filmy/../../etc"]) assert.throws(() => safeSubfolder(value));
+  assert.equal(safeSubfolder("Doplňky/Webshare"), "Doplňky/Webshare");
 });

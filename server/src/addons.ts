@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { safeFetch, validateRemoteUrl } from "./security.js";
+import { defaultDownloadSettings } from "./naming.js";
 
 const TIMEOUT_MS = 12_000;
 const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
@@ -26,7 +27,7 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
   if (!manifest.id || !manifest.name || !manifest.version) throw new Error("Manifest nemá povinné údaje id, name a version.");
   return {
     key: randomUUID(), manifestUrl: url.toString(), role, enabled: true,
-    addedAt: new Date().toISOString(), manifest,
+    addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),
   };
 }
 

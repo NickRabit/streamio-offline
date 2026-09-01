@@ -80,5 +80,6 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     manifest: addon.manifest,
     displayUrl: `${url.origin}${sensitivePath ? "/…/manifest.json" : url.pathname}`,
     configurable: Boolean(addon.manifest.behaviorHints?.configurable),
+    downloadSettings: addon.downloadSettings,
   };
 }

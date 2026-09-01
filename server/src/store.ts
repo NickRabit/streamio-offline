@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
+import { normalizeDownloadSettings } from "./naming.js";
 
 interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean }
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean }
@@ -15,6 +16,7 @@ export class Store {
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
       this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...loaded.settings } };
+      this.state.addons = this.state.addons.map((addon) => ({ ...addon, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   }

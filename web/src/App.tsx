@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, Check, ChevronRight, CirclePlay, Download, Film, Li
 import { api } from "./api";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
-import type { Addon, Catalog, Download as DownloadJob, Inspection, Meta, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -237,8 +237,26 @@ function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onC
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify("Manifest byl přidán."); } catch (err) { onError(err); } finally { setBusy(false); } };
   return <section><Heading eyebrow="DOPLŇKY" title="Knihovny a zdroje"/><p className="lead">Vložte adresu končící na <code>manifest.json</code>. Personalizovaná URL může obsahovat citlivý token; v rozhraní ji po uložení skryjeme.</p>
     <form className="panel addon-form" onSubmit={submit}><label><span>URL manifestu</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>Úloha</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">Automaticky / obojí</option><option value="catalog">Pouze knihovna</option><option value="source">Pouze zdroje</option></select></label><button className="primary" disabled={busy}><Plus/> Přidat</button></form>
-    <div className="addon-grid">{addons.map((addon) => <article className="panel addon-card" key={addon.key}>{addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}<div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div><div className="addon-actions"><label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (e)=>{await api.toggleAddon(addon.key,e.target.checked);await onChanged();}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{await api.deleteAddon(addon.key);await onChanged();}}><Trash2/></button></div></article>)}</div>
+    <div className="addon-grid">{addons.map((addon) => <AddonCard key={addon.key} addon={addon} onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
   </section>;
+}
+
+function AddonCard({ addon, onChanged, onNotify, onError }: { addon: Addon; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
+  const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
+  const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(addon.downloadSettings));
+  const [saving, setSaving] = useState(false);
+  useEffect(() => setDraft(clone(addon.downloadSettings)), [addon.downloadSettings]);
+  const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
+  const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(`Ukládání pro ${addon.manifest.name} bylo nastaveno.`); } catch (error) { onError(error); } finally { setSaving(false); } };
+  return <article className="panel addon-card">
+    {addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}
+    <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div>
+    <div className="addon-actions"><label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button></div>
+    <div className="addon-download-settings"><div className="addon-download-head"><strong>Ukládání souborů</strong><small>Podsložky jsou relativní k <code>/downloads</code>; prázdná znamená základní složku.</small></div>
+      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{kind === "movie" ? "Filmy" : "Seriály"}</b><label><span>Podsložka</span><input value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={kind === "movie" ? "např. Filmy/Webshare" : "např. Seriály/Webshare"}/></label><label><span>Struktura</span><select value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">Složka podle titulu</option><option value="flat">Plochá – pouze soubory</option></select></label></div>)}</div>
+      <button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{saving ? "Ukládám…" : "Uložit umístění"}</button>
+    </div>
+  </article>;
 }
 
 function Downloads({ jobs, refresh, onError }: { jobs: DownloadJob[]; refresh: () => Promise<void>; onError: (e: unknown) => void }) {

@@ -4,7 +4,8 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { StreamItem } from "./types.js";
-import { joinTarget, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, joinTarget, targetPath, type MediaInfo } from "./naming.js";
+import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { log } from "./logger.js";
 
@@ -18,11 +19,11 @@ export class DownloadQueue {
   constructor(private concurrency: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
   async load() { await mkdir(path.dirname(this.stateFile), { recursive: true }); await mkdir(this.downloadDir, { recursive: true }); try { this.jobs = JSON.parse(await readFile(this.stateFile, "utf8")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; } for (const job of this.jobs) { if (job.status === "downloading") job.status = "queued"; job.updatedAt ??= job.createdAt; job.speed = 0; } await this.save(); this.pump(); }
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  async add(title: string, stream: StreamItem, media?: MediaInfo) {
+  async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
     if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
     const hinted = stream.behaviorHints?.filename;
     const extension = path.extname(hinted ?? new URL(stream.url).pathname) || ".mp4";
-    const { directory, base } = targetPath(media, title, extension);
+    const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
     const now = new Date().toISOString();
     const job: DownloadJob = { id: crypto.randomUUID(), title, stream, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now };

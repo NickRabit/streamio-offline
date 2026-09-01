@@ -1,4 +1,4 @@
-import type { Addon, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Settings, Stream, Subtitle } from "./types";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...options?.headers } });
@@ -14,6 +14,7 @@ export const api = {
   addons: () => request<Addon[]>("/api/addons"),
   addAddon: (url: string, role: string) => request<Addon>("/api/addons", { method: "POST", body: JSON.stringify({ url, role }) }),
   deleteAddon: (key: string) => request<void>(`/api/addons/${key}`, { method: "DELETE" }),
+  updateAddon: (key: string, patch: { enabled?: boolean; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
   catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),

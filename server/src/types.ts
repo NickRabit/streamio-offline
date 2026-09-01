@@ -1,4 +1,7 @@
 export type AddonRole = "catalog" | "source" | "both";
+export type DownloadLayout = "flat" | "structured";
+export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
+export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 
 export interface AddonRecord {
   key: string;
@@ -7,6 +10,7 @@ export interface AddonRecord {
   enabled: boolean;
   addedAt: string;
   manifest: StremioManifest;
+  downloadSettings: AddonDownloadSettings;
 }
 
 export interface CatalogDefinition {
@@ -73,4 +77,3 @@ export interface SubtitleItem {
   addonName?: string;
   [key: string]: unknown;
 }
-
