@@ -12,7 +12,7 @@ import type { StreamItem } from "./types.js";
 export type PlaybackMode = "direct" | "remux" | "transcode";
 
 export interface ClientCapabilities {
-  h264?: boolean; hevc?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
+  h264?: boolean; hevc?: boolean; hevc10?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
   aac?: boolean; mp3?: boolean; opus?: boolean; vorbis?: boolean; ac3?: boolean; eac3?: boolean; flac?: boolean;
 }
 
@@ -58,6 +58,13 @@ interface Session {
   process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
 }
+
+/** Main a Main 10 jsou pro prohlížeč dva různé kodeky. Desetibitový stream se nesmí kopírovat
+ *  jen proto, že prohlížeč umí osmibitový — SourceBuffer by ho odmítl (bufferAddCodecError). */
+const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
+  const deep = /\b1[02]\b/.test(video?.profile ?? "") || /p1[02](le|be)$/i.test(video?.pixelFormat ?? "");
+  return deep ? caps.hevc10 === true : caps.hevc === true;
+};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DIRECT_MP4 = new Set([".mp4", ".m4v", ".mov"]);
@@ -250,6 +257,8 @@ export class PlaybackManager {
   }
 
   private proxyPath(stream: StreamItem) {
+    // Stažený soubor nechodí přes proxy, servíruje ho knihovna přímo z disku.
+    if (stream.url!.startsWith("file://")) return `/api/library/file?path=${encodeURIComponent(stream.url!.slice(7))}`;
     const params = new URLSearchParams({ url: stream.url! });
     const headers = stream.behaviorHints?.proxyHeaders?.request ?? {};
     if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
@@ -273,7 +282,7 @@ export class PlaybackManager {
     const video = info.video.codec;
     const audio = info.audio?.codec;
     if (DIRECT_MP4.has(extension)) {
-      const videoOk = video === "h264" || (video === "hevc" && caps.hevc === true);
+      const videoOk = video === "h264" || (video === "hevc" && hevcPlayable(info.video, caps));
       return videoOk && (!audio || audio === "aac" || audio === "mp3");
     }
     if (extension === ".webm") {
@@ -290,7 +299,7 @@ export class PlaybackManager {
     const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
     // Zvolená nižší kvalita vynucuje skutečné překódování; kopie by nesla původní rozlišení.
     const copyVideo = session.quality === null
-      && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && caps.hevc === true));
+      && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
     const audioCapability = COPYABLE_AUDIO[audio];
     return { copyVideo, copyAudio: Boolean(audioCapability && caps[audioCapability] === true) };
   }
