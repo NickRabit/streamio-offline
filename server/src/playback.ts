@@ -298,10 +298,12 @@ export class PlaybackManager {
 
     // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
     const ready = path.join(directory, "index-0.m3u8");
-    for (let attempt = 0; attempt < 160; attempt += 1) {
+    // Kratší polling zmenší prodlevu mezi hotovým prvním segmentem a odpovědí klientovi,
+    // aniž bychom měnili GOP, kvalitu nebo rychlost čtení zdroje.
+    for (let attempt = 0; attempt < 400; attempt += 1) {
       if (session.stopped) { child.kill("SIGTERM"); break; }
       try { await access(ready); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; }
-      catch { if (finished) break; await sleep(250); }
+      catch { if (finished) break; await sleep(100); }
     }
     if (!finished) { child.kill("SIGKILL"); session.error ||= "Převod se nerozeběhl do 40 sekund."; }
     session.error ||= describeFailure(stderr, exitCode);

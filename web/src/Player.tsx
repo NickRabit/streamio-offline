@@ -52,6 +52,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
   const modeRef = useRef<PlaybackMode>("transcode");
   const offsetRef = useRef(0);
   const probeDurationRef = useRef(0);
+  const timeRef = useRef(0);
+  const seekingRef = useRef(false);
+  const seekInFlightRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
+  const seekEpochRef = useRef(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
@@ -66,34 +71,36 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
   /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
   const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
 
-  const attach = (url: string, mode: PlaybackMode) => {
+  const attach = (url: string, mode: PlaybackMode, autoplay = true) => {
     const video = videoRef.current; if (!video) return;
     detach();
-    if (mode === "direct") { video.src = url; void video.play().catch(() => undefined); return; }
+    if (mode === "direct") { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
     if (Hls.isSupported()) {
       const hls = new Hls({ maxBufferLength: 30, backBufferLength: 60 });
       hlsRef.current = hls;
-      hls.on(Hls.Events.MANIFEST_PARSED, () => void video.play().catch(() => undefined));
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       // Odepsaná instance ještě chvíli dobíhá; její chyby už nejsou naše.
       hls.on(Hls.Events.ERROR, (_event, data) => { if (hlsRef.current === hls && data.fatal) setError(`Přehrávání selhalo: ${data.details}`); });
       hls.loadSource(url); hls.attachMedia(video);
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; void video.play().catch(() => undefined); }
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
     else setError("Tento prohlížeč nepodporuje HLS přehrávání.");
   };
 
-  const applySession = (next: PlaybackSession) => {
+  const showTime = (value: number) => { timeRef.current = value; setTime(value); };
+
+  const applySession = (next: PlaybackSession, autoplay = true) => {
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
-    setSession(next); setOffset(next.offset); setTime(next.offset);
+    setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
-    attach(next.url, next.mode);
+    attach(next.url, next.mode, autoplay);
   };
 
   useEffect(() => {
     if (!open || !stream?.url || !videoRef.current) return;
-    let disposed = false; const video = videoRef.current;
+    let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
-    offsetRef.current = 0; probeDurationRef.current = 0;
+    timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     api.startPlayback(stream, capabilities()).then((created) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
@@ -104,6 +111,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     }).catch((value) => setError(value instanceof Error ? value.message : String(value))).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
+      if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id);
     };
@@ -113,15 +121,32 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
   const seekTo = async (target: number) => {
     const video = videoRef.current; if (!video) return;
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
-    if (modeRef.current === "direct") { video.currentTime = bounded; setTime(bounded); return; }
+    setScrub(null); showTime(bounded);
+    if (modeRef.current === "direct") { video.currentTime = bounded; return; }
     const relative = bounded - offsetRef.current;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0;
-    if (relative >= 0 && relative <= Math.max(0, end - 0.5)) { video.currentTime = relative; setTime(bounded); return; }
+    if (!seekInFlightRef.current && relative >= 0 && relative <= Math.max(0, end - 0.5)) { video.currentTime = relative; return; }
+
+    pendingSeekRef.current = bounded;
+    if (seekInFlightRef.current) return;
     const id = sessionRef.current; if (!id) return;
-    setBuffering(true); setTime(bounded); setError(""); detach();
-    try { applySession(await api.seekPlayback(id, bounded)); }
-    catch (value) { setError(value instanceof Error ? value.message : String(value)); }
-    finally { setBuffering(false); }
+    const epoch = seekEpochRef.current;
+    const autoplay = !video.paused;
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); detach();
+    try {
+      while (pendingSeekRef.current !== null && epoch === seekEpochRef.current) {
+        const requested = pendingSeekRef.current; pendingSeekRef.current = null;
+        const next = await api.seekPlayback(id, requested);
+        if (epoch !== seekEpochRef.current) return;
+        // Když uživatel mezitím vybral jiné místo, starou generaci ani nepřipojujeme.
+        if (pendingSeekRef.current !== null) continue;
+        applySession(next, autoplay);
+      }
+    }
+    catch (value) { if (epoch === seekEpochRef.current) setError(value instanceof Error ? value.message : String(value)); }
+    finally {
+      if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
+    }
   };
 
   /** Jiná stopa znamená jiné mapování pro FFmpeg, takže se převod restartuje na aktuální pozici. */
@@ -147,8 +172,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
       if (event.target instanceof HTMLSelectElement) return;
       if (event.target instanceof HTMLInputElement && event.target.type !== "range") return;
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
-      else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(time - 10); }
-      else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(time + 10); }
+      else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
+      else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
       else if (event.key === "f") void videoRef.current?.requestFullscreen().catch(() => undefined);
       else if (event.key === "Escape" && !document.fullscreenElement) onClose();
     };
@@ -171,7 +196,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     <div className="player-host">
       <video ref={videoRef} playsInline
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
-        onTimeUpdate={(event) => { if (scrub === null) setTime(offsetRef.current + event.currentTarget.currentTime); }}
+        onTimeUpdate={(event) => { if (scrub === null && !seekingRef.current) showTime(offsetRef.current + event.currentTarget.currentTime); }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={() => setBuffering(true)} onPlaying={() => setBuffering(false)}
         onError={() => setError("Prohlížeč nedokázal přehrát tento stream.")}>
@@ -184,14 +209,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
       <span>{fmt(position)}</span>
       <input aria-label="Pozice videa" type="range" min="0" max={seekable} step="1" value={Math.min(position, seekable)}
         onChange={(event) => setScrub(Number(event.target.value))}
-        onPointerUp={() => { if (scrub !== null) { const target = scrub; setScrub(null); void seekTo(target); } }}
-        onKeyUp={() => { if (scrub !== null) { const target = scrub; setScrub(null); void seekTo(target); } }} />
+        onPointerUp={(event) => void seekTo(Number(event.currentTarget.value))}
+        onKeyUp={(event) => void seekTo(Number(event.currentTarget.value))} />
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
-      <button onClick={() => void seekTo(time - 10)}><RotateCcw /> 10</button>
+      <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
       <button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
-      <button onClick={() => void seekTo(time + 10)}>10 <RotateCw /></button>
+      <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
       <Volume2 />
       <input aria-label="Hlasitost" className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
