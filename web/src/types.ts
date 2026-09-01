@@ -3,7 +3,7 @@ export interface DownloadTargetSettings { subfolder: string; layout: DownloadLay
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; displayUrl: string;
-  configurable: boolean; downloadSettings: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; behaviorHints?: { p2p?: boolean } };
+  configurable: boolean; downloadSettings: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
 }
 export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }> }
 export interface Meta {

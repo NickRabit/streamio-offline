@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronRight, CirclePlay, Download, Film, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, CirclePlay, Download, Film, FolderCog, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
@@ -235,7 +235,7 @@ function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className=
 function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify("Manifest byl přidán."); } catch (err) { onError(err); } finally { setBusy(false); } };
-  return <section><Heading eyebrow="DOPLŇKY" title="Knihovny a zdroje"/><p className="lead">Vložte adresu končící na <code>manifest.json</code>. Personalizovaná URL může obsahovat citlivý token; v rozhraní ji po uložení skryjeme.</p>
+  return <section><Heading eyebrow="DOPLŇKY" title="Knihovny a zdroje"/><p className="lead">Vložte adresu končící na <code>manifest.json</code>. Personalizovaná URL může obsahovat citlivý token; v rozhraní ji po uložení skryjeme. Umístění souborů se nastavuje jen u doplňků, které poskytují streamy.</p>
     <form className="panel addon-form" onSubmit={submit}><label><span>URL manifestu</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>Úloha</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">Automaticky / obojí</option><option value="catalog">Pouze knihovna</option><option value="source">Pouze zdroje</option></select></label><button className="primary" disabled={busy}><Plus/> Přidat</button></form>
     <div className="addon-grid">{addons.map((addon) => <AddonCard key={addon.key} addon={addon} onChanged={onChanged} onNotify={onNotify} onError={onError}/>)}</div>
   </section>;
@@ -245,17 +245,21 @@ function AddonCard({ addon, onChanged, onNotify, onError }: { addon: Addon; onCh
   const clone = (value: AddonDownloadSettings): AddonDownloadSettings => ({ movie: { ...value.movie }, series: { ...value.series } });
   const [draft, setDraft] = useState<AddonDownloadSettings>(() => clone(addon.downloadSettings));
   const [saving, setSaving] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
+  const providesStreams = (addon.manifest.resources ?? []).some((resource) => typeof resource === "string" ? resource === "stream" : resource.name === "stream");
   useEffect(() => setDraft(clone(addon.downloadSettings)), [addon.downloadSettings]);
   const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
+  const preview = (kind: "movie" | "series") => { const rule = draft[kind]; const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); const root = `/downloads${folder ? `/${folder}` : ""}`; if (kind === "movie") return rule.layout === "flat" ? `${root}/Název filmu.mkv` : `${root}/Název filmu/Název filmu.mkv`; return rule.layout === "flat" ? `${root}/Název seriálu - S01E01 - Název dílu.mkv` : `${root}/Název seriálu/01 serie/01 - Název dílu.mkv`; };
   const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(`Ukládání pro ${addon.manifest.name} bylo nastaveno.`); } catch (error) { onError(error); } finally { setSaving(false); } };
-  return <article className="panel addon-card">
+  return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
     {addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}
     <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div>
     <div className="addon-actions"><label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button></div>
-    <div className="addon-download-settings"><div className="addon-download-head"><strong>Ukládání souborů</strong><small>Podsložky jsou relativní k <code>/downloads</code>; prázdná znamená základní složku.</small></div>
-      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{kind === "movie" ? "Filmy" : "Seriály"}</b><label><span>Podsložka</span><input value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={kind === "movie" ? "např. Filmy/Webshare" : "např. Seriály/Webshare"}/></label><label><span>Struktura</span><select value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">Složka podle titulu</option><option value="flat">Plochá – pouze soubory</option></select></label></div>)}</div>
-      <button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{saving ? "Ukládám…" : "Uložit umístění"}</button>
-    </div>
+    {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>Nastavení ukládání</span><ChevronDown/></button>}
+    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>Kam ukládat soubory</strong><small>Hostitelský adresář je určený pomocí <code>DOWNLOAD_PATH</code>. Zde vybíráte pouze podsložku uvnitř <code>/downloads</code>.</small></div>
+      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{kind === "movie" ? "Filmy" : "Seriály"}</b><label className="folder-label"><span>Podsložka v /downloads</span><div className="folder-field"><code>/downloads/</code><input aria-label={`${kind === "movie" ? "Filmy" : "Seriály"} – podsložka v downloads`} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder="prázdné = základní složka"/></div></label><label><span>Způsob uložení</span><select aria-label={`${kind === "movie" ? "Filmy" : "Seriály"} – způsob uložení`} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">Složka podle filmu / seriálu</option><option value="flat">Plochá struktura – jen soubory</option></select></label><small className="path-preview">Příklad: <code>{preview(kind)}</code></small></div>)}</div>
+      <div className="download-settings-actions"><button onClick={() => { setDraft(clone(addon.downloadSettings)); setStorageOpen(false); }}>Zrušit</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{saving ? "Ukládám…" : "Uložit nastavení"}</button></div>
+    </div>}
   </article>;
 }
 

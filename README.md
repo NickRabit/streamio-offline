@@ -63,7 +63,7 @@ Na Synology s Intel iGPU lze poslední řádek tabulky odbavit přes QuickSync. 
 
 Fronta přežije restart, umí navázat na `.part` soubor pomocí HTTP Range a podporuje pozastavení, pokračování, opakování chyby, změnu pořadí, odstranění a 1–8 souběžných stahování. Dokončený soubor se při odstranění z historie nemaže.
 
-V části **Doplňky** lze pro každý zdroj zvlášť nastavit ukládání filmů a seriálů. Prázdná podsložka znamená základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.
+V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť nastavit ukládání filmů a seriálů. Hostitelský adresář určuje `DOWNLOAD_PATH`; v kartě doplňku se zadává jen relativní podsložka uvnitř něj. Prázdná podsložka znamená přímo základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.
 
 Při první inicializaci se automaticky přidají oficiální **Cinemeta** (katalog a metadata) a **OpenSubtitles v3** (titulky). Lze je vypnout nebo odstranit; po vědomém odstranění se při restartu samy nevrátí.
 
