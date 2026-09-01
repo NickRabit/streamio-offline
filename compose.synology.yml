@@ -1,0 +1,17 @@
+# Hardwarový převod přes Intel QuickSync (Synology s Intel iGPU, obecně Linux s /dev/dri).
+#
+# Spuštění:  docker compose -f compose.yml -f compose.synology.yml up -d --build
+#
+# Skupinu vlastnící render node zjistíte na NASu příkazem:
+#   stat -c "%g" /dev/dri/renderD128
+# a hodnotu nastavíte v .env jako RENDER_GID (výchozích 937 odpovídá skupině
+# videodriver na běžném DSM 7). Když se hardwarový převod nerozběhne, server se
+# sám vrátí k softwarovému — horší případ je tedy jen pomalejší překódování.
+services:
+  stremio-offline:
+    environment:
+      VAAPI_DEVICE: "${VAAPI_DEVICE:-/dev/dri/renderD128}"
+    devices:
+      - /dev/dri:/dev/dri
+    group_add:
+      - "${RENDER_GID:-937}"
