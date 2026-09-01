@@ -1,4 +1,4 @@
-import type { Addon, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, Settings, Stream, Subtitle } from "./types";
+import type { Addon, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Settings, Stream, Subtitle } from "./types";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...options?.headers } });
@@ -16,7 +16,8 @@ export const api = {
   deleteAddon: (key: string) => request<void>(`/api/addons/${key}`, { method: "DELETE" }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
-  catalog: (catalog: Catalog, search = "", skip = 0) => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined })}`),
+  catalog: (catalog: Catalog, search = "", skip = 0, genre = "") => request<Meta[]>(`/api/catalog?${q({ addon: catalog.addonKey, type: catalog.type, id: catalog.id, search: search || undefined, skip: skip || undefined, genre: genre || undefined })}`),
+  search: (query: string, type = "", cursor = "") => request<SearchResult>(`/api/search?${q({ query, type: type || undefined, cursor: cursor || undefined })}`),
   meta: (type: string, id: string) => request<Meta>(`/api/meta/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),

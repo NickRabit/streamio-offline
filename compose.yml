@@ -12,6 +12,7 @@ services:
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
+      ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
       FFMPEG_PRESET: "${FFMPEG_PRESET:-veryfast}"
       FFMPEG_CRF: "${FFMPEG_CRF:-23}"
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"

@@ -2,9 +2,9 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { AddonRecord } from "./types.js";
 
-interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string }
+interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean }
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true }, defaultsInstalled: false };
 
 export class Store {
   private state: State = structuredClone(initialState);
