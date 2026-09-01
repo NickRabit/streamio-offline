@@ -30,3 +30,5 @@ export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
 }
+
+export interface Session { username: string; mustChangePassword: boolean }

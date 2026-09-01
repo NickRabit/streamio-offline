@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
-import { api } from "./api";
+import { ArrowDown, ArrowUp, Check, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { api, ApiError } from "./api";
+import { AccountSettings, LoginScreen } from "./Login";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
-import type { Addon, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -20,6 +21,7 @@ export function App() {
   const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchAddon, setSearchAddon] = useState(""); const [searchable, setSearchable] = useState<Array<{ addonKey: string; addonName: string }>>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null);
@@ -27,14 +29,20 @@ export function App() {
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
-  const fail = (value: unknown) => { setError(value instanceof Error ? value.message : String(value)); setTimeout(() => setError(""), 6000); };
+  const fail = (value: unknown) => {
+    if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
+    setError(value instanceof Error ? value.message : String(value)); setTimeout(() => setError(""), 6000);
+  };
 
   const refresh = async () => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if (!selectedCatalog && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
-  useEffect(() => { refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, []);
+  useEffect(() => { api.me().then(setSession).catch(() => setSession(null)); }, []);
+  const ready = Boolean(session && !session.mustChangePassword);
+  // Načítat data má smysl až po přihlášení, jinak by to jen sypalo chyby 401.
+  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
   // Nabídka doplňků, ve kterých má smysl hledat, se mění s jejich zapínáním.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
   // Přesné jazyky zná až rozbor souboru, tak ho uděláme pro vybraný stream.
@@ -50,7 +58,7 @@ export function App() {
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
   // Odznak u Stahování musí sedět i mimo tuto záložku, jen se tam nemusí obnovovat tak často.
-  useEffect(() => { loadDownloads(); const timer = setInterval(loadDownloads, view === "downloads" ? 1200 : 5000); return () => clearInterval(timer); }, [view]);
+  useEffect(() => { if (!ready) return; loadDownloads(); const timer = setInterval(loadDownloads, view === "downloads" ? 1200 : 5000); return () => clearInterval(timer); }, [view, ready]);
 
   const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
 
@@ -158,8 +166,12 @@ export function App() {
     try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); } catch (e) { fail(e); }
   };
 
+  if (session === undefined) return <div className="login-screen"><div className="loading">Načítám…</div></div>;
+  if (!ready) return <LoginScreen session={session} onSession={setSession}/>;
+
   return <div className="app-shell">
-    <header className="topbar"><div className="brand"><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></div><div className="online"><i/> Docker server online</div></header>
+    <header className="topbar"><div className="brand"><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></div><div className="topbar-right"><div className="online"><i/> Docker server online</div>
+      <button className="signout" title={`Přihlášen jako ${session?.username ?? ""}`} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit</button></div></header>
     <aside className="sidebar"><nav>
       <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => setView("catalog")}/>
       <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => setView("downloads")}/>
@@ -218,7 +230,7 @@ export function App() {
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
-      {view === "settings" && <SettingsPage settings={settings} languages={languages} onSave={saveSettings} onNotify={notify} onError={fail}/>}
+      {view === "settings" && <SettingsPage settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
     </main>
     <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onClose={() => setPlayerOpen(false)}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
@@ -230,11 +242,12 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
 
-function SettingsPage({ settings, languages, onSave, onNotify, onError }: { settings: AppSettings; languages: Array<{ code: string; name: string }>; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ settings, languages, session, onSession, onSave, onNotify, onError }: { settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const copyLog = async () => { try { await navigator.clipboard.writeText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow="NASTAVENÍ" title="Nastavení aplikace"/><span><Check/> Změny se ukládají automaticky</span></div><p className="lead">Správa úložiště, stahování, knihovny a výchozího chování přehrávače.</p>
     <div className="settings-grid">
+      <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Na slabším NAS doporučujeme 1–2 soubory současně."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl></section>

@@ -9,6 +9,8 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
+import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
+import { randomBytes } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, normalizeDownloadSettings } from "./naming.js";
@@ -32,8 +34,95 @@ if (!store.defaultsInstalled()) {
 }
 await queue.load();
 await playback.load();
+
+// Výchozí přihlášení vznikne při prvním startu; heslo se ukládá jen jako otisk.
+if (!store.auth()) {
+  const passwordHash = await hashPassword(DEFAULT_PASSWORD);
+  await store.update((state) => { state.auth = { username: DEFAULT_USERNAME, passwordHash, secret: randomBytes(32).toString("hex"), isDefault: true }; });
+  log("WARN", "Vytvořeno výchozí přihlášení admin/admin, změňte ho prosím v Nastavení");
+}
+const secret = () => store.auth()!.secret;
+const isSecure = (req: express.Request) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https";
+const knownUser = (name: string) => name === store.auth()!.username || name === envCredentials()?.username;
+const currentSession = (req: express.Request) => {
+  const info = readSession(secret(), parseCookies(req.headers.cookie)[SESSION_COOKIE]);
+  if (!info || !knownUser(info.username)) return undefined;
+  // Odhlášená relace je neplatná i s dosud platným podpisem.
+  return store.auth()!.revoked?.[info.sid] ? undefined : info;
+};
+const currentUser = (req: express.Request) => currentSession(req)?.username;
+const mustChangePassword = () => store.auth()!.isDefault;
+
 app.use(express.json({ limit: "256kb" }));
 const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
+
+// Bez přihlášení je otevřený jen stav serveru a samotné přihlášení. Zvlášť /api/proxy
+// nesmí být veřejné, jinak přes něj kdokoli tahá cizí adresy přes tenhle server.
+const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me"]);
+app.use("/api", (req, res, next) => {
+  if (OPEN_PATHS.has(req.path)) return next();
+  if (typeof req.query.token === "string" && req.query.token === INTERNAL_TOKEN) return next();
+  if (!currentUser(req)) return res.status(401).json({ error: "Nepřihlášeno." });
+  // Dokud běží výchozí heslo, pustíme jen změnu údajů. Jinak by admin/admin mohlo zůstat napořád.
+  if (mustChangePassword() && !req.path.startsWith("/auth")) {
+    return res.status(403).json({ error: "Nejdřív si prosím nastavte vlastní heslo.", code: "PASSWORD_CHANGE_REQUIRED" });
+  }
+  next();
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const user = currentUser(req);
+  if (!user) return res.status(401).json({ error: "Nepřihlášeno." });
+  res.json({ username: user, mustChangePassword: mustChangePassword() });
+});
+app.post("/api/auth/login", asyncRoute(async (req, res) => {
+  const username = String(req.body.username ?? "");
+  const password = String(req.body.password ?? "");
+  const remember = Boolean(req.body.remember);
+  const stored = store.auth()!;
+  const fromEnv = envCredentials();
+  const bySettings = username === stored.username && await verifyPassword(password, stored.passwordHash);
+  const byEnv = Boolean(fromEnv && username === fromEnv.username && password === fromEnv.password);
+  if (!bySettings && !byEnv) { log("WARN", "Neúspěšné přihlášení", { username }); return res.status(401).json({ error: "Nesprávné jméno nebo heslo." }); }
+  const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
+  res.setHeader("set-cookie", sessionCookie(createSession(secret(), username, expiresAt), remember, isSecure(req)));
+  log("INFO", "Přihlášení", { username, remember, zaloznimiUdaji: byEnv && !bySettings });
+  res.json({ username, mustChangePassword: mustChangePassword() });
+}));
+app.post("/api/auth/logout", asyncRoute(async (req, res) => {
+  const info = currentSession(req);
+  res.setHeader("set-cookie", clearedCookie());
+  if (!info) return res.status(204).end();
+  if (req.body?.everywhere) {
+    // Nové tajemství zneplatní všechny dosud vydané známky naráz.
+    const nextSecret = randomBytes(32).toString("hex");
+    await store.update((state) => { state.auth = { ...state.auth!, secret: nextSecret, revoked: {} }; });
+    log("INFO", "Odhlášena všechna zařízení", { username: info.username });
+  } else {
+    await store.update((state) => {
+      state.auth = { ...state.auth!, revoked: { ...pruneRevoked(state.auth!.revoked), [info.sid]: info.expiresAt } };
+    });
+    log("INFO", "Odhlášení", { username: info.username });
+  }
+  res.status(204).end();
+}));
+app.patch("/api/auth/password", asyncRoute(async (req, res) => {
+  // U vynucené první změny stačí platná relace: uživatel se právě prokázal výchozím heslem.
+  if (!mustChangePassword()) {
+    const current = String(req.body.currentPassword ?? "");
+    if (!await verifyPassword(current, store.auth()!.passwordHash)) throw new Error("Stávající heslo nesouhlasí.");
+  }
+  const nextPassword = String(req.body.newPassword ?? "");
+  if (nextPassword.length < 6) throw new Error("Nové heslo musí mít aspoň 6 znaků.");
+  const username = String(req.body.username ?? store.auth()!.username).trim() || store.auth()!.username;
+  const passwordHash = await hashPassword(nextPassword);
+  // Nové tajemství zneplatní všechny dosud vydané známky, včetně cizích zařízení.
+  const nextSecret = randomBytes(32).toString("hex");
+  await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
+  res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
+  log("INFO", "Změněny přihlašovací údaje", { username });
+  res.json({ username, mustChangePassword: false });
+}));
 
 app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.3.0" }));
 app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)));
