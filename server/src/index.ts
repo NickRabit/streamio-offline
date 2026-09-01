@@ -10,6 +10,7 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
+import { resolveInside, scanLibrary } from "./library.js";
 import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
@@ -218,6 +219,18 @@ app.get("/api/subtitle", asyncRoute(async (req, res) => {
   const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
+const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
+app.get("/api/library", asyncRoute(async (_req, res) => res.json(await scanLibrary(DOWNLOAD_DIR))));
+// Stažený soubor jako HTTP zdroj. sendFile umí Range, takže se v něm dá plynule
+// posouvat a stejnou cestou si ho bere i FFmpeg, když je potřeba převod.
+app.get("/api/library/file", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "");
+  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!target) return res.status(400).json({ error: "Neplatná cesta k souboru." });
+  res.sendFile(target, { acceptRanges: true, dotfiles: "deny" }, (error) => {
+    if (error && !res.headersSent) res.status(404).json({ error: "Soubor nebyl nalezen." });
+  });
+}));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
 app.post("/api/downloads", asyncRoute(async (req, res) => {
   const stream = req.body.stream as StreamItem;
@@ -297,11 +310,20 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   // Bez lomítek a teček nemůže jméno utéct z adresáře relace.
   if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
   if (file === "master.m3u8") {
-    // FFmpeg píše HEVC jako hvc1.1.4.L120.B01, jenže prohlížeče uznávají jen tvar B0 a hls.js
-    // podle toho stream odmítne dřív, než ho zkusí. Bez atributu si kodeky odvodí z init segmentu.
-    const playlist = await readFile(path.join(directory, file), "utf8");
-    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store")
-      .send(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, ""));
+    // FFmpeg dopisuje řádek s variantou až při ukončení, takže za běhu je master jen hlavička
+    // a hls.js na něm skončí s manifestParsingError. Skládáme si ho proto sami.
+    // FFmpeg navíc píše HEVC jako hvc1.1.4.L120.B01, jenže prohlížeče uznávají jen tvar B0
+    // a stream by odmítly dřív, než ho zkusí; bez atributu si kodeky odvodí z init segmentu.
+    const playlist = await readFile(path.join(directory, file), "utf8").catch(() => "");
+    if (playlist.includes("#EXT-X-STREAM-INF")) {
+      return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store")
+        .send(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, ""));
+    }
+    const hasSubtitles = await readFile(path.join(directory, "index-0_vtt.m3u8"), "utf8").then(() => true, () => false);
+    const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
+    if (hasSubtitles) lines.push('#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Titulky",DEFAULT=YES,AUTOSELECT=YES,URI="index-0_vtt.m3u8"');
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=8000000${hasSubtitles ? ',SUBTITLES="subs"' : ""}`, "index-0.m3u8");
+    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store").send(`${lines.join("\n")}\n`);
   }
   if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store");
   else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "public, max-age=3600"); }

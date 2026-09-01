@@ -6,9 +6,9 @@ import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, LibraryEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
-type View = "catalog" | "downloads" | "addons" | "settings";
+type View = "catalog" | "library" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || (item.infoHash ? "Torrent" : "Stream");
@@ -25,6 +25,8 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [library, setLibrary] = useState<LibraryEntry[]>([]); const [libraryOpen, setLibraryOpen] = useState<string | null>(null);
+  const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
   const [submittedQuery, setSubmittedQuery] = useState(""); const [searchAddon, setSearchAddon] = useState(""); const [searchable, setSearchable] = useState<Array<{ addonKey: string; addonName: string }>>([]); const [typeFilter, setTypeFilter] = useState(""); const [genre, setGenre] = useState(""); const [sort, setSort] = useState("default");
@@ -69,6 +71,13 @@ export function App() {
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
   // Odznak u Stahování musí sedět i mimo tuto záložku, jen se tam nemusí obnovovat tak často.
+  useEffect(() => { if (!ready || view !== "library") return; api.library().then(setLibrary).catch(fail); }, [ready, view]);
+  /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
+  const playLocal = (title: string, path: string) => {
+    setLocalTitle(title);
+    setLocalStream({ url: `file://${path}`, behaviorHints: { filename: path.split("/").pop() } });
+    setPlayerOpen(true);
+  };
   useEffect(() => { if (!ready) return; loadDownloads(); const timer = setInterval(loadDownloads, view === "downloads" ? 1200 : 5000); return () => clearInterval(timer); }, [view, ready]);
 
   const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
@@ -267,6 +276,7 @@ export function App() {
       <button className="signout" title={`Přihlášen jako ${session?.username ?? ""}`} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit</button></div></header>
     <aside className="sidebar"><nav>
       <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => setView("catalog")}/>
+      <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => setView("library")}/>
       <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => setView("downloads")}/>
       <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => setView("addons")}/>
       <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => setView("settings")}/>
@@ -339,11 +349,29 @@ export function App() {
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
         </>}
       </section>}
+      {view === "library" && <section><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
+        <p className="lead">Přehrávají se přímo z disku, takže posun je okamžitý a funguje i bez internetu.</p>
+        {!library.length ? <Empty icon={<HardDrive/>} title="Zatím nic staženého" text="Dokončená stahování se tu objeví sama."/> : <div className="library-list">
+          {library.map((entry) => <article className="panel library-card" key={`${entry.kind}:${entry.title}`}>
+            <div className="library-head">
+              <div><strong>{entry.title}</strong><small>{entry.kind === "series" ? `${entry.episodes?.length ?? 0} epizod` : "film"} · {bytes(entry.size)}</small></div>
+              {entry.kind === "movie"
+                ? <button className="primary" onClick={() => playLocal(entry.title, entry.path!)}><CirclePlay/> Přehrát</button>
+                : <button onClick={() => setLibraryOpen((open) => open === entry.title ? null : entry.title)}>{libraryOpen === entry.title ? "Skrýt" : "Epizody"}<ChevronRight/></button>}
+            </div>
+            {entry.kind === "series" && libraryOpen === entry.title && <div className="episode-list">
+              {entry.episodes?.map((episode) => <button key={episode.path} onClick={() => playLocal(`${entry.title} · ${episode.season}×${String(episode.episode ?? 0).padStart(2, "0")} ${episode.title}`, episode.path)}>
+                <b>{episode.season}×{String(episode.episode ?? 0).padStart(2, "0")}</b><span>{episode.title}</span><small>{bytes(episode.size)}</small><CirclePlay/>
+              </button>)}
+            </div>}
+          </article>)}
+        </div>}
+      </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
       {view === "settings" && <SettingsPage settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
     </main>
-    <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onDownload={enqueue} onClose={() => setPlayerOpen(false)}/>
+    <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
 }

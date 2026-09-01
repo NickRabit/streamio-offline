@@ -18,13 +18,13 @@ export interface Track {
 export interface MediaInfo {
   container: string;
   duration?: number;
-  video?: { codec: string; width?: number; height?: number };
+  video?: { codec: string; width?: number; height?: number; profile?: string; pixelFormat?: string };
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
 }
 
-interface ProbeStream { codec_type?: string; codec_name?: string; width?: number; height?: number; channels?: number; disposition?: Record<string, number>; tags?: Record<string, string> }
+interface ProbeStream { codec_type?: string; codec_name?: string; profile?: string; pix_fmt?: string; width?: number; height?: number; channels?: number; disposition?: Record<string, number>; tags?: Record<string, string> }
 
 // Obrázkové titulky prohlížeč nezobrazí a do WebVTT je převést nelze.
 const BITMAP_SUBTITLES = new Set(["dvd_subtitle", "hdmv_pgs_subtitle", "dvb_subtitle", "xsub"]);
@@ -66,7 +66,7 @@ async function inspect(input: string, limits: string[], timeout: number): Promis
     return {
       container: data.format?.format_name ?? "",
       duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
-      video: video?.codec_name ? { codec: video.codec_name, width: video.width, height: video.height } : undefined,
+      video: video?.codec_name ? { codec: video.codec_name, width: video.width, height: video.height, profile: video.profile, pixelFormat: video.pix_fmt } : undefined,
       audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
       audioTracks, subtitleTracks,
     };

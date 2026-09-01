@@ -17,6 +17,8 @@ const supports = (type: string) => {
 const capabilities = (): Capabilities => ({
   h264: supports('video/mp4; codecs="avc1.640029"'),
   hevc: supports('video/mp4; codecs="hvc1.1.6.L93.B0"'),
+  // Main 10 je samostatný profil; hodně stažených souborů je desetibitových.
+  hevc10: supports('video/mp4; codecs="hvc1.2.4.L153.B0"'),
   vp8: supports('video/webm; codecs="vp8"'),
   vp9: supports('video/mp4; codecs="vp09.00.10.08"'),
   av1: supports('video/mp4; codecs="av01.0.05M.08"'),
@@ -74,6 +76,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
   const bufferTimerRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
+  // Soubor z knihovny už na disku je, nabízet jeho stažení nedává smysl.
+  const isLocal = Boolean(stream?.url?.startsWith("file://"));
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
@@ -325,9 +329,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
       </label>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
-      <button disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty">
+      {!isLocal && <button disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty">
         {downloadState === "done" ? <><Check /> Ve frontě</> : <><Download /> {downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</>}
-      </button>
+      </button>}
       <button onClick={() => void videoRef.current?.requestFullscreen().catch(() => undefined)}><Maximize /> Celá obrazovka</button>
     </div>
   </div>;

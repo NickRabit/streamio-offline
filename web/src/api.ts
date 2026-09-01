@@ -1,4 +1,4 @@
-import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, LibraryEntry, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -47,6 +47,7 @@ export const api = {
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
+  library: () => request<LibraryEntry[]>("/api/library"),
   me: () => request<Session>("/api/auth/me"),
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
