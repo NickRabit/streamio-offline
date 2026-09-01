@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:22-trixie-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
@@ -8,7 +8,7 @@ COPY server server
 COPY web web
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22-trixie-slim AS runtime
 ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads
 WORKDIR /app
 ARG TARGETARCH

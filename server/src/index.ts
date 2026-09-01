@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
+import { rankStreams } from "./ranking.js";
 import { DownloadQueue } from "./downloads.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
@@ -33,6 +34,27 @@ if (!store.defaultsInstalled()) {
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
 }
+// Výběr zdroje pro líné úlohy fronty: doplňky se ptáme až v okamžiku stahování a odpověď
+// chvíli držíme, aby opakované pokusy téže epizody nebušily do doplňků znovu a znovu.
+const streamCache = new Map<string, { at: number; items: StreamItem[] }>();
+const cachedStreams = async (type: string, id: string) => {
+  const key = `${type}:${id}`;
+  const hit = streamCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.items;
+  const items = await streams(store.addons(), type, id);
+  if (streamCache.size > 100) streamCache.clear();
+  streamCache.set(key, { at: Date.now(), items });
+  return items;
+};
+queue.setResolver(async (type, videoId, tried) => {
+  const priority = new Map(store.addons().map((addon, index) => [addon.key, index]));
+  const candidates = (await cachedStreams(type, videoId)).filter((stream) => stream.url);
+  const ranked = rankStreams(candidates, store.settings().audioLanguage, priority);
+  const next = ranked.find((stream) => !tried.includes(stream.url!));
+  if (!next) return undefined;
+  const addon = store.addons().find((item) => item.key === next.addonKey);
+  return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+});
 await queue.load();
 await playback.load();
 
@@ -205,6 +227,28 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
   const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
   res.status(201).json(await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings));
 }));
+// Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.
+app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
+  const title = String(req.body.title ?? "").trim() || "Seriál";
+  const type = String(req.body.type ?? "series");
+  const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
+  if (!episodes.length) throw new Error("Chybí seznam epizod.");
+  if (episodes.length > 500) throw new Error("Najednou lze přidat nejvýše 500 epizod.");
+  let added = 0, skipped = 0;
+  for (const episode of episodes) {
+    const videoId = String(episode.id ?? "").trim();
+    if (!videoId) { skipped += 1; continue; }
+    const season = episode.season == null ? undefined : Number(episode.season);
+    const number = episode.episode == null ? undefined : Number(episode.episode);
+    const episodeTitle = episode.title ? String(episode.title) : undefined;
+    const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Díl ${number ?? "?"}`)}`;
+    const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle };
+    const job = await queue.addPending(jobTitle, { type, videoId }, media);
+    if (job) added += 1; else skipped += 1;
+  }
+  log("INFO", "Hromadné přidání do fronty", { title, added, skipped });
+  res.status(201).json({ added, skipped });
+}));
 app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));
@@ -237,12 +281,14 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   if (req.body.audioTrack !== undefined) options.audioTrack = Number(req.body.audioTrack);
   if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
+  if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
   res.status(201).json(await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options));
 }));
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
   audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
   subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
+  quality: req.body.quality === undefined ? undefined : (req.body.quality === null ? null : Number(req.body.quality)),
   time: Number(req.body.time) || 0,
 }))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));

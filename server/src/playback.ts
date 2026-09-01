@@ -1,5 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { access, mkdir, rm } from "node:fs/promises";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
@@ -21,6 +22,8 @@ export interface PlaybackOptions {
   audioTrack?: number;
   subtitleTrack?: number | null;
   startTime?: number;
+  /** Maximální výška obrazu; null nebo undefined = originál bez zásahu do videa. */
+  quality?: number | null;
 }
 
 export interface PlaybackDescriptor {
@@ -28,7 +31,11 @@ export interface PlaybackDescriptor {
   duration?: number; video?: string; audio?: string; hardware: boolean;
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
+  quality: number | null;
 }
+
+/** Povolené cílové kvality a strop datového toku videa pro každou z nich. */
+export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 
 /** Jednoduchá fronta operací pro jednu relaci. Seek a změna stopy nesmějí
  * běžet souběžně, protože každý restart vytváří a uklízí vlastní HLS generaci. */
@@ -47,7 +54,7 @@ export class SerialOperations {
 interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
-  audioTrack: number; subtitleTrack: number | null;
+  audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
 }
@@ -70,12 +77,20 @@ export class PlaybackManager {
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private readonly root: string;
   private vaapiDevice?: string;
+  /** -readrate_initial_burst existuje až od FFmpeg 6; starší verzi by volba shodila. */
+  private initialBurst = false;
 
   constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.root = path.join(dataDir, "playback"); }
 
   async load() {
     await rm(this.root, { recursive: true, force: true });
     await mkdir(this.root, { recursive: true });
+    try {
+      const { stdout } = await promisify(execFile)("ffmpeg", ["-version"], { timeout: 10_000 });
+      const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
+      this.initialBurst = major >= 6;
+      if (!this.initialBurst) log("WARN", "FFmpeg je starší než 6, start a posun budou brzděné omezenou rychlostí čtení", { major });
+    } catch { log("WARN", "Verzi FFmpeg se nepodařilo zjistit"); }
     const device = process.env.VAAPI_DEVICE;
     if (device) {
       try { await access(device); this.vaapiDevice = device; log("INFO", "VAAPI je k dispozici", { device }); }
@@ -118,15 +133,16 @@ export class PlaybackManager {
       ? options.subtitleTrack
       : this.preferredSubtitle(subtitleTracks, options.subtitleLanguage);
 
+    const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false,
+      audioTrack, subtitleTrack, quality, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false,
     };
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
 
-    // Přímé přehrání dává smysl jen u výchozích stop; jinak musí zasáhnout FFmpeg.
-    if (audioTrack === 0 && subtitleTrack === null && this.canDirectPlay(stream, info, capabilities)) {
+    // Přímé přehrání dává smysl jen u výchozích stop a originální kvality; jinak musí zasáhnout FFmpeg.
+    if (audioTrack === 0 && subtitleTrack === null && quality === null && this.canDirectPlay(stream, info, capabilities)) {
       log("INFO", "Přehrávání přímo ze zdroje", { id, ...summary });
       return this.describe(session, source);
     }
@@ -147,13 +163,22 @@ export class PlaybackManager {
     return session.operations.run(() => this.restart(session, time, "Posun v přehrávání"));
   }
 
-  /** Přepnutí zvukové nebo titulkové stopy znamená nové mapování, tedy taky restart od aktuální pozice. */
-  async track(id: string, changes: { audio?: number; subtitle?: number | null; time?: number }) {
+  /** Přepnutí stopy nebo kvality znamená nové mapování či filtry, tedy restart od aktuální pozice. */
+  async track(id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time?: number }) {
     const session = this.require(id);
     return session.operations.run(async () => {
       this.assertActive(session);
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
+      if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+      // Návrat na originál může znovu splnit podmínky přímého přehrání.
+      if (session.quality === null && session.audioTrack === 0 && session.subtitleTrack === null
+        && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
+        session.pendingKill = this.kill(session);
+        session.mode = "direct"; session.offset = 0;
+        log("INFO", "Návrat k přímému přehrávání", { id });
+        return this.describe(session, this.proxyPath(session.stream));
+      }
       return this.restart(session, changes.time ?? session.offset, "Přepnuta stopa");
     });
   }
@@ -213,7 +238,7 @@ export class PlaybackManager {
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
       hardware: session.hardware,
       audioTracks: session.info?.audioTracks ?? [], subtitleTracks: session.info?.subtitleTracks ?? [],
-      audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack,
+      audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
     };
   }
 
@@ -263,7 +288,9 @@ export class PlaybackManager {
     const caps = session.capabilities;
     const video = session.info?.video?.codec ?? "";
     const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
-    const copyVideo = (video === "h264" && caps.h264 !== false) || (video === "hevc" && caps.hevc === true);
+    // Zvolená nižší kvalita vynucuje skutečné překódování; kopie by nesla původní rozlišení.
+    const copyVideo = session.quality === null
+      && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && caps.hevc === true));
     const audioCapability = COPYABLE_AUDIO[audio];
     return { copyVideo, copyAudio: Boolean(audioCapability && caps[audioCapability] === true) };
   }
@@ -305,12 +332,25 @@ export class PlaybackManager {
 
     // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
     const ready = path.join(directory, "index-0.m3u8");
-    // Kratší polling zmenší prodlevu mezi hotovým prvním segmentem a odpovědí klientovi,
-    // aniž bychom měnili GOP, kvalitu nebo rychlost čtení zdroje.
+    const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
+    // S jediným segmentem v playlistu hls.js přehraje pár sekund a čeká na obnovení playlistu —
+    // to je to bliknutí „Načítám“ chvíli po startu či posunu. Díky burst čtení bývá druhý
+    // segment hotový hned, tak na něj krátce počkáme; déle než 4 s kvůli tomu start nezdržujeme.
+    let firstSegmentAt: number | undefined;
     for (let attempt = 0; attempt < 400; attempt += 1) {
       if (session.stopped) { child.kill("SIGTERM"); break; }
-      try { await access(ready); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; }
-      catch { if (finished) break; await sleep(100); }
+      try {
+        const playlist = await readFile(ready, "utf8");
+        const segments = (playlist.match(/#EXTINF/g) ?? []).length;
+        if (segments >= 2 || playlist.includes("#EXT-X-ENDLIST")) return url;
+        if (segments >= 1) {
+          if (finished) return url;
+          firstSegmentAt ??= Date.now();
+          if (Date.now() - firstSegmentAt > 4000) return url;
+        }
+      } catch { /* playlist ještě neexistuje */ }
+      if (finished) break;
+      await sleep(100);
     }
     if (!finished) { child.kill("SIGKILL"); session.error ||= "Převod se nerozeběhl do 40 sekund."; }
     session.error ||= describeFailure(stderr, exitCode);
@@ -326,34 +366,68 @@ export class PlaybackManager {
 
   private args(session: Session, offset: number, directory: string, hardware: boolean) {
     const { copyVideo, copyAudio } = this.plan(session);
+    const quality = session.quality;
+    const bitrate = quality !== null ? QUALITY_BITRATE[quality] : undefined;
     const sourceVideo = session.info?.video?.codec ?? "";
-    const subtitle = session.subtitleTrack;
+    // Mapování a var_stream_map musí přesně sedět na to, co soubor opravdu má. Otazník v -map
+    // chybějící stopu potichu vypustí, jenže hls muxer ji pak marně hledá a spadne na hlavičce.
+    const audioCount = session.info?.audioTracks.length ?? 1;
+    const hasAudio = !session.info || audioCount > 0;
+    const audioIndex = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
+    const subtitleCount = session.info?.subtitleTracks.length ?? 0;
+    const subtitle = session.subtitleTrack !== null && session.subtitleTrack < subtitleCount ? session.subtitleTrack : null;
     const crf = process.env.FFMPEG_CRF ?? "23";
     const args = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
     // -ss před -i seekuje přes HTTP Range, takže se nepřenáší nic před požadovanou pozicí.
-    if (offset > 0) args.push("-ss", offset.toFixed(3));
+    // U kopie videa musí i zvuk začít na klíčovém snímku (noaccurate_seek): přesný ořez zvuku
+    // by nechal video napřed a vzniklou díru ve zvuku přehrávač řeší rozjetou synchronizací.
+    if (offset > 0) {
+      if (copyVideo) args.push("-noaccurate_seek");
+      args.push("-ss", offset.toFixed(3));
+    }
     if (!copyVideo && hardware) args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
     args.push("-readrate", copyVideo ? process.env.FFMPEG_READRATE_REMUX ?? "8" : process.env.FFMPEG_READRATE ?? "1.5");
+    // Prvních pár desítek sekund se čte plnou rychlostí, ať je první segment hotový co nejdřív;
+    // teprve potom nastoupí brzda proti zbytečnému stahování celého souboru.
+    if (this.initialBurst) args.push("-readrate_initial_burst", process.env.FFMPEG_BURST ?? "30");
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
-    args.push("-map", "0:v:0?", "-map", `0:a:${session.audioTrack}?`);
+    args.push("-map", "0:v:0?");
+    if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
     if (subtitle !== null) args.push("-map", `0:s:${subtitle}?`);
     args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
+    // Kopie videa po -ss začíná na klíčovém snímku před cílem, takže má záporné časové značky.
+    // fMP4 je neumí zapsat a posouval by každou stopu zvlášť — zvuk by se rozjel o vzdálenost
+    // ke klíčovému snímku. make_zero posune všechny stopy stejně a synchronizaci zachová.
+    args.push("-avoid_negative_ts", "make_zero");
 
     if (copyVideo) {
       args.push("-c:v", "copy");
       // Safari přehraje HEVC v fMP4 jen pod tagem hvc1, s výchozím hev1 stream odmítne.
       if (sourceVideo === "hevc") args.push("-tag:v", "hvc1");
     }
-    else if (hardware) args.push("-vf", "scale_vaapi=format=nv12", "-c:v", "h264_vaapi", "-qp", crf, "-g", "96");
-    else args.push("-c:v", "libx264", "-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*4)");
-    args.push(...(copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
+    // Klíčový snímek každé 2 s drží segmenty krátké: HLS smí řezat jen na klíčových snímcích,
+    // takže delší GOP by protahoval čekání na první segment po startu i po každém posunu.
+    // min(kvalita, ih) zabrání zvětšování obrazu, když je zdroj menší než zvolená kvalita.
+    else if (hardware) {
+      const scale = quality !== null ? `scale_vaapi=w=-2:h=min(${quality}\\,ih):format=nv12` : "scale_vaapi=format=nv12";
+      args.push("-vf", scale, "-c:v", "h264_vaapi");
+      if (bitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
+      else args.push("-qp", crf);
+      args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
+    } else {
+      if (quality !== null) args.push("-vf", `scale=-2:min(${quality}\\,ih)`);
+      args.push("-c:v", "libx264", "-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*2)");
+      if (bitrate) args.push("-maxrate", bitrate, "-bufsize", bitrate);
+    }
+    if (hasAudio) args.push(...(copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
     if (subtitle !== null) args.push("-c:s", "webvtt");
 
     // fMP4 segmenty: jediný způsob, jak propustit HEVC nebo AC3 bez překódování.
     // Vestavěné titulky jdou ven jako vlastní WebVTT stopa ze stejného průchodu, bez druhého stažení.
     args.push("-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "event",
       "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
-      "-master_pl_name", "master.m3u8", "-var_stream_map", subtitle !== null ? "v:0,a:0,s:0,sgroup:subs" : "v:0,a:0",
+      "-master_pl_name", "master.m3u8",
+      "-var_stream_map", [hasAudio ? "v:0,a:0" : "v:0", subtitle !== null ? ",s:0,sgroup:subs" : ""].join(""),
       "-hls_segment_filename", path.join(directory, "seg-%v-%06d.m4s"), path.join(directory, "index-%v.m3u8"));
     return args;
   }
