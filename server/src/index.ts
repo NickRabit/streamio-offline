@@ -3,7 +3,7 @@ import path from "node:path";
 import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
-import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streams, subtitles } from "./addons.js";
+import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { DownloadQueue } from "./downloads.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
@@ -17,6 +17,7 @@ import { defaultDownloadSettings, normalizeDownloadSettings } from "./naming.js"
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
+const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
 await initLogger(); log("INFO", "Server startuje", { version: "0.3.0" });
@@ -132,9 +133,43 @@ app.post("/api/addons", asyncRoute(async (req, res) => {
   if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new Error("Tento manifest už je přidaný.");
   await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddon(addon));
 }));
+// Pořadí doplňků je zároveň jejich priorita při řazení zdrojů.
+app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
+  const direction = Number(req.body.direction) < 0 ? -1 : 1;
+  await store.update((state) => {
+    const index = state.addons.findIndex((addon) => addon.key === req.params.key);
+    if (index < 0) throw new Error("Doplněk nebyl nalezen.");
+    const next = Math.max(0, Math.min(state.addons.length - 1, index + direction));
+    if (next === index) return;
+    const [addon] = state.addons.splice(index, 1);
+    state.addons.splice(next, 0, addon);
+  });
+  res.status(204).end();
+}));
 app.delete("/api/addons/:key", asyncRoute(async (req, res) => { await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); }); res.status(204).end(); }));
+// Úplný záznam včetně adresy s tokenem. Rozhraní ji jinak skrývá, tady je vydání záměrné.
+app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
+  const addon = store.addons().find((a) => a.key === req.params.key);
+  if (!addon) throw new Error("Doplněk nebyl nalezen.");
+  res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
+}));
 app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
-  await store.update((state) => { const addon = state.addons.find((a) => a.key === req.params.key); if (!addon) throw new Error("Doplněk nebyl nalezen."); if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled; if (req.body.downloadSettings !== undefined) addon.downloadSettings = normalizeDownloadSettings(req.body.downloadSettings); });
+  const existing = store.addons().find((a) => a.key === req.params.key);
+  if (!existing) throw new Error("Doplněk nebyl nalezen.");
+  const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
+  // Jiná adresa znamená načíst manifest znovu. Klíč, pořadí i nastavení ukládání zůstávají,
+  // takže po překonfigurování doplňku není nutné ho mazat a přidávat.
+  const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
+  const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
+  await store.update((state) => {
+    const addon = state.addons.find((a) => a.key === req.params.key);
+    if (!addon) throw new Error("Doplněk nebyl nalezen.");
+    if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
+    if (req.body.downloadSettings !== undefined) addon.downloadSettings = normalizeDownloadSettings(req.body.downloadSettings);
+    addon.role = role;
+    if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
+  });
+  if (reloaded) log("INFO", "Doplněk překonfigurován", { name: reloaded.manifest.name, role });
   res.json(publicAddon(store.addons().find((a) => a.key === req.params.key)!));
 }));
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
@@ -150,7 +185,10 @@ app.get("/api/search", asyncRoute(async (req, res) => {
 }));
 app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
-app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(await streams(store.addons(), String(req.params.type), String(req.params.id)))));
+app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
+  streamCandidates(store.addons(), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
+app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(
+  await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitle", asyncRoute(async (req, res) => {
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await safeFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
@@ -181,6 +219,10 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
+    if (req.body.streamSort !== undefined) {
+      const value = String(req.body.streamSort);
+      state.settings.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
+    }
   });
   queue.changed(); res.json(store.settings());
 }));
