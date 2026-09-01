@@ -97,6 +97,7 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   const options: PlaybackOptions = { audioLanguage: settings.audioLanguage, subtitleLanguage: settings.subtitleLanguage };
   if (req.body.audioTrack !== undefined) options.audioTrack = Number(req.body.audioTrack);
   if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
+  if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
   res.status(201).json(await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options));
 }));
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));

@@ -129,18 +129,34 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
 
     pendingSeekRef.current = bounded;
     if (seekInFlightRef.current) return;
-    const id = sessionRef.current; if (!id) return;
+    let id = sessionRef.current; if (!id) return;
     const epoch = seekEpochRef.current;
     const autoplay = !video.paused;
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); detach();
     try {
       while (pendingSeekRef.current !== null && epoch === seekEpochRef.current) {
         const requested = pendingSeekRef.current; pendingSeekRef.current = null;
-        const next = await api.seekPlayback(id, requested);
+        let recoveredDirectAt: number | null = null;
+        let next: PlaybackSession;
+        try { next = await api.seekPlayback(id, requested); }
+        catch (value) {
+          const message = value instanceof Error ? value.message : String(value);
+          if (!message.includes("Relace přehrávání už neexistuje")) throw value;
+          // Server mohl být mezitím restartován nebo uklidit nečinnou relaci.
+          // Nová HLS relace začne rovnou na cíli; přímý stream si posune prohlížeč.
+          next = await api.startPlayback(stream!, capabilities(), requested);
+          id = next.id;
+          if (next.mode === "direct") recoveredDirectAt = requested;
+        }
         if (epoch !== seekEpochRef.current) return;
         // Když uživatel mezitím vybral jiné místo, starou generaci ani nepřipojujeme.
         if (pendingSeekRef.current !== null) continue;
         applySession(next, autoplay);
+        if (recoveredDirectAt !== null) {
+          const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = recoveredDirectAt!; showTime(recoveredDirectAt!); };
+          if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();
+          else videoRef.current?.addEventListener("loadedmetadata", moveDirect, { once: true });
+        }
       }
     }
     catch (value) { if (epoch === seekEpochRef.current) setError(value instanceof Error ? value.message : String(value)); }

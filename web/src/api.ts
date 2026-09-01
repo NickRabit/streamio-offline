@@ -33,7 +33,7 @@ export const api = {
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
   inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
   logs: () => fetch("/api/logs").then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
-  startPlayback: (stream: Stream, capabilities: Capabilities) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities }) }),
+  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }) }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),

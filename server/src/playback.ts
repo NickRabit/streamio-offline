@@ -19,6 +19,7 @@ export interface PlaybackOptions {
   subtitleLanguage?: string;
   audioTrack?: number;
   subtitleTrack?: number | null;
+  startTime?: number;
 }
 
 export interface PlaybackDescriptor {
@@ -131,7 +132,9 @@ export class PlaybackManager {
 
     session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     try {
-      const url = await this.spawnAt(session, 0);
+      const limit = info?.duration ? Math.max(0, info.duration - 2) : Number.POSITIVE_INFINITY;
+      const startTime = Math.max(0, Math.min(options.startTime ?? 0, limit));
+      const url = await this.spawnAt(session, startTime);
       log("INFO", "Převod spuštěn", { id, mode: session.mode, hardware: session.hardware, audioTrack, subtitleTrack, ...summary });
       return this.describe(session, url);
     } catch (error) { await this.stop(id); throw error; }
