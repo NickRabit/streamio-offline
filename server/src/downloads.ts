@@ -4,20 +4,44 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { StreamItem } from "./types.js";
+import { joinTarget, targetPath, type MediaInfo } from "./naming.js";
 import { safeFetch } from "./security.js";
 import { log } from "./logger.js";
 
 export type DownloadStatus = "queued" | "downloading" | "paused" | "completed" | "failed";
 export interface DownloadJob { id: string; title: string; stream: StreamItem; status: DownloadStatus; target: string; received: number; total?: number; speed: number; error?: string; retryCount?: number; createdAt: string; updatedAt: string }
-const safe = (value: string) => value.normalize("NFC").replace(/[\x00-\x1f/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim().slice(0, 180) || "video";
+const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
 
 export class DownloadQueue {
-  private jobs: DownloadJob[] = []; private active = new Map<string, AbortController>(); private pauseRequested = new Set<string>(); private pumpScheduled = false; private saveTimer?: NodeJS.Timeout;
+  private jobs: DownloadJob[] = []; private active = new Map<string, AbortController>(); private pauseRequested = new Set<string>(); private pumpScheduled = false; private saveTimer?: NodeJS.Timeout; private saveChain: Promise<void> = Promise.resolve();
   private readonly stateFile: string; private readonly downloadDir: string;
   constructor(private concurrency: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
   async load() { await mkdir(path.dirname(this.stateFile), { recursive: true }); await mkdir(this.downloadDir, { recursive: true }); try { this.jobs = JSON.parse(await readFile(this.stateFile, "utf8")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; } for (const job of this.jobs) { if (job.status === "downloading") job.status = "queued"; job.updatedAt ??= job.createdAt; job.speed = 0; } await this.save(); this.pump(); }
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
-  async add(title: string, stream: StreamItem) { if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream."); const hinted = stream.behaviorHints?.filename; const extension = path.extname(hinted ?? new URL(stream.url).pathname) || ".mp4"; const base = safe(title); const duplicates = this.jobs.filter((job) => job.target === `${base}${extension}` || job.target.startsWith(`${base} (`)).length; const target = `${base}${duplicates ? ` (${duplicates + 1})` : ""}${extension}`; const now = new Date().toISOString(); const job: DownloadJob = { id: crypto.randomUUID(), title, stream, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now }; this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job); }
+  async add(title: string, stream: StreamItem, media?: MediaInfo) {
+    if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
+    const hinted = stream.behaviorHints?.filename;
+    const extension = path.extname(hinted ?? new URL(stream.url).pathname) || ".mp4";
+    const { directory, base } = targetPath(media, title, extension);
+    const target = await this.uniqueTarget(directory, base, extension);
+    const now = new Date().toISOString();
+    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now };
+    this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+  }
+
+  /** Historii lze vyčistit, ale soubory zůstávají. Volné jméno se proto musí hledat i na disku,
+   *  jinak by se hotový film tiše přepsal stahováním stejného titulu. */
+  private async uniqueTarget(directory: string, base: string, extension: string) {
+    for (let copy = 1; copy <= 999; copy += 1) {
+      const relative = joinTarget(directory, base, extension, copy);
+      if (this.jobs.some((job) => job.target === relative)) continue;
+      const full = path.join(this.downloadDir, relative);
+      if (await exists(full) || await exists(`${full}.part`)) continue;
+      return relative;
+    }
+    throw new Error("Nepodařilo se najít volné jméno souboru.");
+  }
+
   async pause(id: string) { const job = this.require(id); if (job.status === "completed") throw new Error("Dokončené stahování nelze pozastavit."); if (this.active.has(id)) this.pauseRequested.add(id); job.status = "paused"; job.speed = 0; job.updatedAt = new Date().toISOString(); this.active.get(id)?.abort(); log("INFO", "Stahování pozastaveno", { id, title: job.title, received: job.received }); await this.save(); for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25)); }
   async resume(id: string) { const job = this.require(id); if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new Error("Tuto položku nelze obnovit."); this.pauseRequested.delete(id); job.status = "queued"; job.error = undefined; job.updatedAt = new Date().toISOString(); await this.save(); this.pump(); }
   async retry(id: string) { const job = this.require(id); if (job.status !== "failed") throw new Error("Opakovat lze pouze chybné stahování."); job.retryCount = 0; return this.resume(id); }
@@ -27,12 +51,22 @@ export class DownloadQueue {
   changed() { this.pump(); }
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new Error("Položka nebyla nalezena."); return job; }
   private publicJob({ stream: _stream, ...job }: DownloadJob) { return job; }
-  private async save() { const tmp = `${this.stateFile}.tmp`; await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 }); await rename(tmp, this.stateFile); }
+  /** Uložení musí jít za sebou: souběžné zápisy sdílejí jeden .tmp a druhé přejmenování
+   *  pak nemá co přesouvat. Selhání zápisu stavu navíc nesmí shodit celý server. */
+  private save() {
+    this.saveChain = this.saveChain.then(async () => {
+      const tmp = `${this.stateFile}.tmp`;
+      await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 });
+      await rename(tmp, this.stateFile);
+    }).catch((error) => { log("ERROR", "Stav fronty se nepodařilo uložit", { reason: error instanceof Error ? error.message : String(error) }); });
+    return this.saveChain;
+  }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
   private pump() { if (this.pumpScheduled) return; this.pumpScheduled = true; queueMicrotask(() => { this.pumpScheduled = false; const limit = Math.max(1, Math.min(8, this.concurrency())); while (this.active.size < limit) { const job = this.jobs.find((item) => item.status === "queued" && !this.active.has(item.id)); if (!job) break; void this.download(job); } }); }
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.error = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Stahování zahájeno", { id: job.id, title: job.title, target: job.target, previousBytes: job.received }); await this.save();
     const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
+    await mkdir(path.dirname(target), { recursive: true });
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;

@@ -10,6 +10,7 @@ import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
+import type { MediaInfo } from "./naming.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
@@ -55,9 +56,9 @@ app.get("/api/search", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim();
   if (!query) throw new Error("Zadejte hledaný výraz.");
   const type = req.query.type ? String(req.query.type) : undefined;
-  res.json(await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined));
+  res.json(await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, req.query.addon ? String(req.query.addon) : undefined));
 }));
-app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons(), undefined).map(({ addon, definition }) => ({ addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
+app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
 app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(await streams(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
@@ -68,7 +69,7 @@ app.get("/api/subtitle", asyncRoute(async (req, res) => {
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
-app.post("/api/downloads", asyncRoute(async (req, res) => res.status(201).json(await queue.add(String(req.body.title ?? "video"), req.body.stream as StreamItem))));
+app.post("/api/downloads", asyncRoute(async (req, res) => res.status(201).json(await queue.add(String(req.body.title ?? "video"), req.body.stream as StreamItem, req.body.media as MediaInfo | undefined))));
 app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/resume", asyncRoute(async (req, res) => { await queue.resume(String(req.params.id)); res.status(204).end(); }));
 app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queue.retry(String(req.params.id)); res.status(204).end(); }));
@@ -173,4 +174,8 @@ function shiftVtt(text: string, offset: number) {
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
 app.use(express.static(webRoot)); app.get("/{*path}", (_req, res) => res.sendFile(path.join(webRoot, "index.html")));
 app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => { console.error(error); res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); });
+process.on("unhandledRejection", (reason) => {
+  log("ERROR", "Neošetřené odmítnutí slibu", { reason: reason instanceof Error ? `${reason.message}` : String(reason) });
+  console.error("Neošetřené odmítnutí:", reason);
+});
 app.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log("Stremio Offline běží na portu 8080"));
