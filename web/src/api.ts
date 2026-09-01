@@ -1,4 +1,4 @@
-import type { Addon, Catalog, Download, Meta, Stream, Subtitle } from "./types";
+import type { Addon, Capabilities, Catalog, Download, Inspection, Meta, PlaybackSession, Settings, Stream, Subtitle } from "./types";
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...options?.headers } });
@@ -26,18 +26,15 @@ export const api = {
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
-  settings: () => request<{ concurrentDownloads: number }>("/api/settings"),
-  updateSettings: (concurrentDownloads: number) => request<{ concurrentDownloads: number }>("/api/settings", { method: "PATCH", body: JSON.stringify({ concurrentDownloads }) }),
+  settings: () => request<Settings>("/api/settings"),
+  updateSettings: (patch: Partial<Settings>) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
+  inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
   logs: () => fetch("/api/logs").then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
-  startPlayback: (stream: Stream) => request<{ id: string; url: string; mode: string }>("/api/playback", { method: "POST", body: JSON.stringify({ stream }) }),
+  startPlayback: (stream: Stream, capabilities: Capabilities) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities }) }),
+  setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
+  seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
 };
 
-export function playableStream(stream: Stream): Stream {
-  if (!stream.url) return stream;
-  const headers = stream.behaviorHints?.proxyHeaders?.request;
-  const params = new URLSearchParams({ url: stream.url });
-  if (headers && Object.keys(headers).length) params.set("headers", btoa(unescape(encodeURIComponent(JSON.stringify(headers)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""));
-  return { ...stream, url: `/api/proxy?${params}` };
-}
-export const subtitleUrl = (url: string) => `/api/subtitle?${new URLSearchParams({ url })}`;
+export const subtitleUrl = (url: string, offset = 0) => `/api/subtitle?${new URLSearchParams(offset ? { url, offset: offset.toFixed(3) } : { url })}`;

@@ -1,31 +1,337 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { access, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
+import { log } from "./logger.js";
+import { pickByLanguage } from "./language.js";
+import { probe, type MediaInfo, type Track } from "./probe.js";
 import type { StreamItem } from "./types.js";
 
-interface Session { id: string; process: ChildProcess; directory: string; error?: string }
+/** direct = prohlížeč hraje soubor rovnou, remux = přebalení bez překódování videa, transcode = skutečný převod. */
+export type PlaybackMode = "direct" | "remux" | "transcode";
+
+export interface ClientCapabilities {
+  h264?: boolean; hevc?: boolean; vp8?: boolean; vp9?: boolean; av1?: boolean;
+  aac?: boolean; mp3?: boolean; opus?: boolean; vorbis?: boolean; ac3?: boolean; eac3?: boolean; flac?: boolean;
+}
+
+export interface PlaybackOptions {
+  audioLanguage?: string;
+  subtitleLanguage?: string;
+  audioTrack?: number;
+  subtitleTrack?: number | null;
+}
+
+export interface PlaybackDescriptor {
+  id: string; mode: PlaybackMode; url: string; offset: number;
+  duration?: number; video?: string; audio?: string; hardware: boolean;
+  audioTracks: Track[]; subtitleTracks: Track[];
+  audioTrack: number; subtitleTrack: number | null;
+}
+
+interface Session {
+  id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
+  mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
+  audioTrack: number; subtitleTrack: number | null;
+  process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
+}
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const DIRECT_MP4 = new Set([".mp4", ".m4v", ".mov"]);
+const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", mp3: "mp3", opus: "opus", ac3: "ac3", eac3: "eac3", flac: "flac" };
+const IDLE_MS = 5 * 60_000;
+
+/** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
+const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
+const NOISE = /you should use tag|deprecated|Last message repeated|^\s*$/i;
+const describeFailure = (stderr: string, code: number | null) => {
+  const lines = redact(stderr).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !NOISE.test(line));
+  return lines.length ? lines.slice(-2).join(" ") : `FFmpeg skončil s kódem ${code}.`;
+};
 
 export class PlaybackManager {
   private sessions = new Map<string, Session>();
+  private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private readonly root: string;
+  private vaapiDevice?: string;
+
   constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.root = path.join(dataDir, "playback"); }
-  async load() { await rm(this.root, { recursive: true, force: true }); await mkdir(this.root, { recursive: true }); }
-  async start(stream: StreamItem) {
-    if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
-    const id = crypto.randomUUID(); const directory = path.join(this.root, id); await mkdir(directory, { recursive: true });
-    const params = new URLSearchParams({ url: stream.url }); const headers = stream.behaviorHints?.proxyHeaders?.request ?? {};
-    if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
-    const input = `http://127.0.0.1:${process.env.PORT ?? 8080}/api/proxy?${params}`;
-    const parsed = typeof stream.parsed === "object" && stream.parsed ? stream.parsed as Record<string, unknown> : {}; const codec = String(stream.videoCodec ?? parsed.video_codec ?? "").toLowerCase(); const copyVideo = /h\.?264|avc/.test(codec);
-    const args = ["-hide_banner", "-loglevel", "warning", "-nostdin", "-readrate", process.env.FFMPEG_READRATE ?? "1.5", "-i", input, "-map", "0:v:0?", "-map", "0:a:0?", "-map_metadata", "-1", "-c:v", copyVideo ? "copy" : "libx264"];
-    if (!copyVideo) args.push("-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", process.env.FFMPEG_CRF ?? "23", "-force_key_frames", "expr:gte(t,n_forced*2)");
-    args.push("-c:a", "aac", "-ac", "2", "-b:a", "160k", "-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "event", "-hls_flags", "independent_segments+temp_file", "-hls_segment_filename", path.join(directory, "segment-%06d.ts"), path.join(directory, "index.m3u8"));
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] }); const session: Session = { id, process: child, directory }; this.sessions.set(id, session); let stderr = "";
-    child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-8000); }); child.once("error", (error) => { session.error = error.message; }); child.once("exit", (code, signal) => { if (code && signal !== "SIGTERM") session.error = stderr.trim() || `FFmpeg skončil s kódem ${code}.`; });
-    for (let attempt = 0; attempt < 120; attempt += 1) { try { await access(path.join(directory, "index.m3u8")); return { id, url: `/api/playback/${id}/index.m3u8`, mode: "transcode" as const }; } catch { if (session.error) break; await sleep(250); } }
-    await this.stop(id); throw new Error(session.error || "Převod videa se nepodařilo spustit do 30 sekund.");
+
+  async load() {
+    await rm(this.root, { recursive: true, force: true });
+    await mkdir(this.root, { recursive: true });
+    const device = process.env.VAAPI_DEVICE;
+    if (device) {
+      try { await access(device); this.vaapiDevice = device; log("INFO", "VAAPI je k dispozici", { device }); }
+      catch { log("WARN", "VAAPI_DEVICE není dostupné, převod poběží softwarově", { device }); }
+    }
+    setInterval(() => {
+      for (const session of [...this.sessions.values()]) {
+        if (Date.now() - session.lastAccess > IDLE_MS) { log("INFO", "Nečinná relace ukončena", { id: session.id }); void this.stop(session.id); }
+      }
+    }, 60_000).unref();
   }
-  async stop(id: string) { const session = this.sessions.get(id); if (!session) return; this.sessions.delete(id); if (!session.process.killed) session.process.kill("SIGTERM"); setTimeout(() => { if (session.process.exitCode == null) session.process.kill("SIGKILL"); }, 3000).unref(); await rm(session.directory, { recursive: true, force: true }); }
-  directory(id: string) { return this.sessions.get(id)?.directory; }
+
+  /** Zjistí stopy zdroje bez spuštění přehrávání; výsledek chvíli držíme, ať se zdroj neotravuje. */
+  async inspect(stream: StreamItem): Promise<MediaInfo | undefined> {
+    if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
+    const cached = this.inspected.get(stream.url);
+    if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
+    const info = await probe(this.localUrl(this.proxyPath(stream)));
+    log(info ? "INFO" : "WARN", info ? "Zdroj rozebrán" : "Zdroj se nepodařilo rozebrat", {
+      video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
+      audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+      subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+    });
+    if (this.inspected.size > 200) this.inspected.clear();
+    this.inspected.set(stream.url, { info, at: Date.now() });
+    return info;
+  }
+
+  async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
+    if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
+    const id = crypto.randomUUID();
+    const source = this.proxyPath(stream);
+    // Přes inspect(), ať se seznam zdrojů a přehrávač nikdy nerozejdou v tom, co soubor obsahuje.
+    const info = await this.inspect(stream);
+    const audioTracks = info?.audioTracks ?? [];
+    const subtitleTracks = info?.subtitleTracks ?? [];
+
+    const audioTrack = options.audioTrack ?? Math.max(0, pickByLanguage(audioTracks, options.audioLanguage));
+    const subtitleTrack = options.subtitleTrack !== undefined
+      ? options.subtitleTrack
+      : this.preferredSubtitle(subtitleTracks, options.subtitleLanguage);
+
+    const session: Session = {
+      id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
+      audioTrack, subtitleTrack, lastAccess: Date.now(),
+    };
+    this.sessions.set(id, session);
+    const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
+
+    // Přímé přehrání dává smysl jen u výchozích stop; jinak musí zasáhnout FFmpeg.
+    if (audioTrack === 0 && subtitleTrack === null && this.canDirectPlay(stream, info, capabilities)) {
+      log("INFO", "Přehrávání přímo ze zdroje", { id, ...summary });
+      return this.describe(session, source);
+    }
+
+    session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
+    try {
+      const url = await this.spawnAt(session, 0);
+      log("INFO", "Převod spuštěn", { id, mode: session.mode, hardware: session.hardware, audioTrack, subtitleTrack, ...summary });
+      return this.describe(session, url);
+    } catch (error) { await this.stop(id); throw error; }
+  }
+
+  /** Posun mimo už vyrobenou část: FFmpeg se restartuje od nové pozice, klient si posune časovou osu. */
+  async seek(id: string, time: number) { return this.restart(id, time, "Posun v přehrávání"); }
+
+  /** Přepnutí zvukové nebo titulkové stopy znamená nové mapování, tedy taky restart od aktuální pozice. */
+  async track(id: string, changes: { audio?: number; subtitle?: number | null; time?: number }) {
+    const session = this.require(id);
+    if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
+    if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
+    return this.restart(id, changes.time ?? session.offset, "Přepnuta stopa");
+  }
+
+  private async restart(id: string, time: number, message: string) {
+    const session = this.require(id);
+    const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
+    const target = Math.max(0, Math.min(time, limit));
+    // Starý FFmpeg dobíhá na pozadí; nový píše do jiné generace, takže se nemají o co přetahovat.
+    session.pendingKill = this.kill(session);
+    if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
+    let url: string;
+    try { url = await this.spawnAt(session, target); }
+    catch (error) {
+      log("WARN", "Restart převodu selhal, zkouším ještě jednou", { id, offset: Math.round(target), reason: error instanceof Error ? error.message : String(error) });
+      await sleep(1000);
+      url = await this.spawnAt(session, target);
+    }
+    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+    return this.describe(session, url);
+  }
+
+  async stop(id: string) {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    this.sessions.delete(id);
+    await this.kill(session);
+    await this.purge(path.join(this.root, id));
+  }
+
+  directory(id: string, generation: string) {
+    const session = this.sessions.get(id);
+    if (!session || String(session.generation) !== generation) return undefined;
+    session.lastAccess = Date.now();
+    return session.directory;
+  }
+
+  private require(id: string) {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error("Relace přehrávání už neexistuje.");
+    return session;
+  }
+
+  private describe(session: Session, url: string): PlaybackDescriptor {
+    return {
+      id: session.id, mode: session.mode, url, offset: session.offset,
+      duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
+      hardware: session.hardware,
+      audioTracks: session.info?.audioTracks ?? [], subtitleTracks: session.info?.subtitleTracks ?? [],
+      audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack,
+    };
+  }
+
+  /** Vestavěné titulky zapínáme samy od sebe jen tehdy, když opravdu sedí preferovaný jazyk. */
+  private preferredSubtitle(tracks: Track[], preferred?: string): number | null {
+    if (!tracks.length || !preferred) return null;
+    const match = tracks.findIndex((track) => track.language === preferred);
+    return match >= 0 ? match : null;
+  }
+
+  private proxyPath(stream: StreamItem) {
+    const params = new URLSearchParams({ url: stream.url! });
+    const headers = stream.behaviorHints?.proxyHeaders?.request ?? {};
+    if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
+    return `/api/proxy?${params}`;
+  }
+  private localUrl(relative: string) { return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}`; }
+
+  private extension(stream: StreamItem) {
+    let name = stream.behaviorHints?.filename ?? "";
+    if (!name) { try { name = new URL(stream.url!).pathname; } catch { name = ""; } }
+    return path.extname(name).toLowerCase();
+  }
+
+  /** Nejlevnější cesta: soubor, který prohlížeč zvládne sám. Seek pak jede nativně přes HTTP Range. */
+  private canDirectPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities) {
+    if (stream.behaviorHints?.notWebReady || !info?.video) return false;
+    const extension = this.extension(stream);
+    const video = info.video.codec;
+    const audio = info.audio?.codec;
+    if (DIRECT_MP4.has(extension)) {
+      const videoOk = video === "h264" || (video === "hevc" && caps.hevc === true);
+      return videoOk && (!audio || audio === "aac" || audio === "mp3");
+    }
+    if (extension === ".webm") {
+      const videoOk = video === "vp8" || video === "vp9" || (video === "av1" && caps.av1 === true);
+      return videoOk && (!audio || audio === "opus" || audio === "vorbis");
+    }
+    return false;
+  }
+
+  /** Emby tomu říká Direct Stream: kontejner se přebalí, video se jen kopíruje. */
+  private plan(session: Session) {
+    const caps = session.capabilities;
+    const video = session.info?.video?.codec ?? "";
+    const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
+    const copyVideo = (video === "h264" && caps.h264 !== false) || (video === "hevc" && caps.hevc === true);
+    const audioCapability = COPYABLE_AUDIO[audio];
+    return { copyVideo, copyAudio: Boolean(audioCapability && caps[audioCapability] === true) };
+  }
+
+  private async spawnAt(session: Session, offset: number): Promise<string> {
+    const previous = session.directory;
+    session.generation += 1;
+    session.offset = offset;
+    const directory = path.join(this.root, session.id, String(session.generation));
+    await mkdir(directory, { recursive: true });
+    session.directory = directory;
+    session.lastAccess = Date.now();
+    // Uklidit se dá až po skutečném konci starého procesu, jinak si sahají do stejného adresáře.
+    if (previous) void (session.pendingKill ?? Promise.resolve()).then(() => this.purge(previous));
+
+    const { copyVideo } = this.plan(session);
+    session.mode = copyVideo ? "remux" : "transcode";
+    const attempts = !copyVideo && this.vaapiDevice ? [true, false] : [false];
+    for (const hardware of attempts) {
+      const url = await this.run(session, offset, directory, hardware);
+      if (url) return url;
+      if (hardware) log("WARN", "VAAPI selhalo, zkouším softwarový převod", { id: session.id, reason: session.error });
+    }
+    throw new Error(session.error || "Převod videa se nepodařilo spustit.");
+  }
+
+  private async run(session: Session, offset: number, directory: string, hardware: boolean) {
+    const args = this.args(session, offset, directory, hardware);
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    session.process = child; session.hardware = hardware; session.error = undefined;
+    let stderr = ""; let finished = false; let exitCode: number | null = null;
+    child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-16_000); });
+    child.once("error", (error) => { finished = true; session.error = error.message; });
+    // Až 'close' zaručuje, že je stderr přečtený; 'exit' poslední hlášku běžně nestihne.
+    child.once("close", (code, signal) => { finished = true; exitCode = code; if (code !== 0 && signal === null) session.error = describeFailure(stderr, code); });
+
+    // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
+    const ready = path.join(directory, "index-0.m3u8");
+    for (let attempt = 0; attempt < 160; attempt += 1) {
+      try { await access(ready); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; }
+      catch { if (finished) break; await sleep(250); }
+    }
+    if (!finished) { child.kill("SIGKILL"); session.error ||= "Převod se nerozeběhl do 40 sekund."; }
+    session.error ||= describeFailure(stderr, exitCode);
+    log("ERROR", "Převod se nepodařilo spustit", {
+      id: session.id, offset: Math.round(offset), mode: session.mode, hardware, exitCode,
+      audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack,
+      reason: session.error,
+      args: args.map((value) => value.startsWith("http") ? "<zdroj>" : value).join(" "),
+      stderr: redact(stderr).slice(-1500),
+    });
+    return undefined;
+  }
+
+  private args(session: Session, offset: number, directory: string, hardware: boolean) {
+    const { copyVideo, copyAudio } = this.plan(session);
+    const sourceVideo = session.info?.video?.codec ?? "";
+    const subtitle = session.subtitleTrack;
+    const crf = process.env.FFMPEG_CRF ?? "23";
+    const args = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
+    // -ss před -i seekuje přes HTTP Range, takže se nepřenáší nic před požadovanou pozicí.
+    if (offset > 0) args.push("-ss", offset.toFixed(3));
+    if (!copyVideo && hardware) args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
+    args.push("-readrate", copyVideo ? process.env.FFMPEG_READRATE_REMUX ?? "8" : process.env.FFMPEG_READRATE ?? "1.5");
+    args.push("-i", this.localUrl(this.proxyPath(session.stream)));
+    args.push("-map", "0:v:0?", "-map", `0:a:${session.audioTrack}?`);
+    if (subtitle !== null) args.push("-map", `0:s:${subtitle}?`);
+    args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
+
+    if (copyVideo) {
+      args.push("-c:v", "copy");
+      // Safari přehraje HEVC v fMP4 jen pod tagem hvc1, s výchozím hev1 stream odmítne.
+      if (sourceVideo === "hevc") args.push("-tag:v", "hvc1");
+    }
+    else if (hardware) args.push("-vf", "scale_vaapi=format=nv12", "-c:v", "h264_vaapi", "-qp", crf, "-g", "96");
+    else args.push("-c:v", "libx264", "-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*4)");
+    args.push(...(copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
+    if (subtitle !== null) args.push("-c:s", "webvtt");
+
+    // fMP4 segmenty: jediný způsob, jak propustit HEVC nebo AC3 bez překódování.
+    // Vestavěné titulky jdou ven jako vlastní WebVTT stopa ze stejného průchodu, bez druhého stažení.
+    args.push("-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "event",
+      "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
+      "-master_pl_name", "master.m3u8", "-var_stream_map", subtitle !== null ? "v:0,a:0,s:0,sgroup:subs" : "v:0,a:0",
+      "-hls_segment_filename", path.join(directory, "seg-%v-%06d.m4s"), path.join(directory, "index-%v.m3u8"));
+    return args;
+  }
+
+  /** Čeká na skutečný konec procesu: dokud FFmpeg žije, zapisuje segmenty a adresář nejde smazat. */
+  private kill(session: Session): Promise<void> {
+    const child = session.process;
+    session.process = undefined;
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    return new Promise((resolve) => {
+      const force = setTimeout(() => child.kill("SIGKILL"), 3000);
+      const giveUp = setTimeout(() => resolve(), 6000);
+      child.once("exit", () => { clearTimeout(force); clearTimeout(giveUp); resolve(); });
+      child.kill("SIGTERM");
+    });
+  }
+
+  private async purge(directory: string) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try { await rm(directory, { recursive: true, force: true }); return; }
+      catch { await sleep(200); }
+    }
+    log("WARN", "Adresář relace se nepodařilo uklidit", { directory });
+  }
 }

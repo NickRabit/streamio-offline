@@ -1,5 +1,6 @@
 import express from "express";
 import path from "node:path";
+import { readFile } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, streams, subtitles } from "./addons.js";
@@ -8,6 +9,8 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
+import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
+import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, StreamItem } from "./types.js";
 
 const app = express(); const store = new Store();
@@ -54,6 +57,7 @@ app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(awai
 app.get("/api/subtitle", asyncRoute(async (req, res) => {
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await safeFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
   let text = await response.text(); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+  const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
@@ -66,12 +70,46 @@ app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.re
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
 app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
-app.patch("/api/settings", asyncRoute(async (req, res) => { const concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1)); await store.update((state) => { state.settings.concurrentDownloads = concurrentDownloads; }); queue.changed(); res.json(store.settings()); }));
-app.post("/api/playback", asyncRoute(async (req, res) => res.status(201).json(await playback.start(req.body.stream as StreamItem))));
+app.patch("/api/settings", asyncRoute(async (req, res) => {
+  await store.update((state) => {
+    if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
+    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
+    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
+  });
+  queue.changed(); res.json(store.settings());
+}));
+app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
+app.post("/api/inspect", asyncRoute(async (req, res) => {
+  const info = await playback.inspect(req.body.stream as StreamItem);
+  res.json({ duration: info?.duration, video: info?.video, audioTracks: info?.audioTracks ?? [], subtitleTracks: info?.subtitleTracks ?? [] });
+}));
+app.post("/api/playback", asyncRoute(async (req, res) => {
+  const settings = store.settings();
+  const options: PlaybackOptions = { audioLanguage: settings.audioLanguage, subtitleLanguage: settings.subtitleLanguage };
+  if (req.body.audioTrack !== undefined) options.audioTrack = Number(req.body.audioTrack);
+  if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
+  res.status(201).json(await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options));
+}));
+app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
+app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
+  audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
+  subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
+  time: Number(req.body.time) || 0,
+}))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
-app.get("/api/playback/:id/:file", asyncRoute(async (req, res) => {
-  const directory = playback.directory(String(req.params.id)); if (!directory) return res.status(404).end(); const file = String(req.params.file);
-  if (!/^(index\.m3u8|segment-\d{6}\.ts)$/.test(file)) return res.status(400).end(); res.setHeader("cache-control", file.endsWith(".m3u8") ? "no-store" : "public, max-age=3600");
+app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
+  const directory = playback.directory(String(req.params.id), String(req.params.generation)); if (!directory) return res.status(404).end(); const file = String(req.params.file);
+  // Bez lomítek a teček nemůže jméno utéct z adresáře relace.
+  if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
+  if (file === "master.m3u8") {
+    // FFmpeg píše HEVC jako hvc1.1.4.L120.B01, jenže prohlížeče uznávají jen tvar B0 a hls.js
+    // podle toho stream odmítne dřív, než ho zkusí. Bez atributu si kodeky odvodí z init segmentu.
+    const playlist = await readFile(path.join(directory, file), "utf8");
+    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store")
+      .send(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, ""));
+  }
+  if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store");
+  else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "public, max-age=3600"); }
   res.sendFile(path.join(directory, file), (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 
@@ -111,6 +149,18 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
     if (!res.destroyed && !res.writableEnded) throw error;
   }
 }));
+
+// Po restartu převodu začíná video na nule, takže se o stejnou hodnotu musí posunout i titulky.
+const CUE = /(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3}) --> (\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
+const cueSeconds = (value: string) => { const parts = value.split(":").map(Number); return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1]; };
+const cueStamp = (value: number) => { const total = Math.max(0, value); return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${(total % 60).toFixed(3).padStart(6, "0")}`; };
+function shiftVtt(text: string, offset: number) {
+  return text.split(/\n\n+/).map((block) => {
+    const match = block.match(CUE); if (!match) return block;
+    const end = cueSeconds(match[2]) - offset; if (end <= 0) return "";
+    return block.replace(CUE, `${cueStamp(cueSeconds(match[1]) - offset)} --> ${cueStamp(end)}`);
+  }).filter(Boolean).join("\n\n");
+}
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
 app.use(express.static(webRoot)); app.get("/{*path}", (_req, res) => res.sendFile(path.join(webRoot, "index.html")));

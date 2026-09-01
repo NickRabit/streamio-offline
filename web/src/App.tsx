@@ -2,7 +2,8 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Check, ChevronRight, CirclePlay, Download, Film, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api } from "./api";
 import { Player } from "./Player";
-import type { Addon, Catalog, Download as DownloadJob, Meta, Stream, Subtitle, Video } from "./types";
+import { guessLanguages, label } from "./languages";
+import type { Addon, Catalog, Download as DownloadJob, Inspection, Meta, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -15,7 +16,9 @@ export function App() {
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [concurrentDownloads, setConcurrentDownloads] = useState(1);
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs" });
+  const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
+  const [inspection, setInspection] = useState<Inspection | null>(null);
   const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
@@ -27,7 +30,19 @@ export function App() {
     if (!selectedCatalog && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
-  useEffect(() => { refresh().catch(fail); loadDownloads(); api.settings().then((value) => setConcurrentDownloads(value.concurrentDownloads)).catch(fail); }, []);
+  useEffect(() => { refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, []);
+  // Přesné jazyky zná až rozbor souboru, tak ho uděláme pro vybraný stream.
+  useEffect(() => {
+    setInspection(null);
+    if (!selectedStream?.url) return;
+    let stale = false;
+    api.inspect(selectedStream).then((value) => { if (!stale) setInspection(value); }).catch(() => undefined);
+    return () => { stale = true; };
+  }, [selectedStream]);
+  const saveSettings = async (patch: Partial<AppSettings>) => {
+    setSettings((current: AppSettings) => ({ ...current, ...patch }));
+    try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
+  };
   useEffect(() => { if (view !== "downloads") return; loadDownloads(); const timer = setInterval(loadDownloads, 1200); return () => clearInterval(timer); }, [view]);
 
   const loadCatalog = async (event?: FormEvent) => {
@@ -73,9 +88,12 @@ export function App() {
           </section><section className="panel detail-panel">{selected ? <>
             <div className="hero" style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div></div>
             {selected.videos?.length ? <div className="episodes"><div className="subhead"><h3>Epizody</h3><span>{selected.videos.length}</span></div><div className="episode-list">{selected.videos.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => loadSources(video)}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
-            {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{streams.length}</span></div><div className="stream-list">{streams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => setSelectedStream(stream)}><i>{stream.url ? "HTTP" : stream.infoHash ? "P2P" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {stream.behaviorHints?.videoSize ? `· ${bytes(stream.behaviorHints.videoSize)}` : ""}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+            {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{streams.length}</span></div><div className="stream-list">{streams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => setSelectedStream(stream)}><i>{stream.url ? "HTTP" : stream.infoHash ? "P2P" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {stream.behaviorHints?.videoSize ? `· ${bytes(stream.behaviorHints.videoSize)}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
-              <div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><Download/> Stáhnout</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div>
+              <div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
+                {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
+                · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
+                {selectedStream?.url && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><Download/> Stáhnout</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div>
               {selectedStream?.infoHash && !selectedStream.url && <p className="notice">Tento doplněk vrátil nezpracovaný torrent. Přímé Real-Debrid rozlišení přidáme v další etapě; RD doplněk obvykle vrací rovnou HTTPS adresu.</p>}
             </div>}
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
@@ -83,9 +101,11 @@ export function App() {
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
-      {view === "settings" && <section><Heading eyebrow="NASTAVENÍ" title="Docker a úložiště"/><div className="panel settings-card"><h3>Adresář pro stažené soubory</h3><code>/downloads</code><p>Namapujte tento adresář v <code>compose.yml</code> na sdílenou složku svého NAS.</p><label className="setting-row"><span><strong>Souběžná stahování</strong><small>Na slabším NAS doporučujeme 1–2 soubory současně.</small></span><select value={concurrentDownloads} onChange={async (event) => { const value = Number(event.target.value); setConcurrentDownloads(value); try { await api.updateSettings(value); notify("Nastavení fronty uloženo."); } catch (e) { fail(e); } }}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></label><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button className="button" onClick={async () => { try { await navigator.clipboard.writeText(await api.logs()); notify("Log zkopírován do schránky."); } catch (e) { fail(e); } }}>Kopírovat log</button></div><small>Log obsahuje stav přenosů, rychlost a HTTP chyby; URL streamů ani přístupové tokeny se nezapisují.</small></div></section>}
+      {view === "settings" && <section><Heading eyebrow="NASTAVENÍ" title="Docker a úložiště"/><div className="panel settings-card"><h3>Adresář pro stažené soubory</h3><code>/downloads</code><p>Namapujte tento adresář v <code>compose.yml</code> na sdílenou složku svého NAS.</p><label className="setting-row"><span><strong>Souběžná stahování</strong><small>Na slabším NAS doporučujeme 1–2 soubory současně.</small></span><select value={settings.concurrentDownloads} onChange={(event) => void saveSettings({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+      <label className="setting-row"><span><strong>Preferovaný jazyk zvuku</strong><small>Přehrávač vybere tuto stopu, jinak sáhne po angličtině.</small></span><select value={settings.audioLanguage} onChange={(event) => void saveSettings({ audioLanguage: event.target.value })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label>
+      <label className="setting-row"><span><strong>Preferovaný jazyk titulků</strong><small>Zapne vestavěné titulky v tomto jazyce, jinak zkusí titulky z doplňků.</small></span><select value={settings.subtitleLanguage} onChange={(event) => void saveSettings({ subtitleLanguage: event.target.value })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</select></label><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button className="button" onClick={async () => { try { await navigator.clipboard.writeText(await api.logs()); notify("Log zkopírován do schránky."); } catch (e) { fail(e); } }}>Kopírovat log</button></div><small>Log obsahuje stav přenosů, rychlost a HTTP chyby; URL streamů ani přístupové tokeny se nezapisují.</small></div></section>}
     </main>
-    <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} onClose={() => setPlayerOpen(false)}/>
+    <Player open={playerOpen} title={videoTitle} stream={selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onClose={() => setPlayerOpen(false)}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
 }
