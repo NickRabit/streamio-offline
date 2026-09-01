@@ -1,11 +1,11 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Gauge, Maximize, Pause, Play, RotateCcw, RotateCw, Subtitles, Volume2, X } from "lucide-react";
+import { AudioLines, Check, Download, Gauge, Maximize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; onClose: () => void }
+interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; onDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -35,6 +35,10 @@ const MODE_LABEL: Record<PlaybackMode, string> = {
   transcode: "PŘEKÓDOVÁNO",
 };
 
+/** Cílové kvality překódování; hodnoty musí odpovídat QUALITY_BITRATE na serveru. */
+const QUALITIES = [1080, 720, 480];
+const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
+
 const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
 /** Soubory běžně označí víc stop stejným jazykem, takže musí být poznat i podle něčeho jiného. */
 const trackLabel = (track: Track) => {
@@ -45,7 +49,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ open, title, stream, subtitles, subtitleLanguage, onClose }: Props) {
+export function Player({ open, title, stream, subtitles, subtitleLanguage, onDownload, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -66,6 +70,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
   const [scrub, setScrub] = useState<number | null>(null);
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState("");
+  const stallsRef = useRef<number[]>([]);
+  const bufferTimerRef = useRef<number | undefined>(undefined);
+  const [qualityHint, setQualityHint] = useState<number | null>(null);
+  const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
@@ -77,7 +85,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     if (mode === "direct") { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
     if (Hls.isSupported()) {
-      const hls = new Hls({ maxBufferLength: 30, backBufferLength: 60 });
+      // Delší buffer na obě strany znamená, že běžné přeskočení o pár sekund vyřídí
+      // prohlížeč sám okamžitě, místo restartu FFmpeg na serveru.
+      // maxBufferHole přemostí drobné mezery na hranicích segmentů (kopie videa řeže jen
+      // na klíčových snímcích), místo aby na nich přehrávání zamrzlo.
+      const hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 90, maxBufferHole: 1 });
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       // Odepsaná instance ještě chvíli dobíhá; její chyby už nejsou naše.
@@ -101,6 +113,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
+    stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
     api.startPlayback(stream, capabilities()).then((created) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
@@ -111,6 +124,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     }).catch((value) => setError(value instanceof Error ? value.message : String(value))).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
+      if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id);
@@ -165,13 +179,50 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
     }
   };
 
-  /** Jiná stopa znamená jiné mapování pro FFmpeg, takže se převod restartuje na aktuální pozici. */
-  const changeTrack = async (changes: { audio?: number; subtitle?: number | null }) => {
+  /** Jiná stopa nebo kvalita znamená jiné mapování pro FFmpeg, takže se převod restartuje na aktuální pozici. */
+  const changeTrack = async (changes: { audio?: number; subtitle?: number | null; quality?: number | null }) => {
     const id = sessionRef.current; if (!id) return;
+    const at = timeRef.current;
     setBuffering(true); setError(""); detach();
-    try { applySession(await api.setTrack(id, { ...changes, time })); }
+    try {
+      const next = await api.setTrack(id, { ...changes, time: at });
+      applySession(next);
+      // Návrat na originál může skončit přímým přehráváním od nuly; pozici si posuneme sami.
+      if (next.mode === "direct" && at > 0) {
+        const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = at; showTime(at); };
+        if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();
+        else videoRef.current?.addEventListener("loadedmetadata", moveDirect, { once: true });
+      }
+    }
     catch (value) { setError(value instanceof Error ? value.message : String(value)); }
     finally { setBuffering(false); }
+  };
+
+  const changeQuality = (value: number | null) => {
+    stallsRef.current = []; setQualityHint(null);
+    void changeTrack({ quality: value });
+  };
+
+  /** Mikrozadrhnutí do 400 ms hlášku vůbec nerozsvítí; blikala by při každém dorovnání bufferu. */
+  const showBufferSoon = () => {
+    if (bufferTimerRef.current !== undefined) return;
+    bufferTimerRef.current = window.setTimeout(() => { bufferTimerRef.current = undefined; setBuffering(true); }, 400);
+  };
+  const clearBuffering = () => {
+    if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
+    setBuffering(false);
+  };
+
+  /** Opakované zadrhnutí mimo seek je signál slabé linky; nabídneme nižší kvalitu. */
+  const noteStall = () => {
+    showBufferSoon();
+    const video = videoRef.current;
+    if (!video || video.seeking || seekingRef.current || video.currentTime < 1) return;
+    const now = Date.now();
+    stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
+    if (stallsRef.current.length < 3) return;
+    const target = lowerQuality(session?.quality ?? null);
+    if (target !== null) setQualityHint(target);
   };
 
   const chooseSubtitle = async (value: string) => {
@@ -181,6 +232,13 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
   };
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
+
+  /** Přehrávání běží dál; do fronty se přidá tentýž stream, který právě hraje. */
+  const download = async () => {
+    if (downloadState !== "idle") return;
+    setDownloadState("busy");
+    setDownloadState(await onDownload() ? "done" : "idle");
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -214,12 +272,17 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
         onTimeUpdate={(event) => { if (scrub === null && !seekingRef.current) showTime(offsetRef.current + event.currentTarget.currentTime); }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
-        onWaiting={() => setBuffering(true)} onPlaying={() => setBuffering(false)}
+        onWaiting={noteStall} onPlaying={clearBuffering}
         onError={() => setError("Prohlížeč nedokázal přehrát tento stream.")}>
         {addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {buffering && !error && <div className="player-buffer">Načítám…</div>}
       {error && <div className="player-error">{error}</div>}
+      {qualityHint !== null && !error && <div className="player-hint">
+        <span>Přehrávání se zadrhává.</span>
+        <button onClick={() => changeQuality(qualityHint)}>Snížit kvalitu na {qualityHint}p</button>
+        <button className="icon-button" aria-label="Skrýt doporučení" onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+      </div>}
     </div>
     <div className="timeline">
       <span>{fmt(position)}</span>
@@ -235,6 +298,15 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
       <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
       <Volume2 />
       <input aria-label="Hlasitost" className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
+
+      {session && <label className="track-picker" title="Kvalita">
+        <SlidersHorizontal />
+        <select aria-label="Kvalita" value={session.quality ?? "original"}
+          onChange={(event) => changeQuality(event.target.value === "original" ? null : Number(event.target.value))}>
+          <option value="original">Originál</option>
+          {QUALITIES.map((height) => <option key={height} value={height}>{height}p</option>)}
+        </select>
+      </label>}
 
       {(session?.audioTracks.length ?? 0) > 1 && <label className="track-picker" title="Zvuková stopa">
         <AudioLines />
@@ -253,6 +325,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onClo
       </label>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
+      <button disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty">
+        {downloadState === "done" ? <><Check /> Ve frontě</> : <><Download /> {downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</>}
+      </button>
       <button onClick={() => void videoRef.current?.requestFullscreen().catch(() => undefined)}><Maximize /> Celá obrazovka</button>
     </div>
   </div>;

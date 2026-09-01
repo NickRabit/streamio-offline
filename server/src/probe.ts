@@ -41,12 +41,20 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
 
 /** Zjistí skutečné kodeky zdroje. Doplňky posílají nanejvýš nezávazný hint, ffprobe říká pravdu. */
 export async function probe(input: string): Promise<MediaInfo | undefined> {
+  // Výchozí limity čtou ze vzdáleného zdroje jen pár megabajtů a u běžných souborů stačí.
+  // Hluboká sonda (až 100 MB) přijde na řadu, jen když rychlé kolo něco podstatného nenajde.
+  const fast = await inspect(input, [], 20_000);
+  if (fast?.video && fast.duration && fast.audioTracks.length) return fast;
+  const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000);
+  return deep ?? fast;
+}
+
+async function inspect(input: string, limits: string[], timeout: number): Promise<MediaInfo | undefined> {
   try {
     const { stdout } = await run("ffprobe", [
-      "-v", "error", "-print_format", "json",
-      "-analyzeduration", "60M", "-probesize", "100M",
+      "-v", "error", "-print_format", "json", ...limits,
       "-show_format", "-show_streams", input,
-    ], { timeout: 45_000, maxBuffer: 8 * 1024 * 1024 });
+    ], { timeout, maxBuffer: 8 * 1024 * 1024 });
     const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] };
     const streams = data.streams ?? [];
     const video = streams.find((item) => item.codec_type === "video" && !item.disposition?.attached_pic);
