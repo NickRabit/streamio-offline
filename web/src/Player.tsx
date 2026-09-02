@@ -5,7 +5,7 @@ import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; onDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; onDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -51,7 +51,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ open, title, stream, subtitles, subtitleLanguage, onDownload, onClose }: Props) {
+export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, onDownload, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -76,6 +76,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
   const bufferTimerRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
+  const [resumedFrom, setResumedFrom] = useState(0);
+  const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // Soubor z knihovny už na disku je, nabízet jeho stažení nedává smysl.
   const isLocal = Boolean(stream?.url?.startsWith("file://"));
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
@@ -118,7 +120,13 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    api.startPlayback(stream, capabilities()).then((created) => {
+    // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
+    (async () => {
+      const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
+      const from = saved && saved.position > 30 ? saved.position : 0;
+      if (from) setResumedFrom(from);
+      return api.startPlayback(stream, capabilities(), from);
+    })().then((created) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
       // Vestavěné titulky si vybral server; když žádné nesedí, zkusíme preferovaný jazyk z doplňků.
@@ -235,6 +243,22 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
     setAddonSubtitle(value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null);
   };
 
+  // Pozici hlásíme po deseti sekundách a ještě jednou při zavření, ať se nic neztratí.
+  useEffect(() => {
+    if (!open || !progressKey) return;
+    const send = () => {
+      const { position, duration } = reportRef.current;
+      if (!duration || position < 5) return;
+      void api.saveProgress({
+        key: progressKey, position, duration, title,
+        path: stream?.url?.startsWith("file://") ? stream.url.slice(7) : undefined,
+        poster: progressPoster,
+      }).catch(() => undefined);
+    };
+    const timer = setInterval(send, 10_000);
+    return () => { clearInterval(timer); send(); };
+  }, [open, progressKey, title, progressPoster]);
+
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
   /** Přehrávání běží dál; do fronty se přidá tentýž stream, který právě hraje. */
@@ -274,12 +298,17 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, onDow
     <div className="player-host">
       <video ref={videoRef} playsInline
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
-        onTimeUpdate={(event) => { if (scrub === null && !seekingRef.current) showTime(offsetRef.current + event.currentTarget.currentTime); }}
+        onTimeUpdate={(event) => {
+          const absolute = offsetRef.current + event.currentTarget.currentTime;
+          reportRef.current = { position: absolute, duration: duration || probeDurationRef.current };
+          if (scrub === null && !seekingRef.current) showTime(absolute);
+        }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
         onError={() => setError("Prohlížeč nedokázal přehrát tento stream.")}>
         {addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
+      {resumedFrom > 0 && <div className="player-resumed">Navázáno na {fmt(resumedFrom)}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>Přehrát od začátku</button></div>}
       {buffering && !error && <div className="player-buffer">Načítám…</div>}
       {error && <div className="player-error">{error}</div>}
       {qualityHint !== null && !error && <div className="player-hint">

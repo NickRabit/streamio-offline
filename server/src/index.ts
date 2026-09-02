@@ -429,6 +429,54 @@ const withFavorites = <T extends { path: string }>(items: T[]) => {
   return items.map((item) => ({ ...item, favorite: favorites.has(item.path) }));
 };
 
+// Rozkoukané: pozice se hlásí průběžně, dokončené se samy zapomenou.
+const PROGRESS_DONE = 0.94;
+app.get("/api/progress", (_req, res) => {
+  const all = store.progress();
+  const items = Object.entries(all)
+    .map(([key, value]) => ({ key, ...value }))
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, 40);
+  res.json(items);
+});
+app.get("/api/progress/:key", (req, res) => {
+  const found = store.progress()[String(req.params.key)];
+  res.json(found ?? null);
+});
+app.post("/api/progress", asyncRoute(async (req, res) => {
+  // Když je sledování vypnuté, pozice se nikam nezapisuje.
+  if (!store.settings().trackProgress) return res.status(204).end();
+  const key = String(req.body.key ?? "").trim();
+  const position = Number(req.body.position) || 0;
+  const duration = Number(req.body.duration) || 0;
+  if (!key) throw new Error("Chybí klíč titulu.");
+  await store.update((state) => {
+    const all = { ...state.progress };
+    // Skoro dokoukané ani úplný začátek nemá smysl držet.
+    if (duration > 0 && (position / duration > PROGRESS_DONE || position < 30)) delete all[key];
+    else all[key] = {
+      position, duration,
+      title: String(req.body.title ?? all[key]?.title ?? "Video"),
+      path: req.body.path ? String(req.body.path) : all[key]?.path,
+      poster: req.body.poster ? String(req.body.poster) : all[key]?.poster,
+      updatedAt: new Date().toISOString(),
+    };
+    // Seznam nesmí růst donekonečna.
+    const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
+    state.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
+  });
+  res.status(204).end();
+}));
+app.delete("/api/progress", asyncRoute(async (_req, res) => {
+  await store.update((state) => { state.progress = {}; });
+  log("INFO", "Historie sledování smazána");
+  res.status(204).end();
+}));
+app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
+  await store.update((state) => { const all = { ...state.progress }; delete all[String(req.params.key)]; state.progress = all; });
+  res.status(204).end();
+}));
+
 app.post("/api/library/favorite", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
   if (!relative || !resolveInside(DOWNLOAD_DIR, relative)) throw new Error("Neplatná cesta.");
@@ -481,7 +529,12 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     }
     const art = await locateFileArtwork(item.path);
     if (!art) scheduleFileArtwork(item.path);
-    return { ...item, poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined };
+    const watched = store.progress()[`file:${item.path}`];
+    return {
+      ...item,
+      poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined,
+      progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
+    };
   }));
   const onlyFavorites = req.query.favorites === "1";
   const marked = withFavorites(items);
@@ -650,6 +703,8 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
+    if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
+    if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
     if (req.body.artworkLocation !== undefined) {
       state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";
     }
