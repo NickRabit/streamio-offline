@@ -77,6 +77,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [resumedFrom, setResumedFrom] = useState(0);
+  const [subtitleText, setSubtitleText] = useState("");
+  const [nativeSubtitles, setNativeSubtitles] = useState(false);
   // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
   useEffect(() => {
     if (!resumedFrom) return;
@@ -88,44 +90,59 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const isLocal = Boolean(stream?.url?.startsWith("file://"));
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
-  // Nativní WebVTT renderer dává titulky na úplný spodek video elementu. V našem
-  // přehrávači pak splývají s časovou osou pod obrazem, zvlášť na menší obrazovce.
-  // Cue necháváme vykreslovat prohlížeč (zachová formátování i fullscreen), pouze
-  // ho zvedneme o tři textové řádky. Platí to pro titulky z doplňku i HLS stopu.
+  // Některé prohlížeče vykreslí nativní WebVTT titulky v běžném režimu až pod
+  // viditelnou plochou videa. Aktivní cue proto zrcadlíme do vlastní vrstvy.
+  // Ve fullscreenu naopak zůstává nativní renderer, který funguje správně a
+  // dokáže titulky zobrazit i nad systémovými ovladači.
   useEffect(() => {
     if (!open) return;
     const video = videoRef.current;
     if (!video) return;
     const bound = new Map<TextTrack, () => void>();
 
-    const liftActiveCues = (track: TextTrack) => {
-      if (!track.activeCues) return;
-      for (const cue of Array.from(track.activeCues)) {
-        if (!("line" in cue)) continue;
-        const vttCue = cue as VTTCue;
-        vttCue.snapToLines = true;
-        vttCue.line = -3;
-      }
+    const showActiveCues = () => {
+      const lines = Array.from(video.textTracks)
+        .filter((track) => track.mode === "showing" && track.activeCues)
+        .flatMap((track) => Array.from(track.activeCues ?? []))
+        .map((cue) => {
+          const vttCue = cue as VTTCue;
+          return typeof vttCue.getCueAsHTML === "function" ? vttCue.getCueAsHTML().textContent ?? "" : vttCue.text ?? "";
+        })
+        .map((text) => text.trim())
+        .filter(Boolean);
+      setSubtitleText(lines.join("\n"));
     };
     const bindTracks = () => {
       for (const track of Array.from(video.textTracks)) {
         if (bound.has(track)) continue;
-        const onCueChange = () => liftActiveCues(track);
+        const onCueChange = showActiveCues;
         track.addEventListener("cuechange", onCueChange);
         bound.set(track, onCueChange);
-        liftActiveCues(track);
       }
+      showActiveCues();
+    };
+    const updateFullscreenMode = () => {
+      const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
+      setNativeSubtitles(document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen));
     };
 
     bindTracks();
     video.textTracks.addEventListener("addtrack", bindTracks);
     video.textTracks.addEventListener("change", bindTracks);
     video.addEventListener("loadedmetadata", bindTracks);
+    document.addEventListener("fullscreenchange", updateFullscreenMode);
+    video.addEventListener("webkitbeginfullscreen", updateFullscreenMode);
+    video.addEventListener("webkitendfullscreen", updateFullscreenMode);
     return () => {
       video.textTracks.removeEventListener("addtrack", bindTracks);
       video.textTracks.removeEventListener("change", bindTracks);
       video.removeEventListener("loadedmetadata", bindTracks);
+      document.removeEventListener("fullscreenchange", updateFullscreenMode);
+      video.removeEventListener("webkitbeginfullscreen", updateFullscreenMode);
+      video.removeEventListener("webkitendfullscreen", updateFullscreenMode);
       for (const [track, listener] of bound) track.removeEventListener("cuechange", listener);
+      setSubtitleText("");
+      setNativeSubtitles(false);
     };
   }, [open, session?.id, addonSubtitle?.url]);
 
@@ -350,7 +367,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div className="player-overlay" role="dialog" aria-modal="true">
+  return <div className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}`} role="dialog" aria-modal="true">
     <div className="player-head">
       <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
       <button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button>
@@ -368,6 +385,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         onError={() => setError("Prohlížeč nedokázal přehrát tento stream.")}>
         {addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
+      {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
       {resumedFrom > 0 && <div className="player-resumed">Navázáno na {fmt(resumedFrom)}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>Přehrát od začátku</button></div>}
       {buffering && !error && <div className="player-buffer">Načítám…</div>}
       {error && <div className="player-error">{error}</div>}
