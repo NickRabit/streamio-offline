@@ -1,0 +1,26 @@
+#!/bin/sh
+set -e
+
+# Na NASu patří sdílené složky jinému uživateli než uid 1000 z image. Místo přepisování
+# práv celé knihovny se proces spustí přímo pod tím, komu složka patří.
+PUID="${PUID:-1000}"
+PGID="${PGID:-1000}"
+
+if [ "$(id -u)" = "0" ]; then
+  # Stav aplikace je malý, ten přepsat můžeme vždy.
+  chown -R "$PUID:$PGID" /data 2>/dev/null || true
+
+  if [ "${FIX_PERMISSIONS:-0}" = "1" ]; then
+    echo "FIX_PERMISSIONS=1: přepisuji vlastníka /downloads na $PUID:$PGID (u velké knihovny to chvíli trvá)"
+    chown -R "$PUID:$PGID" /downloads 2>/dev/null || true
+  fi
+
+  if ! gosu "$PUID:$PGID" test -w /downloads 2>/dev/null; then
+    echo "VAROVÁNÍ: uživatel $PUID:$PGID nemá právo zápisu do /downloads."
+    echo "          Nastavte PUID a PGID podle vlastníka složky, nebo spusťte s FIX_PERMISSIONS=1."
+  fi
+
+  exec gosu "$PUID:$PGID" "$@"
+fi
+
+exec "$@"
