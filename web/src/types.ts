@@ -25,6 +25,13 @@ export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
+export interface StatsWindow { bytes: number; count: number }
+export interface StatsBucket { key: string; label: string; bytes: number; count: number }
+export interface StatsSummary {
+  day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
+  days: Array<{ date: string; bytes: number; count: number }>;
+  providers: StatsBucket[]; addons: StatsBucket[]; since?: string;
+}
 export interface Settings { concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
 export interface PlaybackSession {

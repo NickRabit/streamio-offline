@@ -64,6 +64,8 @@ export class DownloadQueue {
   async retry(id: string) { const job = this.require(id); if (job.status !== "failed") throw new Error("Opakovat lze pouze chybné stahování."); job.retryCount = 0; if (job.source) { job.source.tried = []; if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; } } return this.resume(id); }
   async remove(id: string) { const index = this.jobs.findIndex((job) => job.id === id); if (index < 0) throw new Error("Položka nebyla nalezena."); const [job] = this.jobs.splice(index, 1); this.active.get(id)?.abort(); if (job.status !== "completed" && job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined); await this.save(); this.pump(); }
   async move(id: string, direction: -1 | 1) { const index = this.jobs.findIndex((job) => job.id === id); if (index < 0) throw new Error("Položka nebyla nalezena."); const next = Math.max(0, Math.min(this.jobs.length - 1, index + direction)); if (next !== index) { const [job] = this.jobs.splice(index, 1); this.jobs.splice(next, 0, job); await this.save(); } this.pump(); }
+  /** Dokončené úlohy pro prvotní naplnění statistik z fronty. */
+  history() { return this.jobs.filter((job) => job.status === "completed").map((job) => ({ at: job.updatedAt, bytes: job.received, url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind })); }
   async clearCompleted() { this.jobs = this.jobs.filter((job) => job.status !== "completed"); await this.save(); }
   changed() { this.pump(); }
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new Error("Položka nebyla nalezena."); return job; }
