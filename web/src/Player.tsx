@@ -88,6 +88,47 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const isLocal = Boolean(stream?.url?.startsWith("file://"));
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
+  // Nativní WebVTT renderer dává titulky na úplný spodek video elementu. V našem
+  // přehrávači pak splývají s časovou osou pod obrazem, zvlášť na menší obrazovce.
+  // Cue necháváme vykreslovat prohlížeč (zachová formátování i fullscreen), pouze
+  // ho zvedneme o tři textové řádky. Platí to pro titulky z doplňku i HLS stopu.
+  useEffect(() => {
+    if (!open) return;
+    const video = videoRef.current;
+    if (!video) return;
+    const bound = new Map<TextTrack, () => void>();
+
+    const liftActiveCues = (track: TextTrack) => {
+      if (!track.activeCues) return;
+      for (const cue of Array.from(track.activeCues)) {
+        if (!("line" in cue)) continue;
+        const vttCue = cue as VTTCue;
+        vttCue.snapToLines = true;
+        vttCue.line = -3;
+      }
+    };
+    const bindTracks = () => {
+      for (const track of Array.from(video.textTracks)) {
+        if (bound.has(track)) continue;
+        const onCueChange = () => liftActiveCues(track);
+        track.addEventListener("cuechange", onCueChange);
+        bound.set(track, onCueChange);
+        liftActiveCues(track);
+      }
+    };
+
+    bindTracks();
+    video.textTracks.addEventListener("addtrack", bindTracks);
+    video.textTracks.addEventListener("change", bindTracks);
+    video.addEventListener("loadedmetadata", bindTracks);
+    return () => {
+      video.textTracks.removeEventListener("addtrack", bindTracks);
+      video.textTracks.removeEventListener("change", bindTracks);
+      video.removeEventListener("loadedmetadata", bindTracks);
+      for (const [track, listener] of bound) track.removeEventListener("cuechange", listener);
+    };
+  }, [open, session?.id, addonSubtitle?.url]);
+
   /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
   const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
 
