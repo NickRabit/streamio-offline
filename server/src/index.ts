@@ -11,7 +11,7 @@ import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
 import { browseDirectory, entryDirectory, pageFiles, resolveInside, scanLibrary, summarize } from "./library.js";
-import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterFromUrl, saveFrame } from "./artwork.js";
+import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes } from "node:crypto";
@@ -313,6 +313,15 @@ async function locateFileArtwork(relative: string) {
   return await fileExists(own) ? own : undefined;
 }
 
+/** Vazba na titul může být u souboru i u některé nadřazené složky. */
+const knownTitle = (relative: string) => {
+  const all = store.libraryMeta();
+  const parts = relative.split(path.sep);
+  let found = all[relative];
+  for (let depth = parts.length - 1; !found && depth > 0; depth -= 1) found = all[parts.slice(0, depth).join(path.sep)];
+  return found;
+};
+
 function scheduleFileArtwork(relative: string) {
   artworkQueue.run(`file:${relative}`, async () => {
     if (await locateFileArtwork(relative)) return;
@@ -322,6 +331,16 @@ function scheduleFileArtwork(relative: string) {
       ? path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)))
       : dataArtworkFile(relative);
     await mkdir(path.dirname(target), { recursive: true });
+
+    // Plakát má přednost před snímkem, ať se náhled obnoví správně i po smazání.
+    const known = knownTitle(relative);
+    if (known) {
+      const meta = await cachedMeta(known.type, known.id);
+      if (meta?.poster && await savePosterAs(target, meta.poster)) {
+        log("INFO", "Plakát doplněn z metadat", { path: relative });
+        return;
+      }
+    }
     const info = await playback.inspect({ url: `file://${relative}` }).catch(() => undefined);
     await saveFrame(source, target, framePosition(info?.duration));
   });
@@ -343,7 +362,11 @@ function scheduleFolderArtwork(relative: string) {
     const target = toMedia ? path.join(DOWNLOAD_DIR, relative, POSTER_OUTPUT) : dataArtworkFile(`dir:${relative}`);
     await mkdir(path.dirname(target), { recursive: true });
 
-    const known = store.libraryMeta()[relative.split(path.sep)[0]];
+    // Vazba může být uložená u přesné složky i u některé nadřazené.
+    const all = store.libraryMeta();
+    const parts = relative.split(path.sep);
+    let known = all[relative];
+    for (let depth = parts.length - 1; !known && depth > 0; depth -= 1) known = all[parts.slice(0, depth).join(path.sep)];
     if (known) {
       const meta = await cachedMeta(known.type, known.id);
       if (meta?.poster && await savePosterFromUrl(path.dirname(target), meta.poster)) {
@@ -352,8 +375,13 @@ function scheduleFolderArtwork(relative: string) {
         return;
       }
     }
-    const inside = await browseDirectory(DOWNLOAD_DIR, relative, "", 0, 1);
-    const first = inside.files[0] ?? (inside.folders[0] ? (await browseDirectory(DOWNLOAD_DIR, inside.folders[0].path, "", 0, 1)).files[0] : undefined);
+    // Snímek bereme z prvního videa uvnitř; když jsou tam jen podsložky, sestoupíme o úroveň.
+    const inside = await browseDirectory(DOWNLOAD_DIR, relative, "", 0, 20);
+    let first = inside.items.find((item) => item.kind === "file");
+    if (!first) {
+      const sub = inside.items.find((item) => item.kind === "folder");
+      if (sub) first = (await browseDirectory(DOWNLOAD_DIR, sub.path, "", 0, 20)).items.find((item) => item.kind === "file");
+    }
     if (!first) return;
     const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
     await saveFrame(path.join(DOWNLOAD_DIR, first.path), target, framePosition(info?.duration));
@@ -367,20 +395,29 @@ async function sweepArtwork() {
   if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
   lastArtworkSweep = Date.now();
   const valid = new Set<string>();
+  const remember = (key: string) => {
+    valid.add(path.basename(dataArtworkFile(key)));
+    const parts = key.split(path.sep);
+    for (let depth = 1; depth < parts.length; depth += 1) {
+      valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join(path.sep)}`)));
+    }
+  };
   for (const entry of await libraryEntries()) {
     valid.add(path.basename(dataArtworkFile(entry.key)));
-    for (const file of entry.files) {
-      valid.add(path.basename(dataArtworkFile(file.path)));
-      const parts = file.path.split(path.sep);
-      for (let depth = 1; depth < parts.length; depth += 1) {
-        valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join(path.sep)}`)));
-      }
-    }
+    for (const file of entry.files) remember(file.path);
   }
+  // Plakát se ukládá už při zařazení do fronty, kdy zdroj ještě neexistuje.
+  // Bez tohohle by ho úklid smazal dřív, než se stahování dokončí.
+  for (const job of queue.list()) remember(job.target);
+
   let removed = 0;
   for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
     if (valid.has(name)) continue;
-    await rm(path.join(ARTWORK_DIR, name), { force: true });
+    const file = path.join(ARTWORK_DIR, name);
+    // Druhá pojistka: co je čerstvé, se nemaže. Zdroj může teprve vznikat.
+    const info = await stat(file).catch(() => undefined);
+    if (info && Date.now() - info.mtimeMs < 60 * 60_000) continue;
+    await rm(file, { force: true });
     removed += 1;
   }
   if (removed) log("INFO", "Osiřelé náhledy smazány", { removed });
@@ -395,53 +432,18 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const result = await browseDirectory(DOWNLOAD_DIR, relative, String(req.query.query ?? ""),
     Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""));
   // Náhledy chybějících souborů se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
-  const files = await Promise.all(result.files.map(async (file) => {
-    const art = await locateFileArtwork(file.path);
-    if (!art) scheduleFileArtwork(file.path);
-    return { ...file, poster: art ? `/api/library/thumb?path=${encodeURIComponent(file.path)}` : undefined };
+  // Náhledy chybějících položek se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
+  const items = await Promise.all(result.items.map(async (item) => {
+    if (item.kind === "folder") {
+      const art = await locateFolderArtwork(item.path);
+      if (!art) scheduleFolderArtwork(item.path);
+      return { ...item, poster: art ? `/api/library/thumb?dir=${encodeURIComponent(item.path)}` : undefined };
+    }
+    const art = await locateFileArtwork(item.path);
+    if (!art) scheduleFileArtwork(item.path);
+    return { ...item, poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined };
   }));
-  const folders = await Promise.all(result.folders.map(async (folder) => {
-    const art = await locateFolderArtwork(folder.path);
-    if (!art) scheduleFolderArtwork(folder.path);
-    return { ...folder, poster: art ? `/api/library/thumb?dir=${encodeURIComponent(folder.path)}` : undefined };
-  }));
-  res.json({ ...result, folders, files, pending: [...folders, ...files].some((item) => !item.poster) });
-}));
-
-// Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
-app.delete("/api/library/item", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "").trim();
-  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
-  const info = await stat(target).catch(() => undefined);
-  if (!info) throw new Error("Soubor nebo složka neexistuje.");
-  await rm(target, { recursive: true, force: true });
-  // Vlastní náhled zmizí s ním; ten vedle videa smazala rekurze složky.
-  await rm(dataArtworkFile(relative), { force: true });
-  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
-  libraryCache = undefined;
-  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory() });
-  res.status(204).end();
-}));
-
-app.post("/api/library/rename", asyncRoute(async (req, res) => {
-  const relative = String(req.body.path ?? "").trim();
-  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
-  const info = await stat(source).catch(() => undefined);
-  if (!info) throw new Error("Soubor nebo složka neexistuje.");
-
-  const extension = info.isDirectory() ? "" : path.extname(relative);
-  const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
-  const nextRelative = path.join(path.dirname(relative), `${wanted}${extension}`);
-  const target = resolveInside(DOWNLOAD_DIR, nextRelative);
-  if (!target) throw new Error("Neplatné jméno.");
-  if (target !== source && await fileExists(target)) throw new Error("Soubor s tímto jménem už existuje.");
-
-  await rename(source, target);
-  libraryCache = undefined;
-  log("INFO", "Přejmenováno v knihovně", { z: relative, na: nextRelative });
-  res.json({ path: nextRelative });
+  res.json({ ...result, items, pending: items.some((item) => !item.poster) });
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {
@@ -460,10 +462,34 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
 }));
 // Ruční přiřazení titulu ke složce, když soubor nepřišel přes frontu.
 /** Sváže složku, do které soubor půjde, s titulem z katalogu. Metadata se pak nemusí hádat. */
-const rememberTitle = async (target: string, media?: MediaInfo) => {
+/** Titul zastupuje jeho složka. U plochého rozvržení žádná není, takže zastupuje sám soubor.
+ *  Předsazená složka z nastavení ukládání titulem není, proto se nedá brát první část cesty. */
+const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) => {
+  if (flat) return target;
+  const directory = path.dirname(target);
+  if (directory === ".") return target;
+  return media?.kind === "episode" && media.season != null ? path.dirname(directory) : directory;
+};
+
+/** Plakát z katalogu se uloží hned při zařazení do fronty, takže je v knihovně dřív než soubor. */
+const saveCatalogPoster = (key: string, url?: string) => {
+  if (!url || !key || key === ".") return;
+  artworkQueue.run(`poster:${key}`, async () => {
+    const asFolder = !path.extname(key);
+    if (asFolder ? await locateFolderArtwork(key) : await locateFileArtwork(key)) return;
+    const toMedia = store.settings().artworkLocation === "media";
+    const target = toMedia
+      ? (asFolder ? path.join(DOWNLOAD_DIR, key, POSTER_OUTPUT) : path.join(DOWNLOAD_DIR, path.dirname(key), episodeArtName(path.basename(key))))
+      : dataArtworkFile(asFolder ? `dir:${key}` : key);
+    await mkdir(path.dirname(target), { recursive: true });
+    if (await savePosterAs(target, url)) log("INFO", "Plakát z katalogu uložen", { key });
+  });
+};
+
+const rememberTitle = async (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (!media?.id) return;
-  const key = target.split("/")[0];
-  if (!key || key === target) return;
+  const key = titleKey(target, media, flat);
+  if (!key || key === ".") return;
   await store.update((state) => {
     state.libraryMeta = { ...state.libraryMeta, [key]: { type: media.metaType ?? (media.kind === "episode" ? "series" : "movie"), id: media.id! } };
   });
@@ -498,7 +524,8 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
   const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
   const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
-  await rememberTitle(job.target, media);
+  await rememberTitle(job.target, media, targetSettings.layout === "flat");
+  saveCatalogPoster(titleKey(job.target, media, targetSettings.layout === "flat"), media?.poster);
   res.status(201).json(job);
 }));
 // Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.

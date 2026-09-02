@@ -93,10 +93,7 @@ export function App() {
     setBrowseBusy(true);
     try {
       const page = await api.browse({ path: target, query: browseQuery, skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current });
-      setBrowse((previous) => skip && previous
-        // Stránkuje se přes složky i soubory dohromady, takže se připojuje obojí.
-        ? { ...page, folders: [...previous.folders, ...page.folders], files: [...previous.files, ...page.files] }
-        : page);
+      setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
     } catch (error) { fail(error); }
     finally { setBrowseBusy(false); }
   };
@@ -111,7 +108,7 @@ export function App() {
   // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
   useEffect(() => {
     if (view !== "library" || !browse) return;
-    const nactenych = browse.folders.length + browse.files.length;
+    const nactenych = browse.items.length;
     if (nactenych >= browse.total) return;
     const onScroll = () => {
       if (browseBusy) return;
@@ -126,7 +123,7 @@ export function App() {
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
     // Obnovujeme jen tolik položek, kolik už je načtených, ať se seznam nesroluje zpátky.
-    const nactenych = browse.folders.length + browse.files.length;
+    const nactenych = browse.items.length;
     const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
     return () => clearTimeout(timer);
   }, [view, browse?.pending, browsePath]);
@@ -297,8 +294,8 @@ export function App() {
     if (!selectedStream) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
     const media = selectedVideo
-      ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name }
-      : { kind: "movie", title: selected?.name };
+      ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
+      : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
     try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); return true; } catch (e) { fail(e); return false; }
   };
 
@@ -419,7 +416,12 @@ export function App() {
           </nav>
           <div className="browse-tools">
             <div className="search-input"><Search/><input value={browseQuery} placeholder="Filtrovat…" onChange={(event) => setBrowseQuery(event.target.value)}/></div>
-            <select aria-label="Řazení" value={browseSort} onChange={(event) => setBrowseSort(event.target.value as LibrarySort)}>
+            <select aria-label="Řazení" value={browseSort} onChange={(event) => {
+              const next = event.target.value as LibrarySort;
+              setBrowseSort(next);
+              // Nejnovější a největší dává smysl mít nahoře, názvy naopak od A.
+              setBrowseDesc(next === "added" || next === "size");
+            }}>
               <option value="name">Podle názvu</option><option value="added">Podle data přidání</option>
               <option value="size">Podle velikosti</option><option value="random">Náhodně</option>
             </select>
@@ -432,34 +434,35 @@ export function App() {
           </div>
         </div>
 
-        {!browse || (!browse.folders.length && !browse.files.length)
+        {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">Načítám…</div>
             : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : "Dokončená stahování se tu objeví sama."}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
-              {browse.folders.map((folder) => <button className="browse-item folder" key={folder.path} onClick={() => { setBrowseQuery(""); setBrowsePath(folder.path); }}>
-                <span className="browse-art">{folder.poster ? <img src={folder.poster} alt=""/> : <FolderOpen/>}<i className="browse-badge">{folder.fileCount}</i></span>
-                <strong>{folder.name}</strong><small>{bytes(folder.size)}</small>
-                <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === folder.path ? null : folder.path); }}><MoreVertical/></span>
-                {menuFor === folder.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                  <button onClick={() => void renameItem(folder.path, folder.name)}><Pencil/> Přejmenovat</button>
-                  <button className="danger" onClick={() => void removeItem(folder.path, folder.name, true)}><Trash2/> Smazat</button>
-                </span>}
-              </button>)}
-              {browse.files.map((file) => <button className="browse-item" key={file.path} onClick={() => playLocal(file.label, file.path)}>
-                <span className="browse-art">{file.poster ? <img src={file.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i></span>
-                <strong>{file.season != null ? `${file.season}×${String(file.episode ?? 0).padStart(2, "0")} ${file.label}` : file.label}</strong>
-                <small>{bytes(file.size)}</small>
-                <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === file.path ? null : file.path); }}><MoreVertical/></span>
-                {menuFor === file.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                  <button onClick={() => void renameItem(file.path, file.label)}><Pencil/> Přejmenovat</button>
-                  <button className="danger" onClick={() => void removeItem(file.path, file.label, false)}><Trash2/> Smazat</button>
-                </span>}
-              </button>)}
+              {browse.items.map((item) => item.kind === "folder"
+                ? <button className="browse-item folder" key={item.path} onClick={() => { setBrowseQuery(""); setBrowsePath(item.path); }}>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i></span>
+                    <strong>{item.name}</strong><small>{bytes(item.size)}</small>
+                    <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
+                    {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> Přejmenovat</button>
+                      <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
+                    </span>}
+                  </button>
+                : <button className="browse-item" key={item.path} onClick={() => playLocal(item.label, item.path)}>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i></span>
+                    <strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
+                    <small>{bytes(item.size)}</small>
+                    <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
+                    {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
+                      <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
+                    </span>}
+                  </button>)}
             </div>
             {browseBusy && <div className="loading">Načítám…</div>}
             {(() => {
-              const nactenych = browse.folders.length + browse.files.length;
+              const nactenych = browse.items.length;
               return !browseBusy && nactenych < browse.total && <div className="load-more">
                 <button onClick={() => void loadBrowse(browsePath, nactenych)}>Načíst další ({browse.total - nactenych})</button>
               </div>;

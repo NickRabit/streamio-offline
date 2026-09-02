@@ -5,6 +5,8 @@ export interface MediaInfo {
   /** IMDb id z katalogu. Díky němu nemusíme metadata hádat z názvu složky. */
   id?: string;
   metaType?: string;
+  /** Plakát z katalogu. Klient ho má po ruce, takže se nemusí dohledávat přes metadata. */
+  poster?: string;
   kind?: "movie" | "episode";
   /** Název filmu, nebo název seriálu u epizody. */
   title?: string;
