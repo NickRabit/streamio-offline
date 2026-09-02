@@ -57,40 +57,63 @@ V seznamu zdrojů se jazyk odhaduje z názvu, který poslal doplněk. U vybrané
 
 ## Nasazení na Synology
 
-1. Zkopírujte repozitář na NAS a vytvořte `.env`:
+Kontejner se umí spustit pod vaším uživatelem, takže není nutné přepisovat práva
+sdílených složek. Postup existuje s SSH i bez něj.
 
-```bash
-cp .env.example .env
-```
+### Bez SSH, přes Container Manager
 
-2. V `.env` nastavte cíl stahování a případně vlastní doplněk v LAN:
+1. Na GitHubu **Code → Download ZIP** z `https://github.com/NickRabit/streamio-offline`.
+2. Ve **File Station** nahrajte ZIP například do `/volume1/docker/` a rozbalte ho
+   (pravým tlačítkem → Extrahovat).
+3. Ve File Station vytvořte v té složce soubor `.env` (Vytvořit → Textový soubor)
+   a vložte do něj:
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
 ALLOW_ADDON_HOSTS=192.168.1.205
+PUID=1000
+PGID=100
 ```
 
-3. Spusťte. S Intel iGPU použijte override pro QuickSync:
+4. V **Container Manageru → Projekt → Vytvořit** vyberte tu složku a jako zdroj
+   `docker-compose.yml` zvolte `compose.yml`. Pro hardwarovou akceleraci přidejte
+   i `compose.synology.yml`.
+5. Po prvním startu otevřete v Container Manageru **Terminál** kontejneru a
+   zjistěte, komu složka patří:
 
 ```bash
+ls -n /downloads
+```
+
+   První dvě čísla jsou uid a gid. Zapište je do `.env` jako `PUID` a `PGID`
+   a projekt restartujte. Terminál Container Manageru je plnohodnotná náhrada
+   SSH pro tenhle účel.
+
+6. Otevřete `http://NAS:8090`, přihlaste se jako `admin` / `admin` a nastavte si
+   vlastní heslo. Aplikace si to vynutí, dokud to neuděláte, nepustí nic jiného.
+
+### S SSH
+
+```bash
+cd /volume1/docker
+git clone https://github.com/NickRabit/streamio-offline.git
+cd streamio-offline
+cp .env.example .env
+# doplnit DOWNLOAD_PATH, ALLOW_ADDON_HOSTS a PUID/PGID podle:
+stat -c '%u %g' /volume1/video/downloads
 docker compose -f compose.yml -f compose.synology.yml up -d --build
 ```
 
-4. Otevřete `http://NAS:8090` a přihlaste se jako `admin` / `admin`. Aplikace si
-   vynutí změnu hesla, dokud ji neprovedete, nepustí nic jiného.
+### Když se nedaří zapisovat
 
-### Práva k adresáři pro stahování
+Server při startu ohlásí, pokud do `/downloads` zapisovat nemůže. Máte tři možnosti,
+seřazené od nejšetrnější:
 
-Kontejner běží pod uživatelem `node`, tedy **uid 1000**. Sdílené složky na DSM
-patří obvykle jinému uživateli, takže první stahování skončí na `EACCES`. Cílovou
-složku proto jednorázově předejte tomuto uid:
-
-```bash
-sudo chown -R 1000:1000 /volume1/video/downloads
-```
-
-Ověřit to jde i bez stahování: pokud se v knihovně nezobrazují náhledy a v logu
-je `Náhled se nepodařilo vyrobit`, jde nejspíš o tohle.
+- **`PUID` a `PGID`** podle skutečného vlastníka složky. Nic se nepřepisuje.
+- **Ve File Station** přidat složce oprávnění pro čtení a zápis a použít je i na
+  podsložky.
+- **`FIX_PERMISSIONS=1`** v `.env`. Při startu jednorázově přepíše vlastníka celé
+  složky se stahováním. U velké knihovny to chvíli trvá, proto to není výchozí.
 
 ### Přístup zvenčí
 

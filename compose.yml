@@ -9,6 +9,10 @@ services:
       - "${STREMIO_OFFLINE_PORT:-8090}:8080"
     environment:
       TZ: "${TZ:-Europe/Prague}"
+      # Pod kým běžet. Na Synology nastavte podle vlastníka složky se stahováním.
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
