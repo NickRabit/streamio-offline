@@ -184,12 +184,16 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   // Jiná adresa znamená načíst manifest znovu. Klíč, pořadí i nastavení ukládání zůstávají,
   // takže po překonfigurování doplňku není nutné ho mazat a přidávat.
   const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
+  // Nastavení ověřujeme ještě před zápisem: mutátor mění stav na místě, takže
+  // výjimka uprostřed něj by v paměti nechala změny, které se nikdy neuloží.
+  // Navíc tím odmítneme nesmyslný požadavek dřív, než kvůli němu sáhneme pro manifest.
+  const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings);
   const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
   await store.update((state) => {
     const addon = state.addons.find((a) => a.key === req.params.key);
     if (!addon) throw new Error("Doplněk nebyl nalezen.");
     if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
-    if (req.body.downloadSettings !== undefined) addon.downloadSettings = normalizeDownloadSettings(req.body.downloadSettings);
+    if (downloadSettings) addon.downloadSettings = downloadSettings;
     addon.role = role;
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
   });

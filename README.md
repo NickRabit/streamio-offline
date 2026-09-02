@@ -36,6 +36,10 @@ Docker image obsahuje FFmpeg a přehrávač volí vždy nejlevnější možnou c
 
 Aktuální režim ukazuje popisek nad obrazem, vedle ovládání jsou vidět skutečné kodeky zdroje.
 
+Volba kvality do téhle úvahy zasahuje: cokoli jiného než **Původní** znamená skutečné překódování, protože zmenšit obraz kopírováním nejde. Na NASu bez QuickSync se proto vyplatí zůstat na původní kvalitě — popisek pak ukazuje `PŘEBALENO` a procesor je prakticky nevytížený.
+
+Když se přehrávání opakovaně zadrhává, přehrávač nabídne snížení kvality: menší datový tok spraví výpadky způsobené sítí. Nabídne ho ale jen tam, kde server má hardwarovou akceleraci — jinak by softwarové překódování slabý procesor zavalilo a zadrhávání by se ještě zhoršilo.
+
 ### Posun po časové ose
 
 Uvnitř už převedeného úseku se skáče okamžitě. Při skoku dál se převod restartuje od nové pozice pomocí `-ss`, což díky HTTP Range nestahuje nic před ní; skok na libovolné místo filmu trvá řádově sekundu. Titulky se o stejnou hodnotu automaticky posunou. V režimu přímého přehrání jde seek nativně přes prohlížeč. Klávesy: mezerník přehrát a pozastavit, šipky ±10 s, `f` celá obrazovka.
@@ -79,10 +83,8 @@ PGID=100
    `docker-compose.yml` zvolte `compose.yml`.
 
    **Container Manager umí jen jeden compose soubor**, takže se v něm override
-   `compose.synology.yml` neuplatní. Chcete-li hardwarovou akceleraci, odkomentujte
-   v `compose.yml` blok `devices` a do `.env` přidejte `VAAPI_DEVICE=/dev/dri/renderD128`.
-   Že se to povedlo, poznáte v logu: místo `VAAPI_DEVICE není dostupné` se objeví
-   `VAAPI je k dispozici`.
+   `compose.synology.yml` neuplatní. Hardwarová akcelerace se tam zapíná ručně,
+   viz [Hardwarová akcelerace](#hardwarová-akcelerace).
 5. Po prvním startu otevřete v Container Manageru **Terminál** kontejneru a
    zjistěte, komu složka patří:
 
@@ -130,13 +132,32 @@ označovat jako `Secure` sám.
 
 ### Hardwarová akcelerace
 
-Na Synology s Intel iGPU (Celeron s QuickSync, např. DS220+/DS920+) stačí spustit aplikaci s připraveným override souborem:
+Na Synology s Intel iGPU (Celeron s QuickSync, např. DS220+/DS920+) potřebuje kontejner dvě věci: přístup k zařízení `/dev/dri` a členství ve skupině, která render node vlastní. Bez té skupiny proces po přepnutí na `PUID`/`PGID` zařízení neotevře a server se tiše vrátí k softwarovému převodu.
+
+**V Container Manageru** (bez SSH) odkomentujte v `compose.yml` blok
+
+```yaml
+    devices:
+      - /dev/dri:/dev/dri
+```
+
+a do `.env` doplňte `VAAPI_DEVICE=/dev/dri/renderD128` a `RENDER_GID`. Správný GID zjistíte v **Terminálu** kontejneru:
+
+```bash
+ls -n /dev/dri
+```
+
+Druhé číslo u `renderD128` je hledaná skupina; na DSM 7 to bývá 937 (`videodriver`). Pak projekt zastavte a znovu sestavte.
+
+**Přes SSH** je jednodušší override, který obojí nastaví sám:
 
 ```bash
 docker compose -f compose.yml -f compose.synology.yml up -d --build
 ```
 
-Override předá kontejneru `/dev/dri`, nastaví `VAAPI_DEVICE` a přidá procesu skupinu render nodu. Výchozí GID 937 odpovídá skupině `videodriver` na DSM 7; pokud se liší, zjistěte ho na NASu příkazem `stat -c "%g" /dev/dri/renderD128` a nastavte v `.env` jako `RENDER_GID`. Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici` a v přehrávači podle štítku `VAAPI`. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image. Bez akcelerace jede přímé přehrávání i remux naplno, softwarové překódování 1080p ale Celeron nemusí stíhat v reálném čase.
+GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`.
+
+Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici` a v přehrávači podle štítku `VAAPI`. Dokud tam svítí `VAAPI_DEVICE není dostupné`, akcelerace vypnutá je. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image. Bez akcelerace jede přímé přehrávání i přebalení naplno, softwarové překódování 1080p ale Celeron v reálném čase nestíhá.
 
 ## Fronta stahování
 

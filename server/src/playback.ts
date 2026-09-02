@@ -29,6 +29,8 @@ export interface PlaybackOptions {
 export interface PlaybackDescriptor {
   id: string; mode: PlaybackMode; url: string; offset: number;
   duration?: number; video?: string; audio?: string; hardware: boolean;
+  /** Zda server umí překódovat s hardwarovou akcelerací; v režimu remux se nepoužívá. */
+  acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
   quality: number | null;
@@ -243,7 +245,7 @@ export class PlaybackManager {
     return {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
-      hardware: session.hardware,
+      hardware: session.hardware, acceleration: Boolean(this.vaapiDevice),
       audioTracks: session.info?.audioTracks ?? [], subtitleTracks: session.info?.subtitleTracks ?? [],
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
     };

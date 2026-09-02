@@ -22,15 +22,18 @@ services:
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
       FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-8}"
       VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
-      # Skupina vlastnící render node; zjistíte v terminálu kontejneru: ls -n /dev/dri
+      # Skupina vlastnící render node. Bez ní by proces po přepnutí na PUID/PGID
+      # na /dev/dri nedosáhl; zjistíte ji v terminálu kontejneru: ls -n /dev/dri
+      RENDER_GID: "${RENDER_GID:-}"
     # Hardwarový převod na Synology s Intel iGPU (QuickSync).
     #
     # Z příkazové řádky stačí přidat override:
     #   docker compose -f compose.yml -f compose.synology.yml up -d --build
     #
     # Container Manager v DSM ale umí jen JEDEN compose soubor, takže tam místo
-    # override odkomentujte tyhle tři řádky a v .env nastavte
-    # VAAPI_DEVICE=/dev/dri/renderD128
+    # override odkomentujte tyhle dva řádky a v .env nastavte obojí:
+    #   VAAPI_DEVICE=/dev/dri/renderD128
+    #   RENDER_GID=937          (podle ls -n /dev/dri, viz výše)
     #
     # devices:
     #   - /dev/dri:/dev/dri
