@@ -6,7 +6,7 @@ import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BrowseResult, LibrarySort, ProgressEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "library" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -36,6 +36,8 @@ export function App() {
   // Odkud se do složky přišlo, aby drobečky nezahodily krok přes Oblíbené.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
+  const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
+  const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
@@ -47,6 +49,36 @@ export function App() {
     setMenuFor(null);
     try { await api.setFavorite(itemPath, favorite); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
+  const inWatchlist = (type?: string, id?: string) => Boolean(id && watchlist.some((item) => item.key === `${type ?? "movie"}:${id}`));
+  const toggleWatchlist = async (item: Meta) => {
+    const favorite = !inWatchlist(item.type, item.id);
+    try {
+      await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, favorite });
+      setWatchlist(await api.watchlist());
+      notify(favorite ? "Přidáno do seznamu." : "Odebráno ze seznamu.");
+    } catch (error) { fail(error); }
+  };
+  /** Hvězdička v přehrávači míří tam, kam patří: soubor do knihovny, titul do seznamu. */
+  const togglePlayerFavorite = async () => {
+    const path = localStream?.url?.slice(7);
+    if (path) {
+      const wanted = !libraryFavorites.includes(path);
+      try {
+        await api.setFavorite(path, wanted);
+        setLibraryFavorites((current) => wanted ? [...current, path] : current.filter((item) => item !== path));
+        notify(wanted ? "Přidáno do oblíbených." : "Odebráno z oblíbených.");
+      } catch (error) { fail(error); }
+      return;
+    }
+    if (selected) await toggleWatchlist(selected);
+  };
+
+  /** Otevře titul z katalogu; rozkoukaná pozice se pak navazuje sama podle klíče. */
+  const openFromCatalog = async (entry: { type: string; id: string; name: string; poster?: string }) => {
+    setView("catalog");
+    await openMeta({ id: entry.id, type: entry.type, name: entry.name, poster: entry.poster } as Meta);
+  };
+
   const forgetWatched = async (itemPath: string) => {
     setMenuFor(null);
     try { await api.forgetProgress(`file:${itemPath}`); await loadBrowse(browsePath); setResume(await api.progressList()); }
@@ -66,7 +98,11 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null);
-  const currentCatalog = catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
+  // Vlastní seznamy se tváří jako katalog, jen nepocházejí od doplňku.
+  const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
+  const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
+  const currentCatalog = virtualCatalog ? undefined
+    : catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
   // Dlouhé seriály mají stovky dílů; seznam se proto větví po sériích. Speciály (season 0) patří na konec.
@@ -121,13 +157,23 @@ export function App() {
       setBrowse(page);
     } catch { /* obnovení náhledů není kritické */ }
   };
+  useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); }, [ready, view]);
   useEffect(() => {
-    if (!ready || view !== "library") return;
+    if (!browse) return;
+    // Příznak oblíbenosti nese každá položka výpisu, stačí ho posbírat.
+    setLibraryFavorites((current) => {
+      const next = new Set(current);
+      for (const item of browse.items) { if (item.favorite) next.add(item.path); else next.delete(item.path); }
+      return [...next];
+    });
+  }, [browse]);
+  useEffect(() => {
+    if (!ready) return;
     // Po zavření přehrávače se poslední pozice teprve odesílá, takže si chvíli počkáme.
-    // Obnovit je potřeba i výpis složky, protože proužek postupu nese každá dlaždice.
+    // Seznam potřebuje katalog i knihovna, výpis složky jen knihovna.
     const timer = setTimeout(() => {
       api.progressList().then(setResume).catch(() => undefined);
-      if (!playerOpen) void refreshBrowse(browse?.items.length ?? 60);
+      if (!playerOpen && view === "library") void refreshBrowse(browse?.items.length ?? 60);
     }, playerOpen ? 0 : 900);
     return () => clearTimeout(timer);
   }, [ready, view, playerOpen]);
@@ -177,7 +223,7 @@ export function App() {
   };
 
   const loadPage = async (reset: boolean) => {
-    if (!submittedQuery && !currentCatalog) return;
+    if (!submittedQuery && !virtualCatalog && !currentCatalog) return;
     // Donačítání se smí zahodit, ale nové zadání ne — to musí předchozí běh přebít.
     if (!reset && loadingRef.current) return;
     const request = reset ? ++requestRef.current : requestRef.current;
@@ -194,6 +240,9 @@ export function App() {
         const gainedNothing = !reset && next.length === itemsRef.current.length;
         itemsRef.current = next; setItems(next);
         setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
+      } else if (virtualCatalog) {
+        // Obsah se plní odvozeně, tady není co načítat.
+        setHasMore(false);
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
         if (stale()) return;
@@ -209,7 +258,7 @@ export function App() {
   const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
   // Změna katalogu, dotazu nebo filtru začíná od první stránky.
   useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
-    [submittedQuery, searchAddon, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
+    [submittedQuery, searchAddon, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
   // Mřížka je vlastní posuvník. Obyčejný posluchač scrollu funguje i tam,
   // kde IntersectionObserver mlčí (skrytý dokument, úsporné režimy).
@@ -279,13 +328,41 @@ export function App() {
     if (!pickedRef.current && pendingSources > 0 && selectedStream !== visibleStreams[0]) setSelectedStream(visibleStreams[0]);
   }, [visibleStreams, pendingSources]);
 
+  /** Obsah vlastních seznamů se počítá z paměti; nesmí procházet plným načtením,
+   *  které by shodilo vybraný titul. */
+  const virtualItems = useMemo<Meta[]>(() => {
+    if (virtualCatalog === VIRTUAL.watchlist) return watchlist.map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster }));
+    if (virtualCatalog === VIRTUAL.resume) return resume.filter((item) => !item.key.startsWith("file:")).map((item) => {
+      const [type, ...rest] = item.key.split(":");
+      return { id: rest.join(":"), type, name: item.title, poster: item.poster };
+    });
+    return [];
+  }, [virtualCatalog, watchlist, resume]);
+  useEffect(() => {
+    if (!virtualCatalog) return;
+    itemsRef.current = virtualItems; setItems(virtualItems); setHasMore(false);
+  }, [virtualCatalog, virtualItems]);
+
+  /** Pozice a hvězdička pro titul z katalogu; obojí se klíčuje stejně. */
+  // Knihovna ukazuje jen to, co na disku opravdu leží; tituly z katalogu patří do katalogu.
+  const localResume = useMemo(() => resume.filter((item) => item.key.startsWith("file:") && item.path), [resume]);
+  const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
+  const forgetCatalogWatched = async (item: Meta) => {
+    setMenuFor(null);
+    try { await api.forgetProgress(`${item.type || "movie"}:${item.id}`); setResume(await api.progressList()); }
+    catch (error) { fail(error); }
+  };
+
   const visibleItems = useMemo(() => {
     const year = (item: Meta) => Number(String(item.releaseInfo ?? item.year ?? "").slice(0, 4)) || 0;
+    // Vlastní seznamy nesou vlastní smysluplné pořadí: naposledy sledované napřed
+    // a naposledy přidané do seznamu. Obecné řazení by ho jen rozbilo.
+    if (virtualCatalog) return items;
     const list = settings.mergeByName ? groupByName(items) : [...items];
     if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, "cs"));
     else if (sort === "year") list.sort((a, b) => year(b) - year(a));
     return list;
-  }, [items, sort, settings.mergeByName]);
+  }, [items, sort, settings.mergeByName, virtualCatalog]);
   /** Každý doplněk se ptá zvlášť, aby se výsledky ukazovaly průběžně a nečekalo se na nejpomalejší. */
   const fetchSources = async (type: string, id: string, video?: Video) => {
     const request = ++sourcesRequestRef.current;
@@ -386,6 +463,8 @@ export function App() {
                 </>
               : <>
                   <label><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
+                    <option value={VIRTUAL.watchlist}>★ Můj seznam ({watchlist.length})</option>
+                    <option value={VIRTUAL.resume}>▸ Pokračovat ve sledování ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
                   </select></label>
                   {genreOptions.length > 0 && <label><span>Žánr</span><select value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">Všechny</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
@@ -395,7 +474,25 @@ export function App() {
           </div>
           <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? `Hledání: ${submittedQuery}` : "Výsledky"}</h3><span>{visibleItems.length} položek{hasMore ? "+" : ""}</span></div>
             <div className="poster-grid" ref={gridRef}>
-              {visibleItems.map((item) => <button key={`${item.type}:${item.id}`} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <div className="poster-fallback"><Film/></div>}<strong>{item.name}</strong><small>{[item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type}</small></button>)}
+              {visibleItems.map((item) => {
+                const klic = `${item.type || "movie"}:${item.id}`;
+                const postup = catalogProgress(item);
+                const vSeznamu = inWatchlist(item.type, item.id);
+                return <button key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>
+                  <span className="poster-wrap">
+                    {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <div className="poster-fallback"><Film/></div>}
+                    {vSeznamu && <i className="fav-mark"><Star/></i>}
+                    {postup && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(postup.position / (postup.duration || 1) * 100))}%` }}/></i>}
+                    <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === klic ? null : klic); }}><MoreVertical/></span>
+                  </span>
+                  <strong>{item.name}</strong>
+                  <small>{[item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type}</small>
+                  {menuFor === klic && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                    <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {vSeznamu ? "Odebrat ze seznamu" : "Přidat do seznamu"}</button>
+                    {postup && <button onClick={() => void forgetCatalogWatched(item)}><RotateCcw/> Označit jako neshlédnuté</button>}
+                  </span>}
+                </button>;
+              })}
               {hasMore && <div className="load-more">{loadingMore ? <span>Načítám další…</span> : <button onClick={() => void loadPage(false)}>Načíst další</button>}</div>}
             </div>
             {!items.length && !busy && <Empty icon={<Search/>}
@@ -403,7 +500,9 @@ export function App() {
               text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
             {busy && <div className="loading">Načítám…</div>}
           </section><section className={`panel detail-panel ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
-            <div className={`hero ${selected.videos?.length ? "series-hero" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div></div>
+            <div className={`hero ${selected.videos?.length ? "series-hero" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
+              <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div></div>
             {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list">{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
             {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{visibleStreams.length === streams.length ? streams.length : `${visibleStreams.length} z ${streams.length}`}{pendingSources > 0 ? ` · načítám z ${pendingSources} ${pendingSources === 1 ? "doplňku" : "doplňků"}…` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
@@ -435,12 +534,11 @@ export function App() {
         </>}
       </section>}
       {view === "library" && <section onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
-        {settings.showResumeRow && !browsePath && !onlyFavorites && resume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>Pokračovat ve sledování</h3><span>{resume.length}</span></div>
-          <div className="resume-grid">
-            {resume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
+        {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
+          <div className="subhead"><h3>Pokračovat ve sledování</h3><span>{localResume.length}</span></div>
+          <div className="resume-strip">
+            {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
               if (item.path) playLocal(item.title, item.path, item.poster);
-              else notify("Tenhle titul jde obnovit z katalogu, kde si vyberete zdroj.");
             }}>
               <span className="browse-art">
                 {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
@@ -452,6 +550,7 @@ export function App() {
             </button>)}
           </div>
         </div>}
+        <div className="panel browse-panel">
         <div className="browse-bar">
           <nav className="crumbs">
             <button onClick={() => { setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
@@ -527,6 +626,7 @@ export function App() {
               </div>;
             })()}
           </>}
+        </div>
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
@@ -535,6 +635,8 @@ export function App() {
     <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
       progressKey={localStream?.url ? `file:${localStream.url.slice(7)}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
+      favorite={localStream?.url ? libraryFavorites.includes(localStream.url.slice(7)) : inWatchlist(selected?.type, selected?.id)}
+      onToggleFavorite={localStream?.url || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
