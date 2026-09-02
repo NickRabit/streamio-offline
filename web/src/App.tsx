@@ -1,12 +1,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, Pencil, Star, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BrowseResult, LibrarySort, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BrowseResult, LibrarySort, ProgressEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "library" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -21,7 +21,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data" });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -33,6 +33,10 @@ export function App() {
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [onlyFavorites, setOnlyFavorites] = useState(false);
+  // Odkud se do složky přišlo, aby drobečky nezahodily krok přes Oblíbené.
+  const [fromFavorites, setFromFavorites] = useState(false);
+  const [resume, setResume] = useState<ProgressEntry[]>([]);
+  const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
@@ -42,6 +46,11 @@ export function App() {
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);
     try { await api.setFavorite(itemPath, favorite); await loadBrowse(browsePath); } catch (error) { fail(error); }
+  };
+  const forgetWatched = async (itemPath: string) => {
+    setMenuFor(null);
+    try { await api.forgetProgress(`file:${itemPath}`); await loadBrowse(browsePath); setResume(await api.progressList()); }
+    catch (error) { fail(error); }
   };
   const renameItem = async (itemPath: string, label: string) => {
     setMenuFor(null);
@@ -112,6 +121,16 @@ export function App() {
       setBrowse(page);
     } catch { /* obnovení náhledů není kritické */ }
   };
+  useEffect(() => {
+    if (!ready || view !== "library") return;
+    // Po zavření přehrávače se poslední pozice teprve odesílá, takže si chvíli počkáme.
+    // Obnovit je potřeba i výpis složky, protože proužek postupu nese každá dlaždice.
+    const timer = setTimeout(() => {
+      api.progressList().then(setResume).catch(() => undefined);
+      if (!playerOpen) void refreshBrowse(browse?.items.length ?? 60);
+    }, playerOpen ? 0 : 900);
+    return () => clearTimeout(timer);
+  }, [ready, view, playerOpen]);
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
     [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
   // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
@@ -138,7 +157,8 @@ export function App() {
   }, [view, browse?.pending, browsePath]);
 
   /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
-  const playLocal = (title: string, path: string) => {
+  const playLocal = (title: string, path: string, poster?: string) => {
+    setLocalPoster(poster);
     setLocalTitle(title);
     setLocalStream({ url: `file://${path}`, behaviorHints: { filename: path.split("/").pop() } });
     setPlayerOpen(true);
@@ -415,12 +435,33 @@ export function App() {
         </>}
       </section>}
       {view === "library" && <section onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
+        {settings.showResumeRow && !browsePath && !onlyFavorites && resume.length > 0 && <div className="resume-row">
+          <div className="subhead"><h3>Pokračovat ve sledování</h3><span>{resume.length}</span></div>
+          <div className="resume-grid">
+            {resume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
+              if (item.path) playLocal(item.title, item.path, item.poster);
+              else notify("Tenhle titul jde obnovit z katalogu, kde si vyberete zdroj.");
+            }}>
+              <span className="browse-art">
+                {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}
+                <i className="browse-play"><CirclePlay/></i>
+                <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
+              </span>
+              <strong>{item.title}</strong>
+              <small>zbývá {fmtEta(Math.max(0, item.duration - item.position))}</small>
+            </button>)}
+          </div>
+        </div>}
         <div className="browse-bar">
           <nav className="crumbs">
-            <button onClick={() => setBrowsePath("")} disabled={!browsePath}><HardDrive/> Knihovna</button>
-            {(browsePath === ":favorites" ? ["Oblíbené"] : browsePath.split("/").filter(Boolean)).map((part, index, all) => <span key={part + index}>
+            <button onClick={() => { setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
+            {(fromFavorites || browsePath === ":favorites") && <span>
               <ChevronRight/>
-              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(browsePath === ":favorites" ? "" : all.slice(0, index + 1).join("/"))}>{part}</button>
+              <button disabled={browsePath === ":favorites"} onClick={() => setBrowsePath(":favorites")}>Oblíbené</button>
+            </span>}
+            {browsePath !== ":favorites" && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
+              <ChevronRight/>
+              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(all.slice(0, index + 1).join("/"))}>{part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
@@ -450,11 +491,11 @@ export function App() {
             : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : "Dokončená stahování se tu objeví sama."}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
-              {!browsePath && !onlyFavorites && <button className="browse-item folder favorites-tile" onClick={() => setBrowsePath(":favorites")}>
+              {!browsePath && !onlyFavorites && <button className="browse-item folder favorites-tile" onClick={() => { setFromFavorites(false); setBrowsePath(":favorites"); }}>
                 <span className="browse-art"><Star/></span><strong>Oblíbené</strong><small>napříč knihovnou</small>
               </button>}
               {browse.items.map((item) => item.kind === "folder"
-                ? <button className="browse-item folder" key={item.path} onClick={() => { setBrowseQuery(""); setBrowsePath(item.path); }}>
+                ? <button className="browse-item folder" key={item.path} onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <strong>{item.name}</strong><small>{bytes(item.size)}</small>
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
@@ -464,13 +505,15 @@ export function App() {
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
                     </span>}
                   </button>
-                : <button className="browse-item" key={item.path} onClick={() => playLocal(item.label, item.path)}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
+                : <button className="browse-item" key={item.path} onClick={() => playLocal(item.label, item.path, item.poster)}>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i>{item.favorite && <i className="fav-mark"><Star/></i>}
+                    {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
                     <small>{bytes(item.size)}</small>
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
+                      {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> Označit jako neshlédnuté</button>}
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
                     </span>}
@@ -489,7 +532,10 @@ export function App() {
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
       {view === "settings" && <SettingsPage settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
     </main>
-    <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage} onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+    <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
+      progressKey={localStream?.url ? `file:${localStream.url.slice(7)}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
+      progressPoster={localStream ? localPoster : selected?.poster}
+      onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
 }
@@ -507,7 +553,20 @@ function SettingsPage({ settings, languages, session, onSession, onSave, onNotif
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Na slabším NAS doporučujeme 1–2 soubory současně."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Kam ukládat náhledy" text="Vedle videa je převezme i Jellyfin nebo Emby, ale zapisujeme tím do vašich složek. Cizí obrázek nikdy nepřepisujeme.">
+      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Sledovat, kde jste skončil" text="Ukládá pozici přehrávání, aby šlo navázat. Vypnutím se nic nového nezaznamená.">
+          <select aria-label="Sledovat pozici" value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
+            <option value="1">Ukládat</option><option value="0">Neukládat</option>
+          </select></SettingControl>
+        <SettingControl title="Řádek Pokračovat ve sledování" text="Zobrazí rozkoukané tituly nahoře v knihovně.">
+          <select aria-label="Řádek rozkoukaných" value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
+            <option value="1">Zobrazovat</option><option value="0">Skrýt</option>
+          </select></SettingControl>
+        <SettingControl title="Historie sledování" text="Smaže všechny uložené pozice. Soubory zůstanou.">
+          <button className="danger" onClick={async () => {
+            if (!confirm("Opravdu smazat celou historii sledování?")) return;
+            try { await api.clearProgress(); onNotify("Historie smazána."); } catch (error) { onError(error); }
+          }}><Trash2/> Smazat historii</button></SettingControl>
+        <SettingControl title="Kam ukládat náhledy" text="Vedle videa je převezme i Jellyfin nebo Emby, ale zapisujeme tím do vašich složek. Cizí obrázek nikdy nepřepisujeme.">
         <select aria-label="Kam ukládat náhledy" value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>
           <option value="data">Do dat aplikace</option><option value="media">Vedle videa</option>
         </select></SettingControl><SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>

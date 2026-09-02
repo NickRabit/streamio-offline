@@ -4,11 +4,13 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 
-interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media" }
+interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean }
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState; libraryMeta?: Record<string, { type: string; id: string }>;
   /** Cesty označené jako oblíbené. Nic se nepřesouvá, je to jen příznak. */
-  favorites?: string[] }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data" }, defaultsInstalled: false };
+  favorites?: string[];
+  /** Rozkoukané: klíč titulu na pozici v sekundách. */
+  progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true }, defaultsInstalled: false };
 
 export class Store {
   private state: State = structuredClone(initialState);
@@ -29,6 +31,7 @@ export class Store {
   auth() { return this.state.auth; }
   libraryMeta() { return this.state.libraryMeta ?? {}; }
   favorites() { return this.state.favorites ?? []; }
+  progress() { return this.state.progress ?? {}; }
   private chain: Promise<void> = Promise.resolve();
   /** Zápisy jdou za sebou, jinak si dvě souběžná uložení přeberou stejný .tmp soubor. */
   async update(mutator: (state: State) => void) {

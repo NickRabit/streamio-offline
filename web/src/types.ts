@@ -24,7 +24,7 @@ export interface Download { id: string; title: string; status: "queued" | "downl
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
-export interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media" }
+export interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
 export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean;
@@ -42,9 +42,10 @@ export interface LibrarySummary {
 }
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string }
-export interface BrowseFile extends LibraryFile { poster?: string }
+export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number } }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile);
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
+export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }

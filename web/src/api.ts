@@ -1,4 +1,4 @@
-import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -50,6 +50,12 @@ export const api = {
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
+  progressList: () => request<ProgressEntry[]>("/api/progress"),
+  progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
+  saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string }) =>
+    request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),
+  clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
+  forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
   favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
