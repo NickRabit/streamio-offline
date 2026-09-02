@@ -50,11 +50,15 @@ export const api = {
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
-  browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
+  setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
+  favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
+    request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
+  browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean }) =>
     request<BrowseResult>(`/api/library/browse?${q({
       path: options.path || undefined, query: options.query || undefined,
       skip: options.skip || undefined, limit: options.limit ?? 60,
       sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined,
+      favorites: options.favorites ? 1 : undefined,
     })}`),
   libraryEntry: (key: string, query = "", skip = 0, limit = 100) =>
     request<LibraryPage>(`/api/library/entry?${q({ key, query: query || undefined, skip: skip || undefined, limit })}`),

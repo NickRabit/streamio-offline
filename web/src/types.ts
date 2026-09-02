@@ -44,7 +44,7 @@ export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; tota
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string }
 export interface BrowseFile extends LibraryFile { poster?: string }
 export type BrowseItem =
-  | ({ kind: "folder" } & BrowseFolder)
-  | ({ kind: "file" } & BrowseFile);
+  | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
+  | ({ kind: "file"; favorite?: boolean } & BrowseFile);
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
