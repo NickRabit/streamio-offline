@@ -1,4 +1,4 @@
-import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, LibraryEntry, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -47,7 +47,17 @@ export const api = {
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
-  library: () => request<LibraryEntry[]>("/api/library"),
+  library: () => request<LibrarySummary[]>("/api/library"),
+  deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
+  renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
+  browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
+    request<BrowseResult>(`/api/library/browse?${q({
+      path: options.path || undefined, query: options.query || undefined,
+      skip: options.skip || undefined, limit: options.limit ?? 60,
+      sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined,
+    })}`),
+  libraryEntry: (key: string, query = "", skip = 0, limit = 100) =>
+    request<LibraryPage>(`/api/library/entry?${q({ key, query: query || undefined, skip: skip || undefined, limit })}`),
   me: () => request<Session>("/api/auth/me"),
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
