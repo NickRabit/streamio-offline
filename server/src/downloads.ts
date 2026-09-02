@@ -29,6 +29,11 @@ export class DownloadQueue {
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
     if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
+    // Bez téhle kontroly vznikne z dvojkliku na Stáhnout tentýž film dvakrát,
+    // protože uniqueTarget té druhé úloze ochotně přidělí jméno s "(2)".
+    const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
+    if (duplicate && duplicate.status !== "completed") throw new Error("Tenhle zdroj už ve frontě je.");
+    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new Error("Tenhle zdroj už je stažený v knihovně.");
     const hinted = stream.behaviorHints?.filename;
     const extension = path.extname(hinted ?? new URL(stream.url).pathname) || ".mp4";
     const { directory, base } = targetPath(media, title, extension, targetSettings);
