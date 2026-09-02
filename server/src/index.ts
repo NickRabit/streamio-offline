@@ -429,6 +429,28 @@ const withFavorites = <T extends { path: string }>(items: T[]) => {
   return items.map((item) => ({ ...item, favorite: favorites.has(item.path) }));
 };
 
+// Oblíbené tituly z katalogu. Klíč je typ a id, protože soubor k nim existovat nemusí.
+app.get("/api/watchlist", (_req, res) => {
+  const all = store.watchlist();
+  res.json(Object.entries(all)
+    .map(([key, value]) => ({ key, ...value }))
+    .sort((a, b) => b.addedAt.localeCompare(a.addedAt)));
+});
+app.post("/api/watchlist", asyncRoute(async (req, res) => {
+  const type = String(req.body.type ?? "movie");
+  const id = String(req.body.id ?? "").trim();
+  if (!id) throw new Error("Chybí id titulu.");
+  const key = `${type}:${id}`;
+  const wanted = Boolean(req.body.favorite);
+  await store.update((state) => {
+    const all = { ...state.watchlist };
+    if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: req.body.poster ? String(req.body.poster) : undefined, addedAt: new Date().toISOString() };
+    else delete all[key];
+    state.watchlist = all;
+  });
+  res.json({ key, favorite: wanted });
+}));
+
 // Rozkoukané: pozice se hlásí průběžně, dokončené se samy zapomenou.
 const PROGRESS_DONE = 0.94;
 app.get("/api/progress", (_req, res) => {

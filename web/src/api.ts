@@ -1,4 +1,4 @@
-import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -50,6 +50,9 @@ export const api = {
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
+  watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
+  setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>
+    request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   progressList: () => request<ProgressEntry[]>("/api/progress"),
   progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
   saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string }) =>

@@ -1,11 +1,11 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Check, Download, Gauge, Maximize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
+import { AudioLines, Check, Download, Star, Gauge, Maximize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; onDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -51,7 +51,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, onDownload, onClose }: Props) {
+export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onClose }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -77,6 +77,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
   const [resumedFrom, setResumedFrom] = useState(0);
+  // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
+  useEffect(() => {
+    if (!resumedFrom) return;
+    const timer = setTimeout(() => setResumedFrom(0), 5000);
+    return () => clearTimeout(timer);
+  }, [resumedFrom]);
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // Soubor z knihovny už na disku je, nabízet jeho stažení nedává smysl.
   const isLocal = Boolean(stream?.url?.startsWith("file://"));
@@ -358,6 +364,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       </label>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
+      {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"} onClick={onToggleFavorite}>
+        <Star/> {favorite ? "V oblíbených" : "Oblíbené"}
+      </button>}
       {!isLocal && <button disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty">
         {downloadState === "done" ? <><Check /> Ve frontě</> : <><Download /> {downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</>}
       </button>}

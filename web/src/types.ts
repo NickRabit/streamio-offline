@@ -49,3 +49,4 @@ export type BrowseItem =
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }
+export interface WatchlistEntry { key: string; type: string; id: string; name: string; poster?: string; addedAt: string }
