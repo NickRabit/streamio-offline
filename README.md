@@ -55,6 +55,51 @@ V **Nastavení** se volí preferovaný jazyk zvuku a titulků, ve výchozím sta
 
 V seznamu zdrojů se jazyk odhaduje z názvu, který poslal doplněk. U vybraného zdroje se navíc zobrazí skutečné jazyky zjištěné rozborem souboru.
 
+## Nasazení na Synology
+
+1. Zkopírujte repozitář na NAS a vytvořte `.env`:
+
+```bash
+cp .env.example .env
+```
+
+2. V `.env` nastavte cíl stahování a případně vlastní doplněk v LAN:
+
+```dotenv
+DOWNLOAD_PATH=/volume1/video/downloads
+ALLOW_ADDON_HOSTS=192.168.1.205
+```
+
+3. Spusťte. S Intel iGPU použijte override pro QuickSync:
+
+```bash
+docker compose -f compose.yml -f compose.synology.yml up -d --build
+```
+
+4. Otevřete `http://NAS:8090` a přihlaste se jako `admin` / `admin`. Aplikace si
+   vynutí změnu hesla, dokud ji neprovedete, nepustí nic jiného.
+
+### Práva k adresáři pro stahování
+
+Kontejner běží pod uživatelem `node`, tedy **uid 1000**. Sdílené složky na DSM
+patří obvykle jinému uživateli, takže první stahování skončí na `EACCES`. Cílovou
+složku proto jednorázově předejte tomuto uid:
+
+```bash
+sudo chown -R 1000:1000 /volume1/video/downloads
+```
+
+Ověřit to jde i bez stahování: pokud se v knihovně nezobrazují náhledy a v logu
+je `Náhled se nepodařilo vyrobit`, jde nejspíš o tohle.
+
+### Přístup zvenčí
+
+Na domácí síti stačí, co je popsané výše. **Ven aplikaci nevystavujte přímo.**
+Přihlášení sice existuje, ale po HTTP jde relační cookie po síti nechráněná a
+kdokoli na cestě ji může odposlechnout. Použijte reverzní proxy DSM s HTTPS
+certifikátem; jakmile server uvidí `X-Forwarded-Proto: https`, začne cookie
+označovat jako `Secure` sám.
+
 ### Hardwarová akcelerace
 
 Na Synology s Intel iGPU (Celeron s QuickSync, např. DS220+/DS920+) stačí spustit aplikaci s připraveným override souborem:
