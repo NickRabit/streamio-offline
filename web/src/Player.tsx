@@ -246,10 +246,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
-    // Při přebalení se video jen kopíruje, procesor tedy příčinou není: zadrhává síť
-    // nebo disk. Snížení kvality by znamenalo skutečné překódování, které bez
-    // hardwarové akcelerace situaci ještě zhorší, tak ho v tom případě nenabízíme.
-    if (session?.mode === "remux" && !session.hardware) return;
+    // Nižší kvalita srazí datový tok, takže zadrhávání kvůli síti skutečně spraví.
+    // Znamená ale překódování, a to bez hardwarové akcelerace slabý procesor
+    // nestíhá -- pak by rada uškodila víc, než pomohla. Ptáme se proto serveru,
+    // jestli akceleraci má; příznak hardware to neřekne, ten je při přebalení
+    // vždy nepravdivý, protože se v něm VAAPI nepoužívá.
+    if (!session?.acceleration) return;
     const target = lowerQuality(session?.quality ?? null);
     if (target !== null) setQualityHint(target);
   };
