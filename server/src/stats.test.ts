@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { localDay, summarize, type DownloadEvent } from "./stats.js";
+import { summarize, type DownloadEvent } from "./stats.js";
 
 const GB = 1024 ** 3;
 const now = new Date("2026-09-02T18:00:00");
@@ -10,56 +10,82 @@ const event = (hours: number, bytes: number, provider: string, addon = provider)
   ({ at: ago(hours), bytes, provider, addonKey: addon, addonName: addon, title: `Film ${hours}`, kind: "movie" });
 
 const sample: DownloadEvent[] = [
-  event(1, 2 * GB, "cdn.jedna.cz"),
+  event(0.2, 2 * GB, "cdn.jedna.cz"),
   event(10, 1 * GB, "cdn.dva.cz"),
   event(50, 3 * GB, "cdn.jedna.cz"),
   event(200, 4 * GB, "cdn.tri.cz"),
   event(1000, 5 * GB, "cdn.dva.cz"),
 ];
 
-test("okna za den, týden a měsíc sčítají jen svoje období", () => {
-  const summary = summarize(sample, 30, now);
-  assert.deepEqual(summary.day, { bytes: 3 * GB, count: 2 });
-  assert.deepEqual(summary.week, { bytes: 6 * GB, count: 3 });
-  assert.deepEqual(summary.month, { bytes: 10 * GB, count: 4 });
-  assert.deepEqual(summary.total, { bytes: 15 * GB, count: 5 });
-});
-
-test("řada dnů je souvislá a končí dneškem", () => {
-  const summary = summarize(sample, 30, now);
-  assert.equal(summary.days.length, 30);
-  assert.equal(summary.days.at(-1)?.date, localDay(now));
-  const dayMs = 24 * 3600_000;
-  for (let index = 1; index < summary.days.length; index += 1) {
-    const previous = Date.parse(summary.days[index - 1].date);
-    assert.equal(Date.parse(summary.days[index].date) - previous, dayMs, "v řadě nesmí chybět den");
+test("okna se počítají nezávisle na zvoleném období", () => {
+  for (const hours of [1, 24, 720]) {
+    const summary = summarize(sample, hours, now);
+    assert.deepEqual(summary.hour, { bytes: 2 * GB, count: 1 }, `hodina při období ${hours} h`);
+    assert.deepEqual(summary.day, { bytes: 3 * GB, count: 2 });
+    assert.deepEqual(summary.week, { bytes: 6 * GB, count: 3 });
+    assert.deepEqual(summary.month, { bytes: 10 * GB, count: 4 });
+    assert.deepEqual(summary.total, { bytes: 15 * GB, count: 5 });
   }
-  assert.equal(summary.days.reduce((sum, day) => sum + day.bytes, 0), 10 * GB);
 });
 
-test("poskytovatelé se sčítají a řadí od největšího", () => {
-  const { providers } = summarize(sample, 30, now);
+test("hodinové období se dělí po pěti minutách", () => {
+  const summary = summarize(sample, 1, now);
+  assert.equal(summary.step, "minute");
+  assert.equal(summary.points.length, 12);
+  assert.equal(summary.points.reduce((sum, point) => sum + point.bytes, 0), 2 * GB, "do hodiny spadne jen nejnovější");
+  const gap = Date.parse(summary.points[1].at) - Date.parse(summary.points[0].at);
+  assert.equal(gap, 5 * 60_000);
+});
+
+test("denní období se dělí po hodinách", () => {
+  const summary = summarize(sample, 24, now);
+  assert.equal(summary.step, "hour");
+  assert.equal(summary.points.length, 24);
+  assert.equal(summary.points.reduce((sum, point) => sum + point.bytes, 0), 3 * GB);
+  assert.equal(Date.parse(summary.points[1].at) - Date.parse(summary.points[0].at), 3600_000);
+});
+
+test("delší období jde po dnech a řada je souvislá", () => {
+  const summary = summarize(sample, 30 * 24, now);
+  assert.equal(summary.step, "day");
+  assert.equal(summary.points.length, 30);
+  assert.equal(summary.points.reduce((sum, point) => sum + point.bytes, 0), 10 * GB);
+  for (let index = 1; index < summary.points.length; index += 1) {
+    const gap = Date.parse(summary.points[index].at) - Date.parse(summary.points[index - 1].at);
+    assert.ok(gap >= 23 * 3600_000 && gap <= 25 * 3600_000, `mezi dny má být jeden den, bylo ${gap} ms`);
+  }
+});
+
+test("poskytovatelé i doplňky se sčítají a řadí od největšího", () => {
+  const { providers, addons } = summarize(sample, 30 * 24, now);
   assert.deepEqual(providers.map((item) => item.key), ["cdn.jedna.cz", "cdn.tri.cz", "cdn.dva.cz"]);
   assert.deepEqual(providers[0], { key: "cdn.jedna.cz", label: "cdn.jedna.cz", bytes: 5 * GB, count: 2 });
+  assert.deepEqual(addons.map((item) => item.key), providers.map((item) => item.key));
 });
 
-test("kratší období odřízne starší poskytovatele, okna zůstanou", () => {
-  const summary = summarize(sample, 2, now);
-  assert.equal(summary.days.length, 2);
-  assert.deepEqual(summary.providers.map((item) => item.key), ["cdn.jedna.cz", "cdn.dva.cz"]);
-  assert.deepEqual(summary.month, { bytes: 10 * GB, count: 4 }, "okna se počítají nezávisle na zvoleném období");
+test("každý zdroj má vlastní řadu ve stejném pořadí jako v přehledu", () => {
+  const summary = summarize(sample, 30 * 24, now);
+  assert.deepEqual(summary.byProvider.map((line) => line.key), summary.providers.map((item) => item.key));
+  for (const line of summary.byProvider) {
+    assert.equal(line.points.length, summary.points.length, "řada musí mít stejně bodů jako graf");
+    const total = summary.providers.find((item) => item.key === line.key)!.bytes;
+    assert.equal(line.points.reduce((sum, value) => sum + value, 0), total, `součet řady ${line.key}`);
+  }
+  const perPoint = summary.points.map((_, index) => summary.byProvider.reduce((sum, line) => sum + line.points[index], 0));
+  assert.deepEqual(perPoint, summary.points.map((point) => point.bytes), "řady dohromady dají celkový graf");
 });
 
 test("večerní stahování patří do místního dne, ne do UTC", () => {
   const late: DownloadEvent[] = [{ ...event(0, GB, "cdn.jedna.cz"), at: "2026-09-02T23:30:00+02:00" }];
-  const summary = summarize(late, 3, new Date("2026-09-02T23:45:00+02:00"));
-  assert.equal(summary.days.at(-1)?.bytes, GB, "má spadnout do 2. září, i když je v UTC už 3.");
+  const summary = summarize(late, 3 * 24, new Date("2026-09-02T23:45:00+02:00"));
+  assert.equal(summary.points.at(-1)?.bytes, GB, "má spadnout do 2. září, i když je v UTC už 3.");
 });
 
 test("prázdný záznam nespadne", () => {
-  const summary = summarize([], 7, now);
+  const summary = summarize([], 7 * 24, now);
   assert.deepEqual(summary.total, { bytes: 0, count: 0 });
-  assert.equal(summary.days.length, 7);
+  assert.equal(summary.points.length, 7);
   assert.deepEqual(summary.providers, []);
+  assert.deepEqual(summary.byProvider, []);
   assert.equal(summary.since, undefined);
 });
