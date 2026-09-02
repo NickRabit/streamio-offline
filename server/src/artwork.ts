@@ -36,6 +36,19 @@ async function writeAtomic(target: string, data: Buffer) {
   await rename(temp, target);
 }
 
+/** Stáhne obrázek na přesné místo. Používá se pro plakát, který klient poslal z katalogu. */
+export async function savePosterAs(target: string, url: string): Promise<boolean> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) return false;
+    if (!(response.headers.get("content-type") ?? "").startsWith("image/")) return false;
+    const data = Buffer.from(await response.arrayBuffer());
+    if (!data.length || data.length > 8 * 1024 * 1024) return false;
+    await writeAtomic(target, data);
+    return true;
+  } catch { return false; }
+}
+
 export async function savePosterFromUrl(directory: string, url: string): Promise<boolean> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });

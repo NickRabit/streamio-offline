@@ -20,6 +20,8 @@ export class DownloadQueue {
   private jobs: DownloadJob[] = []; private active = new Map<string, AbortController>(); private pauseRequested = new Set<string>(); private pumpScheduled = false; private saveTimer?: NodeJS.Timeout; private saveChain: Promise<void> = Promise.resolve();
   private resolver?: StreamResolver;
   private readonly stateFile: string; private readonly downloadDir: string;
+  /** Zavolá se po úspěšném dokončení, aby knihovna mohla rovnou vyrobit náhled. */
+  onCompleted?: (target: string) => void;
   constructor(private concurrency: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
   /** Výběr zdroje pro líné úlohy si drží index.ts, protože potřebuje doplňky a nastavení. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
@@ -122,7 +124,7 @@ export class DownloadQueue {
       let received = offset; let lastAt = Date.now(); let lastBytes = received; let lastLog = received; inactivity = setInterval(() => { if (Date.now() - lastAt > 90_000) { stalled = true; log("WARN", "Přenos se 90 s neposunul", { id: job.id, received }); controller.abort(); } }, 5_000);
       const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => { received += chunk.byteLength; job.received = received; const now = Date.now(); if (now - lastAt > 800) { job.speed = (received - lastBytes) / ((now - lastAt) / 1000); lastAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon(); } if (received - lastLog >= 50 * 1024 * 1024) { log("INFO", "Průběh stahování", { id: job.id, received, total: job.total, speed: Math.round(job.speed) }); lastLog = received; } output.enqueue(chunk); } });
       await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
-      clearInterval(inactivity); if (job.total && job.received !== job.total) throw new Error(`Stažená velikost nesouhlasí (${job.received} / ${job.total}).`); await rename(partial, target); job.status = "completed"; job.speed = 0; log("INFO", "Stahování dokončeno", { id: job.id, received: job.received, target: job.target });
+      clearInterval(inactivity); if (job.total && job.received !== job.total) throw new Error(`Stažená velikost nesouhlasí (${job.received} / ${job.total}).`); await rename(partial, target); job.status = "completed"; job.speed = 0; log("INFO", "Stahování dokončeno", { id: job.id, received: job.received, target: job.target }); this.onCompleted?.(job.target);
     } catch (error) {
       job.speed = 0; const message = stalled ? "Přenos bez dat déle než 90 s." : (error instanceof Error ? error.message : String(error));
       if (this.pauseRequested.has(job.id)) job.status = "paused";

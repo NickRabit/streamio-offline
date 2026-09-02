@@ -164,15 +164,19 @@ export function sortFiles<T extends { label: string; size: number; modified: str
 }
 
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; modified: string }
-export interface BrowseResult { path: string; folders: BrowseFolder[]; files: LibraryFile[]; total: number }
+export type BrowseItem =
+  | ({ kind: "folder" } & BrowseFolder)
+  | ({ kind: "file" } & LibraryFile);
+/** Jeden seřazený seznam. Dvě pole by při vykreslení pořadí zase rozdělila na skupiny. */
+export interface BrowseResult { path: string; items: BrowseItem[]; total: number }
 
 /** Obsah jedné složky: podsložky a videa v ní. Do hloubky se nesestupuje, od toho je proklik. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
   sort: LibrarySort = "name", descending = false, seed = ""): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
-  if (!target) return { path: relative, folders: [], files: [], total: 0 };
+  if (!target) return { path: relative, items: [], total: 0 };
   let entries;
-  try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, folders: [], files: [], total: 0 }; }
+  try { entries = await readdir(target, { withFileTypes: true }); } catch { return { path: relative, items: [], total: 0 }; }
 
   const needle = query.trim().toLowerCase();
   const folders: BrowseFolder[] = [];
@@ -203,19 +207,23 @@ export async function browseDirectory(root: string, relative: string, query = ""
     } catch { /* zmizelo mezitím */ }
   }
 
-  // Řazení musí platit i na složky. Stránkuje se přes obojí dohromady, jinak by
-  // složka se stovkami podsložek vrátila všechny naráz.
-  const orderedFolders = sortFiles(folders.map((folder) => ({ ...folder, label: folder.name, path: folder.path })), sort, descending, seed);
-  const orderedFiles = sortFiles(files, sort, descending, seed);
-  const combined: Array<{ folder?: BrowseFolder; file?: LibraryFile }> = [
-    ...orderedFolders.map((folder) => ({ folder: folders.find((item) => item.path === folder.path)! })),
-    ...orderedFiles.map((file) => ({ file })),
+  // Složky a soubory se řadí jako jeden seznam. Kdyby se braly zvlášť, vznikly by
+  // při řazení podle data nebo velikosti dvě nezávislé řady za sebou.
+  type Mixed = {
+    path: string; label: string; size: number; modified: string;
+    season?: number | null; episode?: number | null; folder?: BrowseFolder; file?: LibraryFile;
+  };
+  const mixed: Mixed[] = [
+    ...folders.map((folder) => ({ path: folder.path, label: folder.name, size: folder.size, modified: folder.modified, folder })),
+    ...files.map((file) => ({ path: file.path, label: file.label, size: file.size, modified: file.modified, season: file.season, episode: file.episode, file })),
   ];
-  const page = combined.slice(skip, skip + limit);
+  const page = sortFiles(mixed, sort, descending, seed).slice(skip, skip + limit);
   return {
     path: relative,
-    folders: page.map((item) => item.folder).filter(Boolean) as BrowseFolder[],
-    files: page.map((item) => item.file).filter(Boolean) as LibraryFile[],
-    total: combined.length,
+    items: page.map((item) => item.folder
+      ? { kind: "folder" as const, ...item.folder }
+      : { kind: "file" as const, ...item.file! }),
+    total: mixed.length,
   };
 }
+
