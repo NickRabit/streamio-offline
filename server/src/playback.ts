@@ -1,6 +1,7 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
@@ -102,8 +103,10 @@ export class PlaybackManager {
     } catch { log("WARN", "Verzi FFmpeg se nepodařilo zjistit"); }
     const device = process.env.VAAPI_DEVICE;
     if (device) {
-      try { await access(device); this.vaapiDevice = device; log("INFO", "VAAPI je k dispozici", { device }); }
-      catch { log("WARN", "VAAPI_DEVICE není dostupné, převod poběží softwarově", { device }); }
+      // Pouhá existence nestačí: bez členství ve skupině render nodu jde soubor vidět,
+      // ale neotevřít, a hardwarový převod by pak spadl až za běhu.
+      try { await access(device, constants.R_OK | constants.W_OK); this.vaapiDevice = device; log("INFO", "VAAPI je k dispozici", { device }); }
+      catch { log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Zkontrolujte RENDER_GID podle ls -n /dev/dri", { device }); }
     }
     setInterval(() => {
       for (const session of [...this.sessions.values()]) {
@@ -397,7 +400,10 @@ export class PlaybackManager {
       args.push("-ss", offset.toFixed(3));
     }
     if (!copyVideo && hardware) args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
-    args.push("-readrate", copyVideo ? process.env.FFMPEG_READRATE_REMUX ?? "8" : process.env.FFMPEG_READRATE ?? "1.5");
+    // Náskok se platí zápisem na disk: při přebalení 8x rychleji než reálný čas nasype
+    // FFmpeg ~340 MB za 20 s a slabší NAS se zadusí protlačováním špinavých stránek.
+    // Trojka drží posun stejně svižný (rozhoduje počáteční nával), ale zápis je třetinový.
+    args.push("-readrate", copyVideo ? process.env.FFMPEG_READRATE_REMUX ?? "3" : process.env.FFMPEG_READRATE ?? "1.5");
     // Prvních pár desítek sekund se čte plnou rychlostí, ať je první segment hotový co nejdřív;
     // teprve potom nastoupí brzda proti zbytečnému stahování celého souboru.
     if (this.initialBurst) args.push("-readrate_initial_burst", process.env.FFMPEG_BURST ?? "30");
