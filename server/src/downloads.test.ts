@@ -106,3 +106,17 @@ test("vyšší limit na poskytovatele přenosy zase pustí souběžně", async (
   process.env.ALLOW_PRIVATE_ADDONS = "1";
   assert.equal(await runThree(2), 2, "při dvojce mají běžet právě dva najednou");
 });
+
+test("tentýž zdroj nejde přidat do fronty dvakrát", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dup-"));
+  try {
+    const queue = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), path.join(directory, "downloads"));
+    await queue.load();
+    const url = "http://127.0.0.1:1/film.mkv";
+    await queue.add("Film", { url });
+    await assert.rejects(() => queue.add("Film", { url }), /už ve frontě je/);
+    await assert.rejects(() => queue.add("Film pod jiným názvem", { url }), /už ve frontě je/, "rozhoduje zdroj, ne název");
+    await queue.add("Jiný film", { url: "http://127.0.0.1:1/jiny.mkv" });
+    assert.equal(queue.list().length, 2);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
