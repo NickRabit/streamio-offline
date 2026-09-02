@@ -1,6 +1,6 @@
 import express from "express";
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
@@ -10,14 +10,16 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
-import { resolveInside, scanLibrary } from "./library.js";
+import { browseDirectory, entryDirectory, pageFiles, resolveInside, scanLibrary, summarize } from "./library.js";
+import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterFromUrl, saveFrame } from "./artwork.js";
+import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
-import { defaultDownloadSettings, normalizeDownloadSettings } from "./naming.js";
+import { defaultDownloadSettings, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
-import type { AddonRole, StreamItem } from "./types.js";
+import type { AddonRole, MetaItem, StreamItem } from "./types.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
@@ -220,7 +222,264 @@ app.get("/api/subtitle", asyncRoute(async (req, res) => {
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
-app.get("/api/library", asyncRoute(async (_req, res) => res.json(await scanLibrary(DOWNLOAD_DIR))));
+const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
+const cachedMeta = async (type: string, id: string) => {
+  const key = `${type}:${id}`;
+  const hit = metaCache.get(key);
+  if (hit && Date.now() - hit.at < 6 * 60 * 60_000) return hit.value;
+  const value = await metadata(store.addons(), type, id).catch(() => null);
+  if (metaCache.size > 300) metaCache.clear();
+  metaCache.set(key, { value, at: Date.now() });
+  return value;
+};
+// Sken stromu je drahý, drží se chvíli v paměti. Fronta ho po dokončení stahování zneplatní.
+let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
+const libraryEntries = async () => {
+  if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
+  const entries = await scanLibrary(DOWNLOAD_DIR);
+  const known = store.libraryMeta();
+  // Metadata jen tam, kde známe id z doby stahování. Nic se nehádá z názvu složky.
+  await Promise.all(entries.map(async (entry) => {
+    const record = known[entry.key];
+    if (!record) return;
+    const meta = await cachedMeta(record.type, record.id);
+    entry.meta = {
+      type: record.type, id: record.id, name: meta?.name,
+      poster: meta?.poster, background: meta?.background,
+      description: typeof meta?.description === "string" ? meta.description : undefined,
+      year: meta?.releaseInfo ? String(meta.releaseInfo) : meta?.year ? String(meta.year) : undefined,
+    };
+  }));
+  libraryCache = { at: Date.now(), entries };
+  return entries;
+};
+
+const ARTWORK_DIR = path.join(process.env.DATA_DIR ?? "/data", "artwork");
+const artworkQueue = new ArtworkQueue();
+const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
+const dataArtworkFile = (key: string) => path.join(ARTWORK_DIR, `${createHash("sha1").update(key).digest("hex")}.jpg`);
+
+/** Cizí obrázek ve složce má vždy přednost: nic nepřepisujeme ani znovu negenerujeme. */
+async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
+  const directory = entryDirectory(entry);
+  const folder = path.join(DOWNLOAD_DIR, directory);
+  if (directory) {
+    const existing = await findArtwork(folder);
+    if (existing) return path.join(folder, existing);
+  }
+  const own = dataArtworkFile(entry.key);
+  return await fileExists(own) ? own : undefined;
+}
+
+/** Doplní chybějící náhled. Nejdřív plakát z metadat, jinak reprezentativní snímek z videa. */
+function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
+  artworkQueue.run(entry.key, async () => {
+    if (await locateArtwork(entry)) return;
+    const toMedia = store.settings().artworkLocation === "media";
+    const directory = entryDirectory(entry);
+    const target = toMedia && directory ? path.join(DOWNLOAD_DIR, directory, POSTER_OUTPUT) : dataArtworkFile(entry.key);
+    await mkdir(path.dirname(target), { recursive: true });
+
+    if (entry.meta?.poster && await savePosterFromUrl(path.dirname(target), entry.meta.poster)) {
+      if (path.basename(target) !== POSTER_OUTPUT) {
+        await rename(path.join(path.dirname(target), POSTER_OUTPUT), target);
+      }
+      log("INFO", "Plakát uložen z metadat", { key: entry.key });
+      return;
+    }
+    const source = entry.files[0];
+    if (!source) return;
+    const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
+    if (await saveFrame(path.join(DOWNLOAD_DIR, source.path), target, framePosition(info?.duration))) {
+      log("INFO", "Náhled vyroben z videa", { key: entry.key });
+    }
+  });
+}
+
+app.get("/api/library", asyncRoute(async (_req, res) => {
+  const entries = await libraryEntries();
+  const summaries = await Promise.all(entries.map(async (entry) => {
+    const art = await locateArtwork(entry);
+    if (!art) scheduleArtwork(entry);
+    return { ...summarize(entry), poster: art ? `/api/library/thumb?key=${encodeURIComponent(entry.key)}` : undefined };
+  }));
+  res.json(summaries);
+}));
+/** Náhled jednoho videa. Vedle videa hledáme jméno podle konvence Jellyfinu. */
+async function locateFileArtwork(relative: string) {
+  const media = path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)));
+  if (await fileExists(media)) return media;
+  const own = dataArtworkFile(relative);
+  return await fileExists(own) ? own : undefined;
+}
+
+function scheduleFileArtwork(relative: string) {
+  artworkQueue.run(`file:${relative}`, async () => {
+    if (await locateFileArtwork(relative)) return;
+    const source = resolveInside(DOWNLOAD_DIR, relative);
+    if (!source) return;
+    const target = store.settings().artworkLocation === "media"
+      ? path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)))
+      : dataArtworkFile(relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    const info = await playback.inspect({ url: `file://${relative}` }).catch(() => undefined);
+    await saveFrame(source, target, framePosition(info?.duration));
+  });
+}
+
+/** Náhled složky: vlastní obrázek, pak plakát z metadat, jinak snímek z prvního videa uvnitř. */
+async function locateFolderArtwork(relative: string) {
+  const folder = path.join(DOWNLOAD_DIR, relative);
+  const existing = await findArtwork(folder);
+  if (existing) return path.join(folder, existing);
+  const own = dataArtworkFile(`dir:${relative}`);
+  return await fileExists(own) ? own : undefined;
+}
+
+function scheduleFolderArtwork(relative: string) {
+  artworkQueue.run(`dir:${relative}`, async () => {
+    if (await locateFolderArtwork(relative)) return;
+    const toMedia = store.settings().artworkLocation === "media";
+    const target = toMedia ? path.join(DOWNLOAD_DIR, relative, POSTER_OUTPUT) : dataArtworkFile(`dir:${relative}`);
+    await mkdir(path.dirname(target), { recursive: true });
+
+    const known = store.libraryMeta()[relative.split(path.sep)[0]];
+    if (known) {
+      const meta = await cachedMeta(known.type, known.id);
+      if (meta?.poster && await savePosterFromUrl(path.dirname(target), meta.poster)) {
+        const written = path.join(path.dirname(target), POSTER_OUTPUT);
+        if (written !== target) await rename(written, target);
+        return;
+      }
+    }
+    const inside = await browseDirectory(DOWNLOAD_DIR, relative, "", 0, 1);
+    const first = inside.files[0] ?? (inside.folders[0] ? (await browseDirectory(DOWNLOAD_DIR, inside.folders[0].path, "", 0, 1)).files[0] : undefined);
+    if (!first) return;
+    const info = await playback.inspect({ url: `file://${first.path}` }).catch(() => undefined);
+    await saveFrame(path.join(DOWNLOAD_DIR, first.path), target, framePosition(info?.duration));
+  });
+}
+
+/** Náhledy v datech přežijí smazání videa. Po skenu smažeme ty, ke kterým už zdroj neexistuje.
+ *  Při ukládání vedle videa tenhle problém nevzniká, obrázek zmizí se složkou. */
+let lastArtworkSweep = 0;
+async function sweepArtwork() {
+  if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
+  lastArtworkSweep = Date.now();
+  const valid = new Set<string>();
+  for (const entry of await libraryEntries()) {
+    valid.add(path.basename(dataArtworkFile(entry.key)));
+    for (const file of entry.files) {
+      valid.add(path.basename(dataArtworkFile(file.path)));
+      const parts = file.path.split(path.sep);
+      for (let depth = 1; depth < parts.length; depth += 1) {
+        valid.add(path.basename(dataArtworkFile(`dir:${parts.slice(0, depth).join(path.sep)}`)));
+      }
+    }
+  }
+  let removed = 0;
+  for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
+    if (valid.has(name)) continue;
+    await rm(path.join(ARTWORK_DIR, name), { force: true });
+    removed += 1;
+  }
+  if (removed) log("INFO", "Osiřelé náhledy smazány", { removed });
+}
+
+app.get("/api/library/browse", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "");
+  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+  const sorts = new Set(["name", "added", "size", "random"]);
+  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
+  void sweepArtwork();
+  const result = await browseDirectory(DOWNLOAD_DIR, relative, String(req.query.query ?? ""),
+    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""));
+  // Náhledy chybějících souborů se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
+  const files = await Promise.all(result.files.map(async (file) => {
+    const art = await locateFileArtwork(file.path);
+    if (!art) scheduleFileArtwork(file.path);
+    return { ...file, poster: art ? `/api/library/thumb?path=${encodeURIComponent(file.path)}` : undefined };
+  }));
+  const folders = await Promise.all(result.folders.map(async (folder) => {
+    const art = await locateFolderArtwork(folder.path);
+    if (!art) scheduleFolderArtwork(folder.path);
+    return { ...folder, poster: art ? `/api/library/thumb?dir=${encodeURIComponent(folder.path)}` : undefined };
+  }));
+  res.json({ ...result, folders, files, pending: [...folders, ...files].some((item) => !item.poster) });
+}));
+
+// Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
+app.delete("/api/library/item", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  const info = await stat(target).catch(() => undefined);
+  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+  await rm(target, { recursive: true, force: true });
+  // Vlastní náhled zmizí s ním; ten vedle videa smazala rekurze složky.
+  await rm(dataArtworkFile(relative), { force: true });
+  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+  libraryCache = undefined;
+  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory() });
+  res.status(204).end();
+}));
+
+app.post("/api/library/rename", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "").trim();
+  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  const info = await stat(source).catch(() => undefined);
+  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+
+  const extension = info.isDirectory() ? "" : path.extname(relative);
+  const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
+  const nextRelative = path.join(path.dirname(relative), `${wanted}${extension}`);
+  const target = resolveInside(DOWNLOAD_DIR, nextRelative);
+  if (!target) throw new Error("Neplatné jméno.");
+  if (target !== source && await fileExists(target)) throw new Error("Soubor s tímto jménem už existuje.");
+
+  await rename(source, target);
+  libraryCache = undefined;
+  log("INFO", "Přejmenováno v knihovně", { z: relative, na: nextRelative });
+  res.json({ path: nextRelative });
+}));
+
+app.get("/api/library/thumb", asyncRoute(async (req, res) => {
+  const filePath = req.query.path ? String(req.query.path) : undefined;
+  const dirPath = req.query.dir ? String(req.query.dir) : undefined;
+  let art: string | undefined;
+  if (filePath) art = await locateFileArtwork(filePath);
+  else if (dirPath) art = await locateFolderArtwork(dirPath);
+  else {
+    const entry = (await libraryEntries()).find((item) => item.key === String(req.query.key ?? ""));
+    art = entry && await locateArtwork(entry);
+  }
+  if (!art) return res.status(404).end();
+  res.setHeader("cache-control", "private, max-age=3600");
+  res.sendFile(art, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+}));
+// Ruční přiřazení titulu ke složce, když soubor nepřišel přes frontu.
+/** Sváže složku, do které soubor půjde, s titulem z katalogu. Metadata se pak nemusí hádat. */
+const rememberTitle = async (target: string, media?: MediaInfo) => {
+  if (!media?.id) return;
+  const key = target.split("/")[0];
+  if (!key || key === target) return;
+  await store.update((state) => {
+    state.libraryMeta = { ...state.libraryMeta, [key]: { type: media.metaType ?? (media.kind === "episode" ? "series" : "movie"), id: media.id! } };
+  });
+};
+app.post("/api/library/match", asyncRoute(async (req, res) => {
+  const key = String(req.body.key ?? "");
+  const id = String(req.body.id ?? "");
+  const type = String(req.body.type ?? "movie");
+  if (!key) throw new Error("Chybí složka.");
+  await store.update((state) => {
+    const next = { ...state.libraryMeta };
+    if (id) next[key] = { type, id }; else delete next[key];
+    state.libraryMeta = next;
+  });
+  res.json({ key, type, id: id || null });
+}));
 // Stažený soubor jako HTTP zdroj. sendFile umí Range, takže se v něm dá plynule
 // posouvat a stejnou cestou si ho bere i FFmpeg, když je potřeba převod.
 app.get("/api/library/file", asyncRoute(async (req, res) => {
@@ -238,7 +497,9 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
   const addon = store.addons().find((item) => item.key === stream.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
   const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
-  res.status(201).json(await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings));
+  const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
+  await rememberTitle(job.target, media);
+  res.status(201).json(job);
 }));
 // Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.
 app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
@@ -276,6 +537,9 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
+    if (req.body.artworkLocation !== undefined) {
+      state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";
+    }
     if (req.body.streamSort !== undefined) {
       const value = String(req.body.streamSort);
       state.settings.streamSort = STREAM_SORTS.has(value) ? value : "recommended";

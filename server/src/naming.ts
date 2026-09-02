@@ -2,6 +2,9 @@ import path from "node:path";
 import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings } from "./types.js";
 
 export interface MediaInfo {
+  /** IMDb id z katalogu. Díky němu nemusíme metadata hádat z názvu složky. */
+  id?: string;
+  metaType?: string;
   kind?: "movie" | "episode";
   /** Název filmu, nebo název seriálu u epizody. */
   title?: string;

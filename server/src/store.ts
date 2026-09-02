@@ -4,9 +4,9 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 
-interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string }
-interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended" }, defaultsInstalled: false };
+interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media" }
+interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState; libraryMeta?: Record<string, { type: string; id: string }> }
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data" }, defaultsInstalled: false };
 
 export class Store {
   private state: State = structuredClone(initialState);
@@ -25,6 +25,7 @@ export class Store {
   settings() { return this.state.settings; }
   defaultsInstalled() { return this.state.defaultsInstalled; }
   auth() { return this.state.auth; }
+  libraryMeta() { return this.state.libraryMeta ?? {}; }
   private chain: Promise<void> = Promise.resolve();
   /** Zápisy jdou za sebou, jinak si dvě souběžná uložení přeberou stejný .tmp soubor. */
   async update(mutator: (state: State) => void) {

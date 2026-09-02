@@ -1,12 +1,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, Pencil, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, LibraryEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BrowseResult, LibrarySort, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 type View = "catalog" | "library" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
@@ -21,11 +21,29 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended" });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data" });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
-  const [library, setLibrary] = useState<LibraryEntry[]>([]); const [libraryOpen, setLibraryOpen] = useState<string | null>(null);
+  const [browse, setBrowse] = useState<BrowseResult | null>(null);
+  const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
+  const [browseSort, setBrowseSort] = useState<LibrarySort>("name"); const [browseDesc, setBrowseDesc] = useState(false);
+  const [browseView, setBrowseView] = useState<"grid" | "list">("grid");
+  const [browseBusy, setBrowseBusy] = useState(false);
+  const browseSeed = useRef(String(Date.now()));
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+
+  const removeItem = async (itemPath: string, label: string, folder: boolean) => {
+    setMenuFor(null);
+    if (!confirm(`Opravdu smazat ${folder ? "složku" : "soubor"} „${label}“?${folder ? " Smaže se i vše uvnitř." : ""} Tohle nejde vrátit.`)) return;
+    try { await api.deleteLibraryItem(itemPath); notify("Smazáno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+  };
+  const renameItem = async (itemPath: string, label: string) => {
+    setMenuFor(null);
+    const wanted = prompt("Nové jméno:", label);
+    if (!wanted || wanted === label) return;
+    try { await api.renameLibraryItem(itemPath, wanted); notify("Přejmenováno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+  };
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
@@ -71,7 +89,48 @@ export function App() {
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
   // Odznak u Stahování musí sedět i mimo tuto záložku, jen se tam nemusí obnovovat tak často.
-  useEffect(() => { if (!ready || view !== "library") return; api.library().then(setLibrary).catch(fail); }, [ready, view]);
+  const loadBrowse = async (target = browsePath, skip = 0) => {
+    setBrowseBusy(true);
+    try {
+      const page = await api.browse({ path: target, query: browseQuery, skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current });
+      setBrowse((previous) => skip && previous
+        // Stránkuje se přes složky i soubory dohromady, takže se připojuje obojí.
+        ? { ...page, folders: [...previous.folders, ...page.folders], files: [...previous.files, ...page.files] }
+        : page);
+    } catch (error) { fail(error); }
+    finally { setBrowseBusy(false); }
+  };
+  const refreshBrowse = async (limit: number) => {
+    try {
+      const page = await api.browse({ path: browsePath, query: browseQuery, limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current });
+      setBrowse(page);
+    } catch { /* obnovení náhledů není kritické */ }
+  };
+  useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
+    [ready, view, browsePath, browseQuery, browseSort, browseDesc]);
+  // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
+  useEffect(() => {
+    if (view !== "library" || !browse) return;
+    const nactenych = browse.folders.length + browse.files.length;
+    if (nactenych >= browse.total) return;
+    const onScroll = () => {
+      if (browseBusy) return;
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) void loadBrowse(browsePath, nactenych);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [view, browse, browseBusy, browsePath]);
+
+  // Náhledy se dodělávají na pozadí; jakmile jsou hotové, stránka se sama obnoví.
+  useEffect(() => {
+    if (view !== "library" || !browse?.pending) return;
+    // Obnovujeme jen tolik položek, kolik už je načtených, ať se seznam nesroluje zpátky.
+    const nactenych = browse.folders.length + browse.files.length;
+    const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
+    return () => clearTimeout(timer);
+  }, [view, browse?.pending, browsePath]);
+
   /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
   const playLocal = (title: string, path: string) => {
     setLocalTitle(title);
@@ -349,23 +408,63 @@ export function App() {
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
-        <p className="lead">Přehrávají se přímo z disku, takže posun je okamžitý a funguje i bez internetu.</p>
-        {!library.length ? <Empty icon={<HardDrive/>} title="Zatím nic staženého" text="Dokončená stahování se tu objeví sama."/> : <div className="library-list">
-          {library.map((entry) => <article className="panel library-card" key={`${entry.kind}:${entry.title}`}>
-            <div className="library-head">
-              <div><strong>{entry.title}</strong><small>{entry.kind === "series" ? `${entry.episodes?.length ?? 0} epizod` : "film"} · {bytes(entry.size)}</small></div>
-              {entry.kind === "movie"
-                ? <button className="primary" onClick={() => playLocal(entry.title, entry.path!)}><CirclePlay/> Přehrát</button>
-                : <button onClick={() => setLibraryOpen((open) => open === entry.title ? null : entry.title)}>{libraryOpen === entry.title ? "Skrýt" : "Epizody"}<ChevronRight/></button>}
-            </div>
-            {entry.kind === "series" && libraryOpen === entry.title && <div className="episode-list">
-              {entry.episodes?.map((episode) => <button key={episode.path} onClick={() => playLocal(`${entry.title} · ${episode.season}×${String(episode.episode ?? 0).padStart(2, "0")} ${episode.title}`, episode.path)}>
-                <b>{episode.season}×{String(episode.episode ?? 0).padStart(2, "0")}</b><span>{episode.title}</span><small>{bytes(episode.size)}</small><CirclePlay/>
+      {view === "library" && <section onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
+        <div className="browse-bar">
+          <nav className="crumbs">
+            <button onClick={() => setBrowsePath("")} disabled={!browsePath}><HardDrive/> Knihovna</button>
+            {browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
+              <ChevronRight/>
+              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(all.slice(0, index + 1).join("/"))}>{part}</button>
+            </span>)}
+          </nav>
+          <div className="browse-tools">
+            <div className="search-input"><Search/><input value={browseQuery} placeholder="Filtrovat…" onChange={(event) => setBrowseQuery(event.target.value)}/></div>
+            <select aria-label="Řazení" value={browseSort} onChange={(event) => setBrowseSort(event.target.value as LibrarySort)}>
+              <option value="name">Podle názvu</option><option value="added">Podle data přidání</option>
+              <option value="size">Podle velikosti</option><option value="random">Náhodně</option>
+            </select>
+            <button title={browseDesc ? "Sestupně" : "Vzestupně"} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
+              {browseDesc ? <ArrowDown/> : <ArrowUp/>}
+            </button>
+            <button title={browseView === "grid" ? "Zobrazit po řádcích" : "Zobrazit dlaždice"} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
+              {browseView === "grid" ? <List/> : <LayoutGrid/>}
+            </button>
+          </div>
+        </div>
+
+        {!browse || (!browse.folders.length && !browse.files.length)
+          ? (browseBusy ? <div className="loading">Načítám…</div>
+            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : "Dokončená stahování se tu objeví sama."}/>)
+          : <>
+            <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
+              {browse.folders.map((folder) => <button className="browse-item folder" key={folder.path} onClick={() => { setBrowseQuery(""); setBrowsePath(folder.path); }}>
+                <span className="browse-art">{folder.poster ? <img src={folder.poster} alt=""/> : <FolderOpen/>}<i className="browse-badge">{folder.fileCount}</i></span>
+                <strong>{folder.name}</strong><small>{bytes(folder.size)}</small>
+                <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === folder.path ? null : folder.path); }}><MoreVertical/></span>
+                {menuFor === folder.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                  <button onClick={() => void renameItem(folder.path, folder.name)}><Pencil/> Přejmenovat</button>
+                  <button className="danger" onClick={() => void removeItem(folder.path, folder.name, true)}><Trash2/> Smazat</button>
+                </span>}
               </button>)}
-            </div>}
-          </article>)}
-        </div>}
+              {browse.files.map((file) => <button className="browse-item" key={file.path} onClick={() => playLocal(file.label, file.path)}>
+                <span className="browse-art">{file.poster ? <img src={file.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i></span>
+                <strong>{file.season != null ? `${file.season}×${String(file.episode ?? 0).padStart(2, "0")} ${file.label}` : file.label}</strong>
+                <small>{bytes(file.size)}</small>
+                <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === file.path ? null : file.path); }}><MoreVertical/></span>
+                {menuFor === file.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                  <button onClick={() => void renameItem(file.path, file.label)}><Pencil/> Přejmenovat</button>
+                  <button className="danger" onClick={() => void removeItem(file.path, file.label, false)}><Trash2/> Smazat</button>
+                </span>}
+              </button>)}
+            </div>
+            {browseBusy && <div className="loading">Načítám…</div>}
+            {(() => {
+              const nactenych = browse.folders.length + browse.files.length;
+              return !browseBusy && nactenych < browse.total && <div className="load-more">
+                <button onClick={() => void loadBrowse(browsePath, nactenych)}>Načíst další ({browse.total - nactenych})</button>
+              </div>;
+            })()}
+          </>}
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
@@ -389,7 +488,10 @@ function SettingsPage({ settings, languages, session, onSession, onSave, onNotif
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Na slabším NAS doporučujeme 1–2 soubory současně."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
+      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Kam ukládat náhledy" text="Vedle videa je převezme i Jellyfin nebo Emby, ale zapisujeme tím do vašich složek. Cizí obrázek nikdy nepřepisujeme.">
+        <select aria-label="Kam ukládat náhledy" value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>
+          <option value="data">Do dat aplikace</option><option value="media">Vedle videa</option>
+        </select></SettingControl><SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
       <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
     </div>

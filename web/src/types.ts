@@ -24,7 +24,7 @@ export interface Download { id: string; title: string; status: "queued" | "downl
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
-export interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string }
+export interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media" }
 export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; vp8: boolean; vp9: boolean; av1: boolean; aac: boolean; mp3: boolean; opus: boolean; vorbis: boolean; ac3: boolean; eac3: boolean; flac: boolean }
 export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean;
@@ -34,5 +34,14 @@ export interface PlaybackSession {
 
 export interface Session { username: string; mustChangePassword: boolean }
 
-export interface LibraryEpisode { path: string; season: number | null; episode: number | null; title: string; size: number; modified: string }
-export interface LibraryEntry { kind: "movie" | "series"; title: string; path?: string; size?: number; modified?: string; episodes?: LibraryEpisode[] }
+export interface LibraryFile { path: string; label: string; season: number | null; episode: number | null; size: number; modified: string }
+export interface LibrarySummary {
+  key: string; kind: "movie" | "series"; title: string; fileCount: number; size: number; modified: string;
+  poster?: string;
+  meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
+}
+export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
+export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string }
+export interface BrowseFile extends LibraryFile { poster?: string }
+export interface BrowseResult { path: string; folders: BrowseFolder[]; files: BrowseFile[]; total: number; pending: boolean }
+export type LibrarySort = "name" | "added" | "size" | "random";
