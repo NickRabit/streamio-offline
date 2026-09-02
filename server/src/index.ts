@@ -766,6 +766,14 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       const value = String(req.body.streamSort);
       state.settings.streamSort = STREAM_SORTS.has(value) ? value : "recommended";
     }
+    if (req.body.catalogTileSize !== undefined) {
+      const value = String(req.body.catalogTileSize);
+      state.settings.catalogTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
+    }
+    if (req.body.libraryTileSize !== undefined) {
+      const value = String(req.body.libraryTileSize);
+      state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
+    }
   });
   queue.changed(); res.json(store.settings());
 }));

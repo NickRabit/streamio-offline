@@ -50,7 +50,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium" });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -484,7 +484,7 @@ export function App() {
   if (session === undefined) return <div className="login-screen"><div className="loading">Načítám…</div></div>;
   if (!ready) return <LoginScreen session={session} onSession={setSession}/>;
 
-  return <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+  return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title="Přejít do čistého katalogu" aria-label="Přejít do čistého katalogu" onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right"><div className="online"><i/> Docker server online</div>
       <button className="signout" title={`Přihlášen jako ${session?.username ?? ""}`} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit</button></div></header>
     <aside className="sidebar"><nav>
@@ -721,6 +721,7 @@ function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className=
 
 function SettingsPage({ settings, languages, session, onSession, onSave, onNotify, onError }: { settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
+  const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
   const copyLog = async () => { try { await navigator.clipboard.writeText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow="NASTAVENÍ" title="Nastavení aplikace"/><span><Check/> Změny se ukládají automaticky</span></div><p className="lead">Správa úložiště, stahování, knihovny a výchozího chování přehrávače.</p>
     <div className="settings-grid">
@@ -743,7 +744,10 @@ function SettingsPage({ settings, languages, session, onSession, onSave, onNotif
         <SettingControl title="Kam ukládat náhledy" text="Vedle videa je převezme i Jellyfin nebo Emby, ale zapisujeme tím do vašich složek. Cizí obrázek nikdy nepřepisujeme.">
         <select aria-label="Kam ukládat náhledy" value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>
           <option value="data">Do dat aplikace</option><option value="media">Vedle videa</option>
-        </select></SettingControl><SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
+        </select></SettingControl>
+        <SettingControl title="Velikost položek katalogu" text="Určuje počet plakátů, které se vejdou do řádku katalogu."><select aria-label="Velikost položek katalogu" value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
+        <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
+        <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
       <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
     </div>

@@ -4,7 +4,8 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 
-interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean }
+export type TileSize = "compact" | "small" | "medium" | "large";
+interface Settings { concurrentDownloads: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState; libraryMeta?: Record<string, { type: string; id: string }>;
   /** Cesty označené jako oblíbené. Nic se nepřesouvá, je to jen příznak. */
   favorites?: string[];
@@ -13,7 +14,7 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** Rozkoukané: klíč titulu na pozici v sekundách. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium" }, defaultsInstalled: false };
 
 export class Store {
   private state: State = structuredClone(initialState);

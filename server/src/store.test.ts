@@ -23,6 +23,8 @@ test("starý stav doplňku se migruje na výchozí ukládání", async () => {
     assert.deepEqual(store.addons()[0].downloadSettings, {
       movie: { subfolder: "", layout: "structured" }, series: { subfolder: "", layout: "structured" },
     });
+    assert.equal(store.settings().catalogTileSize, "medium");
+    assert.equal(store.settings().libraryTileSize, "medium");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
