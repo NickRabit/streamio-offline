@@ -1,14 +1,23 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
+import { StatsPanel } from "./Stats";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
 import type { Addon, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
-type View = "catalog" | "library" | "downloads" | "addons" | "settings";
+/** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
+ * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
+const remember = (key: string, value: string) => { try { localStorage.setItem(`library-${key}`, value); } catch { /* úložiště nemusí být k dispozici */ } };
+const recall = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
+  try { const value = localStorage.getItem(`library-${key}`); return allowed.includes(value as T) ? value as T : fallback; }
+  catch { return fallback; }
+};
+
+type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || (item.infoHash ? "Torrent" : "Stream");
@@ -56,12 +65,13 @@ export function App() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
   const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
-  const [browseSort, setBrowseSort] = useState<LibrarySort>("name"); const [browseDesc, setBrowseDesc] = useState(false);
-  const [browseView, setBrowseView] = useState<"grid" | "list">("grid");
+  const [browseSort, setBrowseSort] = useState<LibrarySort>(() => recall("sort", ["name", "added", "size", "random"] as const, "name") as LibrarySort);
+  const [browseDesc, setBrowseDesc] = useState(() => recall("order", ["asc", "desc"] as const, "asc") === "desc");
+  const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
-  const [onlyFavorites, setOnlyFavorites] = useState(false);
+  const [onlyFavorites, setOnlyFavorites] = useState(() => recall("favorites", ["0", "1"] as const, "0") === "1");
   // Odkud se do složky přišlo, aby drobečky nezahodily krok přes Oblíbené.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
@@ -139,6 +149,9 @@ export function App() {
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
   const visibleEpisodes = (selected?.videos ?? []).filter((video) => seasons.length <= 1 || activeSeason === null || video.season === activeSeason);
   const galleryImages = useMemo(() => galleryFor(selected), [selected]);
+  useEffect(() => { remember("sort", browseSort); remember("order", browseDesc ? "desc" : "asc"); }, [browseSort, browseDesc]);
+  useEffect(() => { remember("view", browseView); }, [browseView]);
+  useEffect(() => { remember("favorites", onlyFavorites ? "1" : "0"); }, [onlyFavorites]);
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
   const fail = (value: unknown) => {
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
@@ -491,6 +504,7 @@ export function App() {
       <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => setView("catalog")}/>
       <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => setView("library")}/>
       <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => setView("downloads")}/>
+      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => setView("stats")}/>
       <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => setView("addons")}/>
       <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => setView("settings")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"} aria-label={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}</span></button><div className="addon-status"><small>AKTIVNÍ DOPLŇKY</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>katalogy a zdroje</span></div></div></aside>
@@ -681,6 +695,7 @@ export function App() {
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
+      {view === "stats" && <StatsPanel onError={fail}/>}
       {view === "settings" && <SettingsPage settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
     </main>
     <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}

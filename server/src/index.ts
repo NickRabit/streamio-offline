@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue } from "./downloads.js";
+import { StatsLog, type DownloadEvent } from "./stats.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
@@ -26,6 +27,14 @@ const app = express(); const store = new Store();
 await store.load();
 await initLogger(); log("INFO", "Server startuje", { version: "0.3.0" });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
+const stats = new StatsLog();
+
+/** Poskytovatele bereme z adresy zdroje; doplněk ji může mít u každého streamu jiný. */
+const statEvent = (job: { at: string; bytes: number; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): DownloadEvent => {
+  let provider = "neznámý";
+  try { if (job.url) provider = new URL(job.url).hostname; } catch { /* zůstane neznámý */ }
+  return { at: job.at, bytes: job.bytes, provider, addonKey: job.addonKey, addonName: job.addonName, title: job.title, kind: job.kind === "movie" || job.kind === "episode" ? job.kind : "other" };
+};
 if (!store.defaultsInstalled()) {
   const defaults = [
     { url: "https://v3-cinemeta.strem.io/manifest.json", role: "catalog" as const },
@@ -674,6 +683,7 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 // takže teprve teď lze uložit vazbu na katalog a plakát.
 queue.onCompleted = async (job) => {
   libraryCache = undefined;
+  await stats.record(statEvent({ at: job.updatedAt, bytes: job.received, url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
@@ -682,6 +692,10 @@ queue.onCompleted = async (job) => {
   saveCatalogPoster(titleKey(job.target, job.media, targetSettings.layout === "flat"), job.media.poster);
 };
 await queue.load();
+await stats.load();
+// Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
+// se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam.
+await stats.seed(queue.history().map(statEvent));
 
 app.post("/api/library/match", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "");
@@ -750,6 +764,7 @@ app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
+app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.days) || 30)));
 app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {
