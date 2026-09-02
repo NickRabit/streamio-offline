@@ -61,6 +61,15 @@ export function resolveInside(root: string, relative: string): string | undefine
   return target === base || target.startsWith(prefix) ? target : undefined;
 }
 
+/** Přepíše cestu samotné položky i všech jejích potomků. */
+export function remapPath(value: string, from: string, to: string): string {
+  return value === from || value.startsWith(`${from}${path.sep}`) ? to + value.slice(from.length) : value;
+}
+
+export function isPathWithin(value: string, parent: string): boolean {
+  return value === parent || value.startsWith(`${parent}${path.sep}`);
+}
+
 interface FoundFile { relative: string; size: number; modified: string }
 
 async function walk(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
@@ -198,7 +207,7 @@ export interface BrowseResult { path: string; items: BrowseItem[]; total: number
 
 /** Obsah jedné složky: podsložky a videa v ní. Do hloubky se nesestupuje, od toho je proklik. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
-  sort: LibrarySort = "name", descending = false, seed = ""): Promise<BrowseResult> {
+  sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
   if (!target) return { path: relative, items: [], total: 0 };
   let entries;
@@ -243,13 +252,16 @@ export async function browseDirectory(root: string, relative: string, query = ""
     ...folders.map((folder) => ({ path: folder.path, label: folder.name, size: folder.size, modified: folder.modified, folder })),
     ...files.map((file) => ({ path: file.path, label: file.label, size: file.size, modified: file.modified, season: file.season, episode: file.episode, file })),
   ];
-  const page = sortFiles(mixed, sort, descending, seed).slice(skip, skip + limit);
+  // Filtr musí proběhnout před stránkováním. Jinak by oblíbená položka na druhé
+  // stránce nebyla nikdy vidět a celkový počet by byl chybný.
+  const ordered = sortFiles(mixed, sort, descending, seed)
+    .filter((item) => !onlyPaths || onlyPaths.has(item.path));
+  const page = ordered.slice(skip, skip + limit);
   return {
     path: relative,
     items: page.map((item) => item.folder
       ? { kind: "folder" as const, ...item.folder }
       : { kind: "file" as const, ...item.file! }),
-    total: mixed.length,
+    total: ordered.length,
   };
 }
-

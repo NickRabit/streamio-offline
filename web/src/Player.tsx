@@ -125,16 +125,23 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
+    reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
     // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
     (async () => {
       const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
       const from = saved && saved.position > 30 ? saved.position : 0;
       if (from) setResumedFrom(from);
-      return api.startPlayback(stream, capabilities(), from);
-    })().then((created) => {
+      return { created: await api.startPlayback(stream, capabilities(), from), from };
+    })().then(({ created, from }) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
+      // Server nemusí pro direct play spouštět FFmpeg, takže počáteční čas nastaví
+      // přímo video element. U remuxu/transcode už je posun zahrnutý v URL relace.
+      if (from > 0 && created.mode === "direct") {
+        const move = () => { if (!disposed) { video.currentTime = from; showTime(from); } };
+        if (video.readyState >= 1) move(); else video.addEventListener("loadedmetadata", move, { once: true });
+      }
       // Vestavěné titulky si vybral server; když žádné nesedí, zkusíme preferovaný jazyk z doplňků.
       if (created.subtitleTrack === null) {
         setAddonSubtitle(addonSubtitles.find((item) => (item.lang ?? "").toLowerCase().startsWith(subtitleLanguage)) ?? null);
@@ -147,7 +154,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       video.pause(); video.removeAttribute("src"); video.load();
       const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id);
     };
-  }, [open, stream]);
+  }, [open, stream, progressKey]);
 
   /** Uvnitř vyrobené části skočíme okamžitě, jinak necháme převod začít znovu od nové pozice. */
   const seekTo = async (target: number) => {
@@ -239,6 +246,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
+    // Při přebalení se video jen kopíruje, procesor tedy příčinou není: zadrhává síť
+    // nebo disk. Snížení kvality by znamenalo skutečné překódování, které bez
+    // hardwarové akcelerace situaci ještě zhorší, tak ho v tom případě nenabízíme.
+    if (session?.mode === "remux" && !session.hardware) return;
     const target = lowerQuality(session?.quality ?? null);
     if (target !== null) setQualityHint(target);
   };

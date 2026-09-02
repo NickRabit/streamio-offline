@@ -36,7 +36,7 @@ export interface Session { username: string; mustChangePassword: boolean }
 
 export interface LibraryFile { path: string; label: string; season: number | null; episode: number | null; size: number; modified: string }
 export interface LibrarySummary {
-  key: string; kind: "movie" | "series"; title: string; fileCount: number; size: number; modified: string;
+  key: string; kind: "movie" | "series" | "collection"; title: string; fileCount: number; size: number; modified: string;
   poster?: string;
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }

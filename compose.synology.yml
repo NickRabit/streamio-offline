@@ -11,6 +11,7 @@ services:
   stremio-offline:
     environment:
       VAAPI_DEVICE: "${VAAPI_DEVICE:-/dev/dri/renderD128}"
+      RENDER_GID: "${RENDER_GID:-937}"
     devices:
       - /dev/dri:/dev/dri
     group_add:

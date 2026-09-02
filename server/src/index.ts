@@ -10,7 +10,7 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
-import { browseDirectory, describePath, entryDirectory, pageFiles, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, isPathWithin, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
@@ -58,7 +58,6 @@ queue.setResolver(async (type, videoId, tried) => {
   const addon = store.addons().find((item) => item.key === next.addonKey);
   return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
 });
-await queue.load();
 await playback.load();
 
 // Výchozí přihlášení vznikne při prvním startu; heslo se ukládá jen jako otisk.
@@ -538,10 +537,11 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
+  const onlyFavorites = req.query.favorites === "1";
+  const favoritePaths = onlyFavorites ? new Set(store.favorites()) : undefined;
   void sweepArtwork();
   const result = await browseDirectory(DOWNLOAD_DIR, relative, String(req.query.query ?? ""),
-    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""));
-  // Náhledy chybějících souborů se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
+    Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths);
   // Náhledy chybějících položek se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
   const items = await Promise.all(result.items.map(async (item) => {
     if (item.kind === "folder") {
@@ -558,10 +558,8 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
       progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
     };
   }));
-  const onlyFavorites = req.query.favorites === "1";
   const marked = withFavorites(items);
-  const visible = onlyFavorites ? marked.filter((item) => item.favorite) : marked;
-  res.json({ ...result, items: visible, total: onlyFavorites ? visible.length : result.total, pending: visible.some((item) => !item.poster) });
+  res.json({ ...result, items: marked, pending: marked.some((item) => !item.poster) });
 }));
 
 // Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
@@ -575,7 +573,12 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
   await rm(dataArtworkFile(relative), { force: true });
   await rm(dataArtworkFile(`dir:${relative}`), { force: true });
   await store.update((state) => {
-    state.favorites = (state.favorites ?? []).filter((item) => item !== relative && !item.startsWith(`${relative}${path.sep}`));
+    state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, relative));
+    state.libraryMeta = Object.fromEntries(Object.entries(state.libraryMeta ?? {}).filter(([key]) => !isPathWithin(key, relative)));
+    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, value]) => {
+      const itemPath = key.startsWith("file:") ? key.slice(5) : value.path;
+      return !itemPath || !isPathWithin(itemPath, relative);
+    }));
   });
   libraryCache = undefined;
   log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory() });
@@ -597,10 +600,17 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
   if (target !== source && await fileExists(target)) throw new Error("Soubor s tímto jménem už existuje.");
 
   await rename(source, target);
-  // Oblíbené se odkazují cestou, takže se musí přepsat i ony a jejich potomci.
+  // Všechny stavové vazby používají relativní cestu; při přesunu musí zůstat konzistentní.
   await store.update((state) => {
-    state.favorites = (state.favorites ?? []).map((item) =>
-      item === relative || item.startsWith(`${relative}${path.sep}`) ? nextRelative + item.slice(relative.length) : item);
+    state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
+    state.libraryMeta = Object.fromEntries(Object.entries(state.libraryMeta ?? {})
+      .map(([key, value]) => [remapPath(key, relative, nextRelative), value]));
+    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
+      const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
+      const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
+      const nextPath = value.path ? remapPath(value.path, relative, nextRelative) : value.path;
+      return [nextKey, { ...value, path: nextPath }];
+    }));
   });
   libraryCache = undefined;
   log("INFO", "Přejmenováno v knihovně", { z: relative, na: nextRelative });
@@ -655,6 +665,20 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
     state.libraryMeta = { ...state.libraryMeta, [key]: { type: media.metaType ?? (media.kind === "episode" ? "series" : "movie"), id: media.id! } };
   });
 };
+
+// Dokončení zneplatní sken okamžitě. U líných úloh zde poprvé známe cílovou cestu,
+// takže teprve teď lze uložit vazbu na katalog a plakát.
+queue.onCompleted = async (job) => {
+  libraryCache = undefined;
+  if (!job.source || !job.target || !job.media) return;
+  const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
+  const settings = addon?.downloadSettings ?? defaultDownloadSettings();
+  const targetSettings = job.media.kind === "episode" ? settings.series : settings.movie;
+  await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
+  saveCatalogPoster(titleKey(job.target, job.media, targetSettings.layout === "flat"), job.media.poster);
+};
+await queue.load();
+
 app.post("/api/library/match", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "");
   const id = String(req.body.id ?? "");
@@ -693,6 +717,10 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
 app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const title = String(req.body.title ?? "").trim() || "Seriál";
   const type = String(req.body.type ?? "series");
+  const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
+  const parentId = String(parent.id ?? "").trim() || undefined;
+  const poster = String(parent.poster ?? "").trim() || undefined;
+  const metaType = String(parent.metaType ?? type).trim() || type;
   const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
   if (!episodes.length) throw new Error("Chybí seznam epizod.");
   if (episodes.length > 500) throw new Error("Najednou lze přidat nejvýše 500 epizod.");
@@ -704,7 +732,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const number = episode.episode == null ? undefined : Number(episode.episode);
     const episodeTitle = episode.title ? String(episode.title) : undefined;
     const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Díl ${number ?? "?"}`)}`;
-    const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle };
+    const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
     const job = await queue.addPending(jobTitle, { type, videoId }, media);
     if (job) added += 1; else skipped += 1;
   }

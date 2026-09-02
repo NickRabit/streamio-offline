@@ -153,7 +153,10 @@ export function App() {
   };
   const refreshBrowse = async (limit: number) => {
     try {
-      const page = await api.browse({ path: browsePath, query: browseQuery, limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current });
+      const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
+      const page = browsePath === ":favorites"
+        ? await api.favorites(options)
+        : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites });
       setBrowse(page);
     } catch { /* obnovení náhledů není kritické */ }
   };
@@ -200,7 +203,7 @@ export function App() {
     const nactenych = browse.items.length;
     const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
     return () => clearTimeout(timer);
-  }, [view, browse?.pending, browsePath]);
+  }, [view, browse?.pending, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
 
   /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
   const playLocal = (title: string, path: string, poster?: string) => {
@@ -424,7 +427,9 @@ export function App() {
       : `všech ${episodes.length} epizod seriálu`;
     if (!window.confirm(`Přidat ${label} do fronty? Zdroj se pro každou epizodu vybere automaticky až při stahování.`)) return;
     try {
-      const result = await api.downloadBulk(selected.name, selected.type || currentCatalog?.type || "series", episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })));
+      const metaType = selected.type || currentCatalog?.type || "series";
+      const result = await api.downloadBulk(selected.name, metaType, episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })),
+        { id: selected.id, metaType, poster: selected.poster });
       notify(`Do fronty přidáno ${result.added} epizod${result.skipped ? `, ${result.skipped} přeskočeno (už ve frontě)` : ""}.`);
       await loadDownloads();
     } catch (e) { fail(e); }

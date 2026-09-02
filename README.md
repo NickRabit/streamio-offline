@@ -76,8 +76,13 @@ PGID=100
 ```
 
 4. V **Container Manageru → Projekt → Vytvořit** vyberte tu složku a jako zdroj
-   `docker-compose.yml` zvolte `compose.yml`. Pro hardwarovou akceleraci přidejte
-   i `compose.synology.yml`.
+   `docker-compose.yml` zvolte `compose.yml`.
+
+   **Container Manager umí jen jeden compose soubor**, takže se v něm override
+   `compose.synology.yml` neuplatní. Chcete-li hardwarovou akceleraci, odkomentujte
+   v `compose.yml` blok `devices` a do `.env` přidejte `VAAPI_DEVICE=/dev/dri/renderD128`.
+   Že se to povedlo, poznáte v logu: místo `VAAPI_DEVICE není dostupné` se objeví
+   `VAAPI je k dispozici`.
 5. Po prvním startu otevřete v Container Manageru **Terminál** kontejneru a
    zjistěte, komu složka patří:
 

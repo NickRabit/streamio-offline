@@ -22,8 +22,18 @@ services:
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
       FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-8}"
       VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
-    # Hardwarový převod na Synology s Intel iGPU (QuickSync): přidejte override
-    # soubor compose.synology.yml, viz komentář v něm. Tady nic upravovat netřeba.
+      # Skupina vlastnící render node; zjistíte v terminálu kontejneru: ls -n /dev/dri
+    # Hardwarový převod na Synology s Intel iGPU (QuickSync).
+    #
+    # Z příkazové řádky stačí přidat override:
+    #   docker compose -f compose.yml -f compose.synology.yml up -d --build
+    #
+    # Container Manager v DSM ale umí jen JEDEN compose soubor, takže tam místo
+    # override odkomentujte tyhle tři řádky a v .env nastavte
+    # VAAPI_DEVICE=/dev/dri/renderD128
+    #
+    # devices:
+    #   - /dev/dri:/dev/dri
     # Restart politika má smysl jen když je poznat, že server žije.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

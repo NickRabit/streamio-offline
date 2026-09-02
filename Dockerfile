@@ -13,7 +13,7 @@ ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads
 WORKDIR /app
 ARG TARGETARCH
 # Ovladače Intel QuickSync existují jen pro amd64; na arm64 se image staví bez nich.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo gosu \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux \
     && if [ "$TARGETARCH" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./

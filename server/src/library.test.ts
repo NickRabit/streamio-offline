@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { test } from "node:test";
-import { buildLibrary, isVideo, pageFiles, parseEpisode, parseSeason, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, isPathWithin, isVideo, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -82,6 +85,13 @@ test("mimo adresář se stahováním se cesta nedostane", () => {
   assert.equal(resolveInside(root, "Film/../../secret"), undefined);
   // Adresář, jehož jméno začíná stejně, není totéž co podadresář.
   assert.equal(resolveInside("/downloads", "../downloads-jine/x.mkv"), undefined);
+});
+
+test("přejmenování cesty zachová potomky a nesáhne na podobný název", () => {
+  assert.equal(remapPath("Serial/01 serie/01.mkv", "Serial", "Novy serial"), "Novy serial/01 serie/01.mkv");
+  assert.equal(remapPath("Serial 2/01.mkv", "Serial", "Novy serial"), "Serial 2/01.mkv");
+  assert.equal(isPathWithin("Serial/01 serie/01.mkv", "Serial"), true);
+  assert.equal(isPathWithin("Serial 2/01.mkv", "Serial"), false);
 });
 
 test("nevideo soubory se ignorují", () => {
@@ -167,4 +177,19 @@ test("řazení platí i na složky, ne jen na soubory", () => {
   ];
   assert.deepEqual(sortFiles(folders, "size", true).map((f) => f.label), ["Alfa", "Beta"]);
   assert.deepEqual(sortFiles(folders, "added", true).map((f) => f.label), ["Beta", "Alfa"]);
+});
+
+test("oblíbené se filtrují před stránkováním", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-library-"));
+  try {
+    await mkdir(path.join(root, "kolekce"));
+    await Promise.all(Array.from({ length: 80 }, (_, index) =>
+      writeFile(path.join(root, "kolekce", `video-${String(index).padStart(2, "0")}.mp4`), "")));
+    const wanted = path.join("kolekce", "video-70.mp4");
+    const result = await browseDirectory(root, "kolekce", "", 0, 60, "name", false, "", new Set([wanted]));
+    assert.equal(result.total, 1);
+    assert.deepEqual(result.items.map((item) => item.path), [wanted]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

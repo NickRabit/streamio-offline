@@ -15,12 +15,18 @@ if [ "$(id -u)" = "0" ]; then
     chown -R "$PUID:$PGID" /downloads 2>/dev/null || true
   fi
 
-  if ! gosu "$PUID:$PGID" test -w /downloads 2>/dev/null; then
+  CHECK_GROUPS="$PGID"
+  if [ -n "${RENDER_GID:-}" ] && [ "$RENDER_GID" != "$PGID" ]; then
+    CHECK_GROUPS="$PGID,$RENDER_GID"
+  fi
+  if ! setpriv --reuid="$PUID" --regid="$PGID" --groups="$CHECK_GROUPS" -- test -w /downloads 2>/dev/null; then
     echo "VAROVÁNÍ: uživatel $PUID:$PGID nemá právo zápisu do /downloads."
     echo "          Nastavte PUID a PGID podle vlastníka složky, nebo spusťte s FIX_PERMISSIONS=1."
   fi
 
-  exec gosu "$PUID:$PGID" "$@"
+  # gosu při přepnutí uživatele zahodí group_add z Docker Compose. Render skupinu
+  # proto předáme setpriv výslovně, jinak by /dev/dri na Synology nebylo přístupné.
+  exec setpriv --reuid="$PUID" --regid="$PGID" --groups="$CHECK_GROUPS" -- "$@"
 fi
 
 exec "$@"
