@@ -25,7 +25,7 @@ const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
 await initLogger(); log("INFO", "Server startuje", { version: "0.3.0" });
-const queue = new DownloadQueue(() => store.settings().concurrentDownloads); const playback = new PlaybackManager();
+const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
 if (!store.defaultsInstalled()) {
   const defaults = [
     { url: "https://v3-cinemeta.strem.io/manifest.json", role: "catalog" as const },
@@ -754,6 +754,7 @@ app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; cha
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
+    if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
     if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
     if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);

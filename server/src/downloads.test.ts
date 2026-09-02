@@ -44,7 +44,7 @@ test("po výpadku a rozjetém přenosu se rozpočet pokusů vrátí", async () =
   const { server, port, drops } = await flakyServer();
   try {
     const data = path.join(directory, "data"); const downloads = path.join(directory, "downloads");
-    const manager = new DownloadQueue(() => 1, data, downloads);
+    const manager = new DownloadQueue(() => 1, () => 1, data, downloads);
     await manager.load();
     await manager.add("Pokus", { url: `http://127.0.0.1:${port}/video.mp4` });
 
@@ -62,4 +62,47 @@ test("po výpadku a rozjetém přenosu se rozpočet pokusů vrátí", async () =
     server.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+/** Server, který měří, kolik přenosů z něj běželo současně. */
+const countingServer = (bytes = 2 * MB) => new Promise<{ server: Server; port: number; peak: () => number }>((resolve) => {
+  let inflight = 0; let peak = 0;
+  const server = createServer(async (_req, res) => {
+    inflight += 1; peak = Math.max(peak, inflight);
+    res.writeHead(200, { "content-length": String(bytes), "content-type": "video/mp4" });
+    await new Promise((done) => setTimeout(done, 300));
+    await send(res, bytes);
+    res.end();
+    inflight -= 1;
+  });
+  server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port, peak: () => peak }));
+});
+
+const runThree = async (perProvider: number) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
+  const { server, port, peak } = await countingServer();
+  try {
+    const queue = new DownloadQueue(() => 4, () => perProvider, path.join(directory, "data"), path.join(directory, "downloads"));
+    await queue.load();
+    for (const name of ["Prvni", "Druhy", "Treti"]) await queue.add(name, { url: `http://127.0.0.1:${port}/${name}.mp4` });
+    const deadline = Date.now() + 30_000;
+    while (queue.list().some((job) => job.status !== "completed" && job.status !== "failed") && Date.now() < deadline) {
+      await new Promise((done) => setTimeout(done, 25));
+    }
+    assert.deepEqual(queue.list().map((job) => job.status), ["completed", "completed", "completed"]);
+    return peak();
+  } finally {
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+};
+
+test("z jednoho poskytovatele běží jen povolený počet přenosů", async () => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  assert.equal(await runThree(1), 1, "při jedničce se přenosy z jednoho hosta nesmí potkat");
+});
+
+test("vyšší limit na poskytovatele přenosy zase pustí souběžně", async () => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  assert.equal(await runThree(2), 2, "při dvojce mají běžet právě dva najednou");
 });

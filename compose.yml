@@ -20,7 +20,7 @@ services:
       FFMPEG_PRESET: "${FFMPEG_PRESET:-veryfast}"
       FFMPEG_CRF: "${FFMPEG_CRF:-23}"
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
-      FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-8}"
+      FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-3}"
       VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
       # Skupina vlastnící render node. Bez ní by proces po přepnutí na PUID/PGID
       # na /dev/dri nedosáhl; zjistíte ji v terminálu kontejneru: ls -n /dev/dri
@@ -37,6 +37,10 @@ services:
     #
     # devices:
     #   - /dev/dri:/dev/dri
+    # Softwarový převod si vezme všechna jádra a DSM pak nereaguje. Na slabším NAS
+    # odkomentujte a nechte jedno jádro systému (např. 3 ze 4).
+    #
+    # cpus: "3.0"
     # Restart politika má smysl jen když je poznat, že server žije.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]

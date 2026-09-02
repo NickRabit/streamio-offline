@@ -22,7 +22,7 @@ export class DownloadQueue {
   private readonly stateFile: string; private readonly downloadDir: string;
   /** Zavolá se po úspěšném dokončení, aby knihovna mohla rovnou vyrobit náhled. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
-  constructor(private concurrency: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
+  constructor(private concurrency: () => number = () => 1, private perProvider: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
   /** Výběr zdroje pro líné úlohy si drží index.ts, protože potřebuje doplňky a nastavení. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   async load() { await mkdir(path.dirname(this.stateFile), { recursive: true }); await mkdir(this.downloadDir, { recursive: true }); try { this.jobs = JSON.parse(await readFile(this.stateFile, "utf8")); } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e; } for (const job of this.jobs) { if (job.status === "downloading") job.status = "queued"; job.updatedAt ??= job.createdAt; job.speed = 0; } await this.save(); this.pump(); }
@@ -80,7 +80,33 @@ export class DownloadQueue {
     return this.saveChain;
   }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
-  private pump() { if (this.pumpScheduled) return; this.pumpScheduled = true; queueMicrotask(() => { this.pumpScheduled = false; const limit = Math.max(1, Math.min(8, this.concurrency())); while (this.active.size < limit) { const job = this.jobs.find((item) => item.status === "queued" && !this.active.has(item.id)); if (!job) break; void this.download(job); } }); }
+  /** Poskytovatel podle adresy zdroje. Dokud zdroj vybraný není, sdílí všechny úlohy
+   * jedno vědro -- hromadně přidaný seriál se tím sám seřadí za sebe místo náporu. */
+  private provider(job: DownloadJob) { const url = job.stream?.url; if (!url) return "?"; try { return new URL(url).hostname; } catch { return "?"; } }
+
+  private busy(provider: string, except?: string) {
+    let count = 0;
+    for (const job of this.jobs) if (this.active.has(job.id) && job.id !== except && this.provider(job) === provider) count += 1;
+    return count;
+  }
+
+  private pump() {
+    if (this.pumpScheduled) return;
+    this.pumpScheduled = true;
+    queueMicrotask(() => {
+      this.pumpScheduled = false;
+      const limit = Math.max(1, Math.min(8, this.concurrency()));
+      const perProvider = Math.max(1, Math.min(8, this.perProvider()));
+      const taken = new Map<string, number>();
+      for (const job of this.jobs) if (this.active.has(job.id)) { const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1); }
+      while (this.active.size < limit) {
+        const job = this.jobs.find((item) => item.status === "queued" && !this.active.has(item.id) && (taken.get(this.provider(item)) ?? 0) < perProvider);
+        if (!job) break;
+        const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
+        void this.download(job);
+      }
+    });
+  }
 
   /** Doplňky se na streamy ptáme až tady, těsně před stahováním jedné konkrétní epizody.
    *  Hromadné přidání celé série tak nevyvolá lavinu dotazů najednou. */
@@ -110,6 +136,13 @@ export class DownloadQueue {
     let stalled = false;
     try {
       if (!job.stream) await this.resolve(job);
+      // Poskytovatel se dozví až po výběru zdroje. Když je právě vytížený, úloha se vrátí
+      // do fronty; příští pump ji už zařadí do správného vědra a nesáhne po ní dřív, než se uvolní.
+      if (this.busy(this.provider(job), job.id) >= Math.max(1, Math.min(8, this.perProvider()))) {
+        job.status = "queued";
+        log("INFO", "Poskytovatel je vytížený, úloha počká", { id: job.id, title: job.title, provider: this.provider(job) });
+        return;
+      }
       const stream = job.stream!;
       if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
       const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);

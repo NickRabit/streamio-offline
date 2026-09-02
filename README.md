@@ -159,9 +159,19 @@ GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjist
 
 Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici` a v přehrávači podle štítku `VAAPI`. Dokud tam svítí `VAAPI_DEVICE není dostupné`, akcelerace vypnutá je. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image. Bez akcelerace jede přímé přehrávání i přebalení naplno, softwarové překódování 1080p ale Celeron v reálném čase nestíhá.
 
+### Když se NAS zadrhává
+
+Přehrávání velkého souboru umí Synology na několik minut položit. Stojí za tím dvě věci a obě se dají srovnat.
+
+**Zápisový nával.** Při přebalení běží FFmpeg rychleji než reálný čas, aby byl posun po časové ose svižný, a segmenty sype do `/data`. Při původní osminásobné rychlosti to bylo přes 300 MB za dvacet sekund; slabší NAS se zadusí protlačováním špinavých stránek na disk. Výchozí hodnota je proto `FFMPEG_READRATE_REMUX=3` — posun zůstává stejně rychlý, protože o něm rozhoduje počáteční nával, ale zápis klesne na třetinu. Když to nestačí, snižte ji na `2`. Segmenty relace se uklidí po jejím konci a nečinná relace se ukončí po pěti minutách.
+
+**Vytížený procesor.** Bez akcelerace vezme softwarový převod všechna jádra a DSM přestane reagovat. V `compose.yml` je proto připravený zakomentovaný limit `cpus`, kterým jedno jádro necháte systému. Trvalejší řešení je zprovoznit QuickSync, viz [Hardwarová akcelerace](#hardwarová-akcelerace) — pak se skoro nepřekódovává.
+
 ## Fronta stahování
 
 Fronta přežije restart, umí navázat na `.part` soubor pomocí HTTP Range a podporuje pozastavení, pokračování, opakování chyby, změnu pořadí, odstranění a 1–8 souběžných stahování. Dokončený soubor se při odstranění z historie nemaže.
+
+V **Nastavení** se volí, kolik souborů se stahuje najednou dohromady a kolik z jednoho zdroje. Poskytovatelé obvykle omezují počet souběžných spojení a přebytečné přenosy utnou nebo je nechají hladovět, dokud je nesejme hlídač nečinnosti; jeden přenos na zdroj je proto nejbezpečnější. Přerušené spojení fronta sama naváže, a jakmile se přenos zase rozjede, vrátí se i rozpočet pokusů.
 
 V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť nastavit ukládání filmů a seriálů. Hostitelský adresář určuje `DOWNLOAD_PATH`; v kartě doplňku se zadává jen relativní podsložka uvnitř něj. Prázdná podsložka znamená přímo základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.
 
