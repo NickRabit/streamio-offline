@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -12,6 +12,30 @@ type View = "catalog" | "library" | "downloads" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
 const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || (item.infoHash ? "Torrent" : "Stream");
+type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
+
+const galleryFor = (item: Meta | null): GalleryImage[] => {
+  if (!item) return [];
+  const images: GalleryImage[] = [];
+  const seen = new Set<string>();
+  const add = (value: unknown, label: string, shape: GalleryImage["shape"]) => {
+    if (typeof value !== "string" || !value.trim() || seen.has(value)) return;
+    seen.add(value); images.push({ url: value, label, shape });
+  };
+  add(item.poster, "Poster", "poster");
+  add(item.background, "Pozadí", "wide");
+  add(item.logo, "Logo", "wide");
+  for (const key of ["images", "screenshots"]) {
+    const values = item[key];
+    if (!Array.isArray(values)) continue;
+    for (const [index, value] of values.entries()) {
+      const candidate = typeof value === "object" && value ? value as Record<string, unknown> : undefined;
+      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, `Náhled ${index + 1}`, "wide");
+    }
+  }
+  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || "Náhled epizody", "wide");
+  return images.slice(0, 18);
+};
 
 export function App() {
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
@@ -19,6 +43,7 @@ export function App() {
     try { return localStorage.getItem("sidebar-collapsed") === "1"; } catch { return false; }
   });
   const [catalogReset, setCatalogReset] = useState(0);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
@@ -113,6 +138,7 @@ export function App() {
   const seasons = [...new Set((selected?.videos ?? []).map((video) => video.season).filter((value): value is number => typeof value === "number"))].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
   const visibleEpisodes = (selected?.videos ?? []).filter((video) => seasons.length <= 1 || activeSeason === null || video.season === activeSeason);
+  const galleryImages = useMemo(() => galleryFor(selected), [selected]);
   const notify = (text: string) => { setMessage(text); setTimeout(() => setMessage(""), 3200); };
   const fail = (value: unknown) => {
     if (value instanceof ApiError && value.status === 401) { setSession(null); return; }
@@ -125,6 +151,7 @@ export function App() {
     setSearch(""); setSubmittedQuery(""); setSearchAddon(""); setTypeFilter(""); setGenre(""); setSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
     setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
+    setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
@@ -409,7 +436,7 @@ export function App() {
     finally { if (!stale()) setBusy(false); }
   };
   const openMeta = async (item: Meta) => {
-    setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false);
+    setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
     try { detail = { ...item, ...await api.meta(type, item.id) }; setSelected(detail); } catch { /* catalog item is still useful */ }
@@ -524,9 +551,9 @@ export function App() {
               text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
             {busy && <div className="loading">Načítám…</div>}
           </section><section className={`panel detail-panel ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
-            <div className={`hero ${selected.videos?.length ? "series-hero" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
+            <div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
               <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div></div>
+                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title="Zvětšit poster a zobrazit náhledy"><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? `${galleryImages.length} náhledů` : "Zvětšit"}</span></button>}</div>
             {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list">{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
             {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{visibleStreams.length === streams.length ? streams.length : `${visibleStreams.length} z ${streams.length}`}{pendingSources > 0 ? ` · načítám z ${pendingSources} ${pendingSources === 1 ? "doplňku" : "doplňků"}…` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
@@ -662,11 +689,32 @@ export function App() {
       favorite={localStream?.url ? libraryFavorites.includes(localStream.url.slice(7)) : inWatchlist(selected?.type, selected?.id)}
       onToggleFavorite={localStream?.url || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+    {galleryIndex !== null && galleryImages[galleryIndex] && <MediaGallery images={galleryImages} index={galleryIndex} onIndex={setGalleryIndex} onClose={() => setGalleryIndex(null)}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
 }
 
 function Nav({ icon, label, active, badge, onClick }: { icon: React.ReactNode; label: string; active: boolean; badge?: number; onClick: () => void }) { return <button className={active ? "active" : ""} title={label} aria-label={label} onClick={onClick}>{icon}<span>{label}</span>{badge != null && <b>{badge}</b>}</button>; }
+function MediaGallery({ images, index, onIndex, onClose }: { images: GalleryImage[]; index: number; onIndex: (index: number) => void; onClose: () => void }) {
+  const current = images[index];
+  const move = (step: number) => onIndex((index + step + images.length) % images.length);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+      else if (event.key === "ArrowLeft" && images.length > 1) move(-1);
+      else if (event.key === "ArrowRight" && images.length > 1) move(1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [index, images.length]);
+  return <div className="gallery-overlay" role="dialog" aria-modal="true" aria-label="Galerie obrázků" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <button className="gallery-close icon-button" aria-label="Zavřít galerii" onClick={onClose}><X/></button>
+    {images.length > 1 && <button className="gallery-arrow previous" aria-label="Předchozí obrázek" onClick={() => move(-1)}><ChevronLeft/></button>}
+    <figure><img className={current.shape} src={current.url} alt={current.label}/><figcaption>{current.label} · {index + 1} z {images.length}</figcaption></figure>
+    {images.length > 1 && <button className="gallery-arrow next" aria-label="Další obrázek" onClick={() => move(1)}><ChevronRight/></button>}
+    {images.length > 1 && <div className="gallery-thumbnails">{images.map((image, itemIndex) => <button key={image.url} className={itemIndex === index ? "selected" : ""} aria-label={`Zobrazit: ${image.label}`} onClick={() => onIndex(itemIndex)}><img src={image.url} alt="" loading="lazy"/></button>)}</div>}
+  </div>;
+}
 function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { return <div className="heading"><small>{eyebrow}</small><h2>{title}</h2></div>; }
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
