@@ -764,7 +764,7 @@ app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
-app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.days) || 30)));
+app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {

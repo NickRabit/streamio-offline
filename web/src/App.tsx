@@ -504,9 +504,9 @@ export function App() {
       <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => setView("catalog")}/>
       <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => setView("library")}/>
       <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => setView("downloads")}/>
-      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => setView("stats")}/>
       <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => setView("addons")}/>
       <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => setView("settings")}/>
+      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => setView("stats")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"} aria-label={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}</span></button><div className="addon-status"><small>AKTIVNÍ DOPLŇKY</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>katalogy a zdroje</span></div></div></aside>
     <main className={view === "catalog" ? "view-catalog" : ""}>
       {view === "catalog" && <section className="catalog-view"><Heading eyebrow="KATALOG" title="Co chcete sledovat?"/>

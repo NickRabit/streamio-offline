@@ -21,7 +21,7 @@ export const api = {
   moveAddon: (key: string, direction: -1 | 1) => request<void>(`/api/addons/${key}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   exportAddon: (key: string) => request<Record<string, unknown>>(`/api/addons/${key}/export`),
   deleteAddon: (key: string) => request<void>(`/api/addons/${key}`, { method: "DELETE" }),
-  stats: (days: number) => request<StatsSummary>(`/api/stats?days=${days}`),
+  stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
   updateAddon: (key: string, patch: { enabled?: boolean; url?: string; role?: string; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),
