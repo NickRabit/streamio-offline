@@ -10,7 +10,7 @@ import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
-import { browseDirectory, entryDirectory, pageFiles, resolveInside, scanLibrary, summarize } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, pageFiles, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, DEFAULT_PASSWORD, DEFAULT_USERNAME, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
@@ -423,6 +423,46 @@ async function sweepArtwork() {
   if (removed) log("INFO", "Osiřelé náhledy smazány", { removed });
 }
 
+// Oblíbené jsou jen příznak u cesty. Nic se nikam nepřesouvá.
+const withFavorites = <T extends { path: string }>(items: T[]) => {
+  const favorites = new Set(store.favorites());
+  return items.map((item) => ({ ...item, favorite: favorites.has(item.path) }));
+};
+
+app.post("/api/library/favorite", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "").trim();
+  if (!relative || !resolveInside(DOWNLOAD_DIR, relative)) throw new Error("Neplatná cesta.");
+  const wanted = Boolean(req.body.favorite);
+  await store.update((state) => {
+    const current = new Set(state.favorites ?? []);
+    if (wanted) current.add(relative); else current.delete(relative);
+    state.favorites = [...current];
+  });
+  res.json({ path: relative, favorite: wanted });
+}));
+
+app.get("/api/library/favorites", asyncRoute(async (req, res) => {
+  const sorts = new Set(["name", "added", "size", "random"]);
+  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
+  const described = await Promise.all(store.favorites().map((relative) => describePath(DOWNLOAD_DIR, relative)));
+  // Cesty, které mezitím zmizely, se vynechají, ale ze seznamu je nemažeme:
+  // disk může být dočasně nedostupný a přijít o oblíbené kvůli tomu by bylo horší.
+  const present = described.filter(Boolean) as NonNullable<typeof described[number]>[];
+  const mixed = present.map((item) => ({
+    ...item, label: item.kind === "folder" ? item.name : item.label,
+  }));
+  const ordered = sortFiles(mixed, sort, req.query.order === "desc", String(req.query.seed ?? ""));
+  const skip = Math.max(0, Number(req.query.skip) || 0);
+  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+  const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
+    const art = item.kind === "folder" ? await locateFolderArtwork(item.path) : await locateFileArtwork(item.path);
+    if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(item.path);
+    const poster = art ? `/api/library/thumb?${item.kind === "folder" ? "dir" : "path"}=${encodeURIComponent(item.path)}` : undefined;
+    return { ...item, favorite: true, poster };
+  }));
+  res.json({ path: ":favorites", items: page, total: ordered.length, pending: page.some((item) => !item.poster) });
+}));
+
 app.get("/api/library/browse", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "");
   const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
@@ -443,7 +483,53 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     if (!art) scheduleFileArtwork(item.path);
     return { ...item, poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined };
   }));
-  res.json({ ...result, items, pending: items.some((item) => !item.poster) });
+  const onlyFavorites = req.query.favorites === "1";
+  const marked = withFavorites(items);
+  const visible = onlyFavorites ? marked.filter((item) => item.favorite) : marked;
+  res.json({ ...result, items: visible, total: onlyFavorites ? visible.length : result.total, pending: visible.some((item) => !item.poster) });
+}));
+
+// Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
+app.delete("/api/library/item", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  const info = await stat(target).catch(() => undefined);
+  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+  await rm(target, { recursive: true, force: true });
+  await rm(dataArtworkFile(relative), { force: true });
+  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+  await store.update((state) => {
+    state.favorites = (state.favorites ?? []).filter((item) => item !== relative && !item.startsWith(`${relative}${path.sep}`));
+  });
+  libraryCache = undefined;
+  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory() });
+  res.status(204).end();
+}));
+
+app.post("/api/library/rename", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "").trim();
+  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  const info = await stat(source).catch(() => undefined);
+  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+
+  const extension = info.isDirectory() ? "" : path.extname(relative);
+  const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
+  const nextRelative = path.join(path.dirname(relative), `${wanted}${extension}`);
+  const target = resolveInside(DOWNLOAD_DIR, nextRelative);
+  if (!target) throw new Error("Neplatné jméno.");
+  if (target !== source && await fileExists(target)) throw new Error("Soubor s tímto jménem už existuje.");
+
+  await rename(source, target);
+  // Oblíbené se odkazují cestou, takže se musí přepsat i ony a jejich potomci.
+  await store.update((state) => {
+    state.favorites = (state.favorites ?? []).map((item) =>
+      item === relative || item.startsWith(`${relative}${path.sep}`) ? nextRelative + item.slice(relative.length) : item);
+  });
+  libraryCache = undefined;
+  log("INFO", "Přejmenováno v knihovně", { z: relative, na: nextRelative });
+  res.json({ path: nextRelative });
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {

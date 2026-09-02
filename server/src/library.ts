@@ -163,10 +163,36 @@ export function sortFiles<T extends { label: string; size: number; modified: str
   return list;
 }
 
+/** Popíše jednu cestu jako položku seznamu. Používá se pro virtuální složku oblíbených,
+ *  kde položky pocházejí z různých míst stromu. */
+export async function describePath(root: string, relative: string): Promise<BrowseItem | undefined> {
+  const target = resolveInside(root, relative);
+  if (!target) return undefined;
+  const info = await stat(target).catch(() => undefined);
+  if (!info) return undefined;
+  const name = path.basename(relative);
+  if (info.isDirectory()) {
+    const inside = await walk(root, relative);
+    if (!inside.length) return undefined;
+    return {
+      kind: "folder", path: relative, name, fileCount: inside.length,
+      size: inside.reduce((sum, file) => sum + file.size, 0),
+      modified: inside.map((file) => file.modified).sort().at(-1) ?? info.mtime.toISOString(),
+    };
+  }
+  if (!isVideo(name)) return undefined;
+  const { episode, title } = parseEpisode(name);
+  return {
+    kind: "file", path: relative, label: title || name.replace(/\.[^.]+$/, ""),
+    season: parseSeason(path.basename(path.dirname(relative))), episode,
+    size: info.size, modified: info.mtime.toISOString(),
+  };
+}
+
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; modified: string }
 export type BrowseItem =
-  | ({ kind: "folder" } & BrowseFolder)
-  | ({ kind: "file" } & LibraryFile);
+  | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
+  | ({ kind: "file"; favorite?: boolean } & LibraryFile);
 /** Jeden seřazený seznam. Dvě pole by při vykreslení pořadí zase rozdělila na skupiny. */
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number }
 

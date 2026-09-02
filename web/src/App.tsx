@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, Pencil, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, FolderOpen, LayoutGrid, List, MoreVertical, Pencil, Star, FileJson, Link2, LogOut, ChevronDown, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -32,11 +32,16 @@ export function App() {
   const [browseBusy, setBrowseBusy] = useState(false);
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const [onlyFavorites, setOnlyFavorites] = useState(false);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
     if (!confirm(`Opravdu smazat ${folder ? "složku" : "soubor"} „${label}“?${folder ? " Smaže se i vše uvnitř." : ""} Tohle nejde vrátit.`)) return;
     try { await api.deleteLibraryItem(itemPath); notify("Smazáno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+  };
+  const toggleFavorite = async (itemPath: string, favorite: boolean) => {
+    setMenuFor(null);
+    try { await api.setFavorite(itemPath, favorite); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
   const renameItem = async (itemPath: string, label: string) => {
     setMenuFor(null);
@@ -92,7 +97,11 @@ export function App() {
   const loadBrowse = async (target = browsePath, skip = 0) => {
     setBrowseBusy(true);
     try {
-      const page = await api.browse({ path: target, query: browseQuery, skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current });
+      const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
+      // Virtuální složka sbírá oblíbené z celého stromu, běžné procházení jen filtruje aktuální úroveň.
+      const page = target === ":favorites"
+        ? await api.favorites(options)
+        : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
     } catch (error) { fail(error); }
     finally { setBrowseBusy(false); }
@@ -104,7 +113,7 @@ export function App() {
     } catch { /* obnovení náhledů není kritické */ }
   };
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
-    [ready, view, browsePath, browseQuery, browseSort, browseDesc]);
+    [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
   // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -409,9 +418,9 @@ export function App() {
         <div className="browse-bar">
           <nav className="crumbs">
             <button onClick={() => setBrowsePath("")} disabled={!browsePath}><HardDrive/> Knihovna</button>
-            {browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
+            {(browsePath === ":favorites" ? ["Oblíbené"] : browsePath.split("/").filter(Boolean)).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
-              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(all.slice(0, index + 1).join("/"))}>{part}</button>
+              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(browsePath === ":favorites" ? "" : all.slice(0, index + 1).join("/"))}>{part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
@@ -428,6 +437,8 @@ export function App() {
             <button title={browseDesc ? "Sestupně" : "Vzestupně"} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>
+            <button className={onlyFavorites ? "active-filter" : ""} title="Jen oblíbené" disabled={browsePath === ":favorites"}
+              onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>
             <button title={browseView === "grid" ? "Zobrazit po řádcích" : "Zobrazit dlaždice"} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>
@@ -439,22 +450,27 @@ export function App() {
             : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : "Dokončená stahování se tu objeví sama."}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
+              {!browsePath && !onlyFavorites && <button className="browse-item folder favorites-tile" onClick={() => setBrowsePath(":favorites")}>
+                <span className="browse-art"><Star/></span><strong>Oblíbené</strong><small>napříč knihovnou</small>
+              </button>}
               {browse.items.map((item) => item.kind === "folder"
                 ? <button className="browse-item folder" key={item.path} onClick={() => { setBrowseQuery(""); setBrowsePath(item.path); }}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i></span>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <strong>{item.name}</strong><small>{bytes(item.size)}</small>
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
                     </span>}
                   </button>
                 : <button className="browse-item" key={item.path} onClick={() => playLocal(item.label, item.path)}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i></span>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
                     <small>{bytes(item.size)}</small>
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
                     </span>}
