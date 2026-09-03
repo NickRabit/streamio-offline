@@ -212,7 +212,9 @@ export class PlaybackManager {
       this.assertActive(session);
       url = await this.spawnAt(session, target);
     }
-    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
+    // Whether the restart ended up on the GPU is worth knowing: a transcode that says
+    // nothing looks the same in the log as one that quietly fell back to the processor.
+    log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
     return this.describe(session, url);
   }
 
