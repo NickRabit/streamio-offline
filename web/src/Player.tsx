@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Check, Download, Star, Gauge, Maximize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
+import { AudioLines, Check, Download, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -81,6 +81,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
   const [mobileLandscape, setMobileLandscape] = useState(false);
+  const [cssFullscreen, setCssFullscreen] = useState(false);
   const automaticFullscreenRef = useRef(false);
   // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
   useEffect(() => {
@@ -341,27 +342,34 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
-  /** Android umí fullscreen celé vrstvy s našimi ovladači, iOS jen nativní fullscreen videa. */
-  const enterFullscreen = async () => {
+  /** Fullscreen musí obsahovat celou naši vrstvu. iOS umí u videa jen vlastní
+   * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
+  const enterBrowserFullscreen = async () => {
     if (document.fullscreenElement) return true;
     try {
       if (overlayRef.current?.requestFullscreen) {
         await overlayRef.current.requestFullscreen();
         return true;
       }
-      const video = videoRef.current as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
-      if (video?.webkitEnterFullscreen) {
-        video.webkitEnterFullscreen();
-        return true;
-      }
     } catch { /* Bez uživatelského gesta může prohlížeč automatický fullscreen odmítnout. */ }
     return false;
+  };
+
+  const toggleFullscreen = async () => {
+    if (document.fullscreenElement === overlayRef.current) {
+      await document.exitFullscreen().catch(() => undefined);
+      return;
+    }
+    if (cssFullscreen) { setCssFullscreen(false); return; }
+    // Safari na iPhonu nepodporuje fullscreen běžného elementu. Místo přechodu
+    // do nativního video přehrávače použijeme kompaktní vrstvu přes celý viewport.
+    if (!await enterBrowserFullscreen()) setCssFullscreen(true);
   };
 
   /** Otočení telefonu na šířku maximalizuje přehrávač a, dovolí-li to prohlížeč,
    * přejde i do nativního fullscreenu. CSS varianta funguje vždy. */
   useEffect(() => {
-    if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
+    if (!open) { setMobileLandscape(false); setCssFullscreen(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
     let previous = false;
     const update = () => {
@@ -369,7 +377,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
       if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterFullscreen().then((entered) => { automaticFullscreenRef.current = entered; }), 80);
+        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => { automaticFullscreenRef.current = entered; }), 80);
       } else if (!landscape && previous && automaticFullscreenRef.current && document.fullscreenElement === overlayRef.current) {
         void document.exitFullscreen().catch(() => undefined);
         automaticFullscreenRef.current = false;
@@ -402,12 +410,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
-      else if (event.key === "f") void enterFullscreen();
+      else if (event.key === "f") void toggleFullscreen();
       else if (event.key === "Escape" && !document.fullscreenElement) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, time, duration]);
+  }, [open, time, duration, cssFullscreen]);
 
   if (!open) return null;
   const position = scrub ?? time;
@@ -416,7 +424,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}`} role="dialog" aria-modal="true">
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}`} role="dialog" aria-modal="true">
     <div className="player-head">
       <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
       <button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button>
@@ -491,7 +499,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty" aria-label="Přidat do stahovací fronty">
         {downloadState === "done" ? <><Check /> <span>Ve frontě</span></> : <><Download /> <span>{downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</span></>}
       </button>}
-      <button className="player-action fullscreen-action" onClick={() => void enterFullscreen()} title="Celá obrazovka" aria-label="Celá obrazovka"><Maximize /> <span>Celá obrazovka</span></button>
+      <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"} aria-label={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}>{cssFullscreen ? <Minimize/> : <Maximize/>} <span>{cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}</span></button>
     </div>
   </div>;
 }
