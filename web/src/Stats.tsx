@@ -19,8 +19,20 @@ const PERIODS = [
   { hours: 8760, label: "rok" },
 ];
 
-/** Barvy pro vybrané řady; víc než osm zdrojů naráz stejně nejde rozumně odlišit. */
-const COLORS = ["#ff5b38", "#42ce91", "#5b9cff", "#ffc857", "#c678dd", "#3fd0d4", "#f06a76", "#9aa7b8"];
+/** Barvy vybraných řad. Odstíny jsou ověřené proti tmavému podkladu panelu:
+ * drží pásmo světlosti, sytost i odstup pro barvosleposti, takže sousední
+ * linky nesplynou. Víc než osm zdrojů naráz stejně rozlišit nejde. */
+const COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
+
+/** Osa Y má pět dílků; hodnoty se odvozují od vrcholu, ať je vidět měřítko. */
+const TICKS = [1, 0.75, 0.5, 0.25, 0];
+
+/** Na osu X se vejde jen pár popisků, jinak se přes sebe přeloží. */
+const xTicks = (count: number) => {
+  const wanted = Math.min(6, count);
+  if (wanted < 2) return [0];
+  return Array.from({ length: wanted }, (_, index) => Math.round((index * (count - 1)) / (wanted - 1)));
+};
 
 const stamp = (at: string, step: StatsSummary["step"]) => {
   const date = new Date(at);
@@ -42,23 +54,40 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
   const peak = Math.max(1, ...(lines.length ? lines.flatMap((line) => line.points) : summary.points.map((point) => point.bytes)));
   const width = 1000, height = 200;
   const stride = summary.points.length > 1 ? width / (summary.points.length - 1) : width;
+  const marks = xTicks(summary.points.length);
 
-  return <div className="stats-chart-wrap">
-    {lines.length
-      ? <svg className="stats-lines" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Průběh vybraných zdrojů">
-          {lines.map((line) => <polyline key={line.key} fill="none" stroke={line.color} strokeWidth={2} vectorEffect="non-scaling-stroke"
-            strokeLinejoin="round" strokeLinecap="round"
-            points={line.points.map((value, index) => `${index * stride},${height - (value / peak) * (height - 6)}`).join(" ")}/>)}
-        </svg>
-      : <div className="stats-chart" role="img" aria-label={`Stahování po obdobích, nejvíc ${size(peak)}`}>
-          {summary.points.map((point) => <div key={point.at} className="stats-bar" title={`${stamp(point.at, summary.step)}: ${size(point.bytes)}, ${files(point.count)}`}>
-            <span style={{ height: `${Math.max(point.bytes ? 2 : 0, (point.bytes / peak) * 100)}%` }}/>
-          </div>)}
-        </div>}
-    <div className="stats-axis">
-      <span>{summary.points.length ? stamp(summary.points[0].at, summary.step) : ""}</span>
-      <span className="stats-peak">vrchol {size(peak)}</span>
-      <span>{summary.points.length ? stamp(summary.points[summary.points.length - 1].at, summary.step) : ""}</span>
+  return <div className="stats-plot">
+    <div className="stats-yaxis">
+      {TICKS.map((tick) => <span key={tick} style={{ bottom: `${tick * 100}%` }}>{size(peak * tick)}</span>)}
+    </div>
+
+    <div className="stats-area">
+      <div className="stats-grid" aria-hidden="true">{TICKS.map((tick) => <i key={tick} style={{ bottom: `${tick * 100}%` }}/>)}</div>
+      {lines.length
+        ? <>
+            <svg className="stats-lines" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Průběh vybraných zdrojů">
+              {lines.map((line) => <polyline key={line.key} fill="none" stroke={line.color} strokeWidth={2} vectorEffect="non-scaling-stroke"
+                strokeLinejoin="round" strokeLinecap="round"
+                points={line.points.map((value, index) => `${index * stride},${height - (value / peak) * (height - 6)}`).join(" ")}/>)}
+            </svg>
+            {/* Průhledné sloupce nad grafem nesou bublinu s hodnotami všech vybraných řad. */}
+            <div className="stats-hover">
+              {summary.points.map((point, index) => <div key={point.at}
+                title={`${stamp(point.at, summary.step)}\n${lines.map((line) => `${line.label}: ${size(line.points[index])}`).join("\n")}`}/>)}
+            </div>
+          </>
+        : <div className="stats-chart" role="img" aria-label={`Stahování po obdobích, nejvíc ${size(peak)}`}>
+            {summary.points.map((point) => <div key={point.at} className="stats-bar" title={`${stamp(point.at, summary.step)}: ${size(point.bytes)}, ${files(point.count)}`}>
+              <span style={{ height: `${Math.max(point.bytes ? 2 : 0, (point.bytes / peak) * 100)}%` }}/>
+            </div>)}
+          </div>}
+    </div>
+
+    <div className="stats-xaxis">
+      {marks.map((index, order) => <span key={index} style={{
+        left: `${summary.points.length > 1 ? (index / (summary.points.length - 1)) * 100 : 0}%`,
+        transform: order === 0 ? "none" : order === marks.length - 1 ? "translateX(-100%)" : "translateX(-50%)",
+      }}>{summary.points[index] ? stamp(summary.points[index].at, summary.step) : ""}</span>)}
     </div>
   </div>;
 }
