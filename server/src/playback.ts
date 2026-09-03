@@ -87,6 +87,8 @@ export class PlaybackManager {
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private readonly root: string;
   private vaapiDevice?: string;
+  /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
+  private vaapiScaling = true;
   /** -readrate_initial_burst existuje až od FFmpeg 6; starší verzi by volba shodila. */
   private initialBurst = false;
 
@@ -312,19 +314,33 @@ export class PlaybackManager {
       return;
     }
     try {
-      await promisify(execFile)("ffmpeg", [
-        "-hide_banner", "-loglevel", "error", "-nostdin",
-        "-init_hw_device", `vaapi=va:${device}`, "-filter_hw_device", "va",
-        "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
-        "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-",
-      ], { timeout: 30_000 });
+      await this.runVaapiProbe(device, "format=nv12,hwupload");
       this.vaapiDevice = device;
-      log("INFO", "VAAPI je k dispozici", { device });
+      // Encoding working says nothing about scaling: the video processing unit is a
+      // separate piece and DSM chips often lack it. Probing the encoder alone would
+      // let playback fail later with "the requested VAProfile is not supported".
+      this.vaapiScaling = await this.probeVaapi(device, "format=nv12,hwupload,scale_vaapi=w=128:h=72:format=nv12");
+      log("INFO", "VAAPI je k dispozici", { device, gpuScaling: this.vaapiScaling });
+      if (!this.vaapiScaling) log("INFO", "GPU neumí škálovat, zmenšení obrazu poběží na procesoru", { device });
     } catch (error) {
       const output = (error as { stderr?: string }).stderr ?? String(error);
       const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "neznámá chyba";
       log("WARN", "VAAPI nefunguje, převod poběží softwarově. Zkuste v .env nastavit LIBVA_DRIVER_NAME=iHD nebo i965; podrobnosti vypíše vainfo v terminálu kontejneru", { device, reason });
     }
+  }
+
+  private async runVaapiProbe(device: string, filters: string) {
+    await promisify(execFile)("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-init_hw_device", `vaapi=va:${device}`, "-filter_hw_device", "va",
+      "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+      "-vf", filters, "-c:v", "h264_vaapi", "-f", "null", "-",
+    ], { timeout: 30_000 });
+  }
+
+  private async probeVaapi(device: string, filters: string) {
+    try { await this.runVaapiProbe(device, filters); return true; }
+    catch { return false; }
   }
 
   /** Emby tomu říká Direct Stream: kontejner se přebalí, video se jen kopíruje. */
@@ -429,7 +445,12 @@ export class PlaybackManager {
       if (copyVideo) args.push("-noaccurate_seek");
       args.push("-ss", offset.toFixed(3));
     }
-    if (!copyVideo && hardware) args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
+    // Without a video processing unit the frames have to come back to system memory,
+    // otherwise the software scaler has nothing to work with.
+    if (!copyVideo && hardware) {
+      args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!);
+      if (this.vaapiScaling) args.push("-hwaccel_output_format", "vaapi");
+    }
     // Náskok se platí zápisem na disk: při přebalení 8x rychleji než reálný čas nasype
     // FFmpeg ~340 MB za 20 s a slabší NAS se zadusí protlačováním špinavých stránek.
     // Trojka drží posun stejně svižný (rozhoduje počáteční nával), ale zápis je třetinový.
@@ -456,8 +477,12 @@ export class PlaybackManager {
     // takže delší GOP by protahoval čekání na první segment po startu i po každém posunu.
     // min(kvalita, ih) zabrání zvětšování obrazu, když je zdroj menší než zvolená kvalita.
     else if (hardware) {
-      const scale = quality !== null ? `scale_vaapi=w=-2:h=min(${quality}\\,ih):format=nv12` : "scale_vaapi=format=nv12";
-      args.push("-vf", scale, "-c:v", "h264_vaapi");
+      const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";
+      const filters = this.vaapiScaling
+        ? (quality !== null ? `scale_vaapi=${resize}:format=nv12` : "scale_vaapi=format=nv12")
+        // Scaling on the processor is still far cheaper than encoding, so the encoder stays on the GPU.
+        : (quality !== null ? `scale=${resize},format=nv12,hwupload` : "format=nv12,hwupload");
+      args.push("-vf", filters, "-c:v", "h264_vaapi");
       if (bitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
       else args.push("-qp", crf);
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
