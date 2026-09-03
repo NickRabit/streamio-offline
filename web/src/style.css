@@ -83,3 +83,10 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 .stats-breakdown small{color:var(--muted);font-size:11px}
 .stats-empty{color:var(--muted);font-size:12px;margin:0}
 @media(max-width:700px){.stats-cards{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}.stats-page .panel{padding:13px 14px}}
+
+/* Build info in Diagnostics */
+.build-info{display:flex;flex-wrap:wrap;gap:8px 22px;margin:10px 0 0}
+.build-info div{display:flex;flex-direction:column;gap:2px;min-width:0}
+.build-info dt{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.4px}
+.build-info dd{margin:0;font-size:13px}
+.build-info code{font-size:12px}

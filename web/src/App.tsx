@@ -8,7 +8,7 @@ import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 /** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
  * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
@@ -181,6 +181,8 @@ export function App() {
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
   const [setupNeeded, setSetupNeeded] = useState(false);
+  const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
+  useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
   useEffect(() => {
     api.me()
       .then((status) => { if ("setup" in status) { setSetupNeeded(true); setSession(null); } else setSession(status); })
@@ -702,7 +704,7 @@ export function App() {
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
       {view === "stats" && <StatsPanel onError={fail}/>}
-      {view === "settings" && <SettingsPage settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
+      {view === "settings" && <SettingsPage build={buildInfo} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
     </main>
     <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
       progressKey={localStream?.url ? `file:${localStream.url.slice(7)}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
@@ -740,7 +742,7 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
 
-function SettingsPage({ settings, languages, session, onSession, onSave, onNotify, onError }: { settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ build, settings, languages, session, onSession, onSave, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
   const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
@@ -770,7 +772,7 @@ function SettingsPage({ settings, languages, session, onSession, onSave, onNotif
         <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
         <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
-      <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
+      <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><dl className="build-info"><div><dt>Verze</dt><dd>{build?.version ?? "—"}</dd></div><div><dt>Sestaveno</dt><dd>{build?.builtAt ? new Date(build.builtAt).toLocaleString("cs-CZ") : "neuvedeno"}</dd></div><div><dt>Commit</dt><dd>{build?.commit ? <code>{build.commit.slice(0, 7)}</code> : "neuveden"}</dd></div></dl><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
     </div>
   </section>;
 }

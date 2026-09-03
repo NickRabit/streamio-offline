@@ -7,6 +7,7 @@ import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCand
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue } from "./downloads.js";
 import { StatsLog, type DownloadEvent } from "./stats.js";
+import { build } from "./build.js";
 import { PlaybackManager } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
@@ -25,7 +26,7 @@ import type { AddonRole, MetaItem, StreamItem } from "./types.js";
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
-await initLogger(); log("INFO", "Server startuje", { version: "0.3.0" });
+await initLogger(); log("INFO", "Server startuje", { ...build });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
 const stats = new StatsLog();
 
@@ -174,7 +175,7 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   res.json({ username });
 }));
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", version: "0.3.0" }));
+app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build }));
 app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)));
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;

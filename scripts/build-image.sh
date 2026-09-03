@@ -34,7 +34,9 @@ docker run --rm stremio-offline:build sh -lc 'npx tsc --noEmit -p server && npx 
   | grep -E '^# (tests|pass|fail)'
 
 echo "==> Sestavení obrazu pro linux/$ARCH"
-docker buildx build --platform "linux/$ARCH" -t "$TAG" --load .
+docker buildx build --platform "linux/$ARCH" -t "$TAG" --load \
+  --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  --build-arg GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" .
 
 echo "==> Kontrola obsahu"
 docker run --rm --platform "linux/$ARCH" "$TAG" sh -lc '

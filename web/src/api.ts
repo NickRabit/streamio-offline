@@ -1,4 +1,4 @@
-import type { AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -72,6 +72,7 @@ export const api = {
     })}`),
   libraryEntry: (key: string, query = "", skip = 0, limit = 100) =>
     request<LibraryPage>(`/api/library/entry?${q({ key, query: query || undefined, skip: skip || undefined, limit })}`),
+  status: () => request<BuildInfo>("/api/status"),
   me: () => request<AuthStatus>("/api/auth/me"),
   setup: (username: string, password: string) => request<Session>("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),

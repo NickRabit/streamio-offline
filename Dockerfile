@@ -9,7 +9,11 @@ COPY web web
 RUN npm run build
 
 FROM node:22-trixie-slim AS runtime
-ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads
+# Stamped by the build script and by CI so a running server can say which image it is.
+ARG BUILD_TIME=""
+ARG GIT_COMMIT=""
+ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads \
+    BUILD_TIME=$BUILD_TIME GIT_COMMIT=$GIT_COMMIT
 WORKDIR /app
 # Ovladače Intel QuickSync existují jen pro amd64; na arm64 se image staví bez nich.
 # Architekturu bereme z dpkg, ne z ARG TARGETARCH: ten doplňuje jen BuildKit a klasický

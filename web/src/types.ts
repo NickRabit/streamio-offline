@@ -25,6 +25,7 @@ export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
+export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string }
 export interface StatsWindow { bytes: number; count: number }
 export interface StatsBucket { key: string; label: string; bytes: number; count: number }
 export interface StatsSeries { key: string; label: string; points: number[] }
