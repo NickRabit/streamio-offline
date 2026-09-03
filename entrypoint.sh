@@ -7,14 +7,6 @@ PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
 
 if [ "$(id -u)" = "0" ]; then
-  # Starší verze držely data v pojmenovaném svazku Dockeru. Když je nová složka
-  # ještě prázdná a ten svazek je připojený, jednou se obsah přenese -- jinak by
-  # server naskočil bez účtu a doplňků a ke starým datům už by nebylo jak se dostat.
-  if [ ! -f /data/state.json ] && [ -f /legacy-data/state.json ]; then
-    echo "Přenáším data ze staršího svazku do /data (proběhne jen jednou)"
-    cp -a /legacy-data/. /data/ 2>/dev/null || true
-  fi
-
   # Stav aplikace je malý, ten přepsat můžeme vždy.
   chown -R "$PUID:$PGID" /data 2>/dev/null || true
 
