@@ -186,13 +186,13 @@ Server si vedle stažených filmů drží vlastní data: účet, seznam doplňk�
 
 Je to normální složka, ne skrytý svazek Dockeru — zálohujete ji zkopírováním a smazáním ji server vrátíte do stavu po instalaci (přijdete o účet a doplňky, stažené soubory zůstanou). Na Synology dává smysl ji dát do sdílené složky, ať je vidět ve File Stationu.
 
-Dřívější verze držely data v pojmenovaném svazku `stremio-offline-data` ve skrytém `/volume1/@docker/`. Přenos proběhne sám: je-li nová složka prázdná a starý svazek připojený, obsah se při prvním startu zkopíruje a v logu se objeví `Přenáším data ze staršího svazku`. Až budete mít přeneseno, můžete z `compose.yml` smazat řádek s `/legacy-data` i sekci `volumes` na konci.
-
-Kdybyste data potřebovali přenést ručně, přes SSH to zvládne jeden příkaz — název svazku zjistíte z `docker volume ls`:
+Instalace ze starších verzí držely data v pojmenovaném svazku `stremio-offline-data`. Přenést je jde přes SSH jedním příkazem — název svazku napoví `docker volume ls`:
 
 ```bash
 docker run --rm -v stremio-offline_stremio-offline-data:/from -v /volume1/docker/stremio-offline/data:/to alpine sh -c 'cp -a /from/. /to/'
 ```
+
+Bez SSH je jednodušší začít nanovo: doplňky přidáte znovu a stažené soubory zůstávají, protože leží mimo tuhle složku.
 
 ## Bezpečnost
 
