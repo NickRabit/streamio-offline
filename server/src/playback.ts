@@ -76,6 +76,10 @@ const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DIRECT_MP4 = new Set([".mp4", ".m4v", ".mov"]);
 const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", mp3: "mp3", opus: "opus", ac3: "ac3", eac3: "eac3", flac: "flac" };
+// AC-3 family does not expose enough codec information to the fragmented MP4 muxer
+// until the first packet arrives. After an input seek video can arrive first, making
+// HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
+const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
 const IDLE_MS = 5 * 60_000;
 
 /** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
@@ -263,8 +267,7 @@ export class PlaybackManager {
   /** Vestavěné titulky zapínáme samy od sebe jen tehdy, když opravdu sedí preferovaný jazyk. */
   private preferredSubtitle(tracks: Track[], preferred?: string): number | null {
     if (!tracks.length || !preferred) return null;
-    const match = tracks.findIndex((track) => track.language === preferred);
-    return match >= 0 ? match : null;
+    return tracks.find((track) => track.language === preferred)?.index ?? null;
   }
 
   private proxyPath(stream: StreamItem) {
@@ -460,8 +463,12 @@ export class PlaybackManager {
     const audioCount = session.info?.audioTracks.length ?? 1;
     const hasAudio = !session.info || audioCount > 0;
     const audioIndex = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
-    const subtitleCount = session.info?.subtitleTracks.length ?? 0;
-    const subtitle = session.subtitleTrack !== null && session.subtitleTrack < subtitleCount ? session.subtitleTrack : null;
+    // Bitmap subtitles are removed by probe(), so array positions no longer necessarily
+    // match FFmpeg's type-relative 0:s:N indices. Track.index always keeps the real N.
+    const subtitle = session.subtitleTrack !== null
+      && session.info?.subtitleTracks.some((track) => track.index === session.subtitleTrack)
+      ? session.subtitleTrack
+      : null;
     const crf = process.env.FFMPEG_CRF ?? "23";
     // VAAPI CQP a libx264 CRF jsou odlišné režimy. Zpětná kompatibilita s jedinou
     // původní hodnotou zůstává, ale nové instalace je mohou ladit nezávisle.
@@ -529,7 +536,9 @@ export class PlaybackManager {
     // Audio passthrough má smysl jen u remuxu. Při transkódování obrazu může zejména
     // kopírované E-AC-3 zablokovat inicializaci fMP4 HLS ("codec frame size is not set").
     // AAC je pro webové klienty nejspolehlivější a jeho převod zatěžuje NAS minimálně.
-    const passthroughAudio = copyVideo && copyAudio;
+    const selectedAudioCodec = session.info?.audioTracks[audioIndex]?.codec ?? session.info?.audio?.codec ?? "";
+    const passthroughAudio = copyVideo && copyAudio
+      && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(selectedAudioCodec));
     if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
     if (subtitle !== null) args.push("-c:s", "webvtt");
 
