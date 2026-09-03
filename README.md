@@ -209,6 +209,14 @@ docker compose -f compose.pull.yml pull
 docker compose -f compose.pull.yml up -d
 ```
 
+Pozor na jednu věc: Container Manager stahuje obraz jen tehdy, když ho ještě nemá. Projekt, který `:latest` už jednou stáhl, po zastavení a spuštění nastartuje tu starou verzi znovu. O nový obraz je proto potřeba říct výslovně — buď smazat ten místní v záložce **Image** a projekt spustit, nebo použít `scripts/nas-update.sh`, který stažení i restart udělá sám:
+
+```bash
+./scripts/nas-update.sh /volume2/docker/streamio-offline
+```
+
+Bez SSH ho pověsíte na **Řídicí panel → Plánovač úloh → Vytvořit → Uživatelem definovaný skript**, spouštěný jako `root`. Jde tak i aktualizovat pravidelně.
+
 Balíček v GHCR zdědí soukromí repozitáře, takže se k němu NAS musí přihlásit tokenem (Container Manager → Registry → Nastavení). Pokud vám nevadí, že obraz uvidí kdokoli, je jednodušší přepnout balíček v GitHubu na veřejný — repozitář může zůstat soukromý a přihlašování odpadne. Obraz nenese žádné údaje, jen aplikaci.
 
 Ruční spuštění workflow (**Actions → Obraz pro NAS → Run workflow**) navíc umí přiložit balík ke stažení, když se do GHCR pouštět nechcete.
