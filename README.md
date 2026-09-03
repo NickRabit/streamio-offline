@@ -202,7 +202,9 @@ Stavět na NASu se nevyplácí: trvá to dlouho a Container Manager používá k
 
 Vznikne `dist/stremio-offline-amd64-<datum>.tar.gz`, který nahrajete na NAS a v Container Manageru přidáte přes **Image → Přidat → Přidat ze souboru**. Přepínače `--arch`, `--tag` a `--out` mění architekturu, značku a cílovou složku.
 
-**Na GitHubu** to samé dělá workflow `Obraz pro NAS` při každé změně v `server/`, `web/`, `Dockerfile` nebo `entrypoint.sh`. Nejdřív pustí testy, pak sestaví obraz pro amd64, odešle ho do GHCR jako `ghcr.io/nickrabit/streamio-offline:latest` (a pod otiskem commitu) a nakonec ověří, že v něm ovladače VAAPI opravdu jsou — jinak úloha spadne.
+**Na GitHubu** to samé dělá workflow `Obraz pro NAS` při každé změně v `server/`, `web/`, `Dockerfile` nebo `entrypoint.sh`. Nejdřív pustí testy, pak sestaví obraz zvlášť pro `linux/amd64` a `linux/arm64` (repozitář je veřejný, takže má pro obě architektury zdarma nativní runner — žádná emulace), spojí je do jednoho seznamu a odešle do GHCR jako `ghcr.io/nickrabit/streamio-offline:latest` (a pod otiskem commitu). Nakonec ověří, že amd64 obraz opravdu nese ovladače VAAPI — jinak úloha spadne. arm64 se na ovladače nekontroluje, tam QuickSync stejně nejede.
+
+Díky tomu je tenhle jeden obraz vhodný i pro **Mac s Apple Silicon**: `docker pull` nebo `docker compose up` si samy vyberou architekturu, která na stroji sedí, takže na M1/M2/M3 Macu se stahuje hotový arm64 obraz místo osmiminutového sestavování přes emulaci.
 
 NAS pak obraz jen stahuje. Použijte `compose.pull.yml` místo `compose.yml`:
 
@@ -222,6 +224,25 @@ Bez SSH ho pověsíte na **Řídicí panel → Plánovač úloh → Vytvořit �
 Balíček v GHCR zdědí soukromí repozitáře, takže se k němu NAS musí přihlásit tokenem (Container Manager → Registry → Nastavení). Pokud vám nevadí, že obraz uvidí kdokoli, je jednodušší přepnout balíček v GitHubu na veřejný — repozitář může zůstat soukromý a přihlašování odpadne. Obraz nenese žádné údaje, jen aplikaci.
 
 Ruční spuštění workflow (**Actions → Obraz pro NAS → Run workflow**) navíc umí přiložit balík ke stažení, když se do GHCR pouštět nechcete.
+
+### Vydání verzí
+
+Značka `:latest` sama o sobě neřekne, co v obrazu je — k tomu slouží otisk commitu, ale ten si nikdo nepamatuje. Pro čitelnou historii verzí otagujte commit na `main`, který už workflow `Obraz pro NAS` postavil:
+
+```bash
+git tag v0.4.0
+git push origin v0.4.0
+```
+
+Spustí se `Vydání verze`. Nestaví nic nového — jen přidá značky `:0.4.0`, `:0.4` a `:latest` ke stejnému otisku, který už na `main` prošel testy, takže je jistota, že vydaná verze je přesně to, co se sestavilo a otestovalo. Založí i GitHub Release s automaticky vygenerovanými poznámkami ze zpráv commitů. Na NASu nebo Macu pak jde připnout konkrétní verzi místo `:latest`:
+
+```yaml
+image: ghcr.io/nickrabit/streamio-offline:0.4.0
+```
+
+### Windows
+
+Obraz je stejný jako pro Linux — Docker Desktop na Windows pouští linuxové kontejnery přes WSL2, takže žádná zvláštní úprava image není potřeba. Dvě věci se ale musí přizpůsobit: v `compose.yml` zakomentujte blok `devices:` (`/dev/dri` na Windows neexistuje, kontejner by se odmítl spustit) a cesty v `.env` (`DATA_PATH`, `DOWNLOAD_PATH`) směřujte do WSL, ne na `/mnt/c/...` — čtení a zápis přes hranici souborových systémů je znatelně pomalejší, což je u stahování a generování náhledů poznat. Akcelerace přes QuickSync na Windows nefunguje, překódování tedy poběží na procesoru; na běžném PC to vadí méně než na Celeronu v NASu.
 
 ## Kde leží data
 
