@@ -52,6 +52,7 @@ const trackLabel = (track: Track) => {
 };
 
 export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onClose }: Props) {
+  const overlayRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -79,6 +80,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [resumedFrom, setResumedFrom] = useState(0);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
+  const [mobileLandscape, setMobileLandscape] = useState(false);
+  const automaticFullscreenRef = useRef(false);
   // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
   useEffect(() => {
     if (!resumedFrom) return;
@@ -338,6 +341,52 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
+  /** Android umí fullscreen celé vrstvy s našimi ovladači, iOS jen nativní fullscreen videa. */
+  const enterFullscreen = async () => {
+    if (document.fullscreenElement) return true;
+    try {
+      if (overlayRef.current?.requestFullscreen) {
+        await overlayRef.current.requestFullscreen();
+        return true;
+      }
+      const video = videoRef.current as HTMLVideoElement & { webkitEnterFullscreen?: () => void };
+      if (video?.webkitEnterFullscreen) {
+        video.webkitEnterFullscreen();
+        return true;
+      }
+    } catch { /* Bez uživatelského gesta může prohlížeč automatický fullscreen odmítnout. */ }
+    return false;
+  };
+
+  /** Otočení telefonu na šířku maximalizuje přehrávač a, dovolí-li to prohlížeč,
+   * přejde i do nativního fullscreenu. CSS varianta funguje vždy. */
+  useEffect(() => {
+    if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
+    const orientation = window.matchMedia("(orientation: landscape)");
+    let previous = false;
+    const update = () => {
+      const touchDevice = navigator.maxTouchPoints > 0 || window.matchMedia("(pointer: coarse)").matches;
+      const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
+      setMobileLandscape(landscape);
+      if (landscape && touchDevice && !previous) {
+        window.setTimeout(() => void enterFullscreen().then((entered) => { automaticFullscreenRef.current = entered; }), 80);
+      } else if (!landscape && previous && automaticFullscreenRef.current && document.fullscreenElement === overlayRef.current) {
+        void document.exitFullscreen().catch(() => undefined);
+        automaticFullscreenRef.current = false;
+      }
+      previous = landscape;
+    };
+    update();
+    orientation.addEventListener?.("change", update);
+    window.addEventListener("orientationchange", update);
+    window.addEventListener("resize", update);
+    return () => {
+      orientation.removeEventListener?.("change", update);
+      window.removeEventListener("orientationchange", update);
+      window.removeEventListener("resize", update);
+    };
+  }, [open]);
+
   /** Přehrávání běží dál; do fronty se přidá tentýž stream, který právě hraje. */
   const download = async () => {
     if (downloadState !== "idle") return;
@@ -353,7 +402,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
-      else if (event.key === "f") void videoRef.current?.requestFullscreen().catch(() => undefined);
+      else if (event.key === "f") void enterFullscreen();
       else if (event.key === "Escape" && !document.fullscreenElement) onClose();
     };
     window.addEventListener("keydown", onKey);
@@ -367,7 +416,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}`} role="dialog" aria-modal="true">
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}`} role="dialog" aria-modal="true">
     <div className="player-head">
       <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
       <button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button>
@@ -437,12 +486,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"} onClick={onToggleFavorite}>
-        <Star/> {favorite ? "V oblíbených" : "Oblíbené"}
+        <Star/> <span>{favorite ? "V oblíbených" : "Oblíbené"}</span>
       </button>}
-      {!isLocal && <button disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty">
-        {downloadState === "done" ? <><Check /> Ve frontě</> : <><Download /> {downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</>}
+      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty" aria-label="Přidat do stahovací fronty">
+        {downloadState === "done" ? <><Check /> <span>Ve frontě</span></> : <><Download /> <span>{downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</span></>}
       </button>}
-      <button onClick={() => void videoRef.current?.requestFullscreen().catch(() => undefined)}><Maximize /> Celá obrazovka</button>
+      <button className="player-action fullscreen-action" onClick={() => void enterFullscreen()} title="Celá obrazovka" aria-label="Celá obrazovka"><Maximize /> <span>Celá obrazovka</span></button>
     </div>
   </div>;
 }
