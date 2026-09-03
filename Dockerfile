@@ -11,10 +11,12 @@ RUN npm run build
 FROM node:22-trixie-slim AS runtime
 ENV NODE_ENV=production PORT=8080 DATA_DIR=/data DOWNLOAD_DIR=/downloads
 WORKDIR /app
-ARG TARGETARCH
 # Ovladače Intel QuickSync existují jen pro amd64; na arm64 se image staví bez nich.
+# Architekturu bereme z dpkg, ne z ARG TARGETARCH: ten doplňuje jen BuildKit a klasický
+# builder (Container Manager na Synology) ho nechá prázdný, takže by se ovladače
+# tiše přeskočily a QuickSync by na NASu nikdy nejel.
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libva-drm2 vainfo util-linux \
-    && if [ "$TARGETARCH" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
+    && if [ "$(dpkg --print-architecture)" = "amd64" ]; then apt-get install -y --no-install-recommends intel-media-va-driver i965-va-driver; fi \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 COPY server/package.json server/package.json
