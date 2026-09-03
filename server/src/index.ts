@@ -913,4 +913,14 @@ process.on("unhandledRejection", (reason) => {
   log("ERROR", "Neošetřené odmítnutí slibu", { reason: reason instanceof Error ? `${reason.message}` : String(reason) });
   console.error("Neošetřené odmítnutí:", reason);
 });
+// A source that closes its connection in an unusual way can trip an assertion deep inside
+// Node's own HTTP client (undici), asynchronously, after our download loop's try/catch has
+// already returned control -- so nothing in this codebase can catch it directly. Without this
+// handler that one bad response takes the whole server down: every active download, every open
+// playback session, the web UI itself, until Docker restarts the container. A single flaky
+// source shouldn't cost everyone else their evening.
+process.on("uncaughtException", (error) => {
+  log("ERROR", "Neošetřená výjimka, server pokračuje dál", { reason: error instanceof Error ? error.stack ?? error.message : String(error) });
+  console.error("Neošetřená výjimka:", error);
+});
 app.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log("Stremio Offline běží na portu 8080"));
