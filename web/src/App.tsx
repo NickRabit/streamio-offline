@@ -83,7 +83,15 @@ export function App() {
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
     if (!confirm(`Opravdu smazat ${folder ? "složku" : "soubor"} „${label}“?${folder ? " Smaže se i vše uvnitř." : ""} Tohle nejde vrátit.`)) return;
-    try { await api.deleteLibraryItem(itemPath); notify("Smazáno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+    // Se souborem mizí i jeho rozkoukanost a hvězdička v katalogu, takže se oba
+    // seznamy načtou znovu -- jinak by smazaný titul zůstal v řadách viset.
+    try {
+      await api.deleteLibraryItem(itemPath);
+      notify("Smazáno.");
+      await loadBrowse(browsePath);
+      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
+      setResume(nextResume); setWatchlist(nextWatchlist);
+    } catch (error) { fail(error); }
   };
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);

@@ -12,7 +12,7 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
-import { browseDirectory, describePath, entryDirectory, isPathWithin, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
+import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
@@ -629,16 +629,23 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
   await rm(target, { recursive: true, force: true });
   await rm(dataArtworkFile(relative), { force: true });
   await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+  // Rozkoukané a Můj seznam se vedou pod klíčem katalogu, ne pod cestou, takže by
+  // po smazání souboru zůstal titul viset v obou seznamech a nabízel pokračování
+  // v něčem, co už na disku není. Vazbu na katalog zná libraryMeta -- odečte se
+  // dřív, než ji tenhle úklid smaže.
+  const orphans = orphanedCatalogKeys(store.libraryMeta(), relative);
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, relative));
     state.libraryMeta = Object.fromEntries(Object.entries(state.libraryMeta ?? {}).filter(([key]) => !isPathWithin(key, relative)));
     state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, value]) => {
+      if (orphans.has(key)) return false;
       const itemPath = key.startsWith("file:") ? key.slice(5) : value.path;
       return !itemPath || !isPathWithin(itemPath, relative);
     }));
+    state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([key]) => !orphans.has(key)));
   });
   libraryCache = undefined;
-  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory() });
+  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory(), zapomenutéTituly: [...orphans] });
   res.status(204).end();
 }));
 
