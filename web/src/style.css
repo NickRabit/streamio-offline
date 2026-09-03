@@ -98,3 +98,6 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 .stream-filters label{display:grid;gap:5px;min-width:0}
 .stream-filters select{width:100%;max-width:none}
 @media(max-width:700px){.stream-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-filters label:last-child:nth-child(odd){grid-column:1/-1}}
+
+/* Dlouhý seznam katalogových zdrojů nesmí zvětšit výšku celého řádku dlaždic. */
+.poster-card small{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

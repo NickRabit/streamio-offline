@@ -571,6 +571,7 @@ export function App() {
                 const klic = `${item.type || "movie"}:${item.id}`;
                 const postup = catalogProgress(item);
                 const vSeznamu = inWatchlist(item.type, item.id);
+                const metadata = [item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type;
                 return <button key={klic} className={`poster-card ${selected?.id === item.id ? "selected" : ""}`} onClick={() => openMeta(item)}>
                   <span className="poster-wrap">
                     {item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <div className="poster-fallback"><Film/></div>}
@@ -579,7 +580,7 @@ export function App() {
                     <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === klic ? null : klic); }}><MoreVertical/></span>
                   </span>
                   <strong>{item.name}</strong>
-                  <small>{[item.releaseInfo || item.year, submittedQuery ? (item.sources ?? [item.addonName]).filter(Boolean).join(", ") : null].filter(Boolean).join(" · ") || item.type}</small>
+                  <small title={metadata}>{metadata}</small>
                   {menuFor === klic && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                     <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {vSeznamu ? "Odebrat ze seznamu" : "Přidat do seznamu"}</button>
                     {postup && <button onClick={() => void forgetCatalogWatched(item)}><RotateCcw/> Označit jako neshlédnuté</button>}
