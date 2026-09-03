@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -175,9 +175,9 @@ export function App() {
     return next;
   });
 
-  const refresh = async () => {
+  const refresh = async (selectFirst = false) => {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
-    if (!selectedCatalog && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
+    if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
   const [setupNeeded, setSetupNeeded] = useState(false);
@@ -724,7 +724,12 @@ export function App() {
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
       {view === "stats" && <StatsPanel onError={fail}/>}
-      {view === "settings" && <SettingsPage build={buildInfo} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onNotify={notify} onError={fail}/>}
+      {view === "settings" && <SettingsPage build={buildInfo} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onImported={async (backup) => {
+        const restored = await api.importSettings(backup);
+        setSettings(restored.settings);
+        setSelectedCatalog("");
+        await refresh(true);
+      }} onNotify={notify} onError={fail}/>}
     </main>
     <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
       progressKey={localStream?.url ? `file:${localStream.url.slice(7)}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
@@ -762,10 +767,38 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
 
-function SettingsPage({ build, settings, languages, session, onSession, onSave, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
+  const importInput = useRef<HTMLInputElement>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
   const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
+  const exportSettings = async () => {
+    setBackupBusy(true);
+    try {
+      const backup = await api.exportSettings();
+      const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url; link.download = `stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`; link.click();
+      URL.revokeObjectURL(url);
+      onNotify("Záloha nastavení byla exportována.");
+    } catch (error) { onError(error); }
+    finally { setBackupBusy(false); }
+  };
+  const importSettings = async (file?: File) => {
+    if (!file) return;
+    if (importInput.current) importInput.current.value = "";
+    if (!confirm("Import nahradí aktuální nastavení a všechny nainstalované doplňky obsahem zálohy. Pokračovat?")) return;
+    setBackupBusy(true);
+    try {
+      let backup: unknown;
+      try { backup = JSON.parse(await file.text()); }
+      catch { throw new Error("Vybraný soubor neobsahuje platný JSON."); }
+      await onImported(backup);
+      onNotify("Nastavení a doplňky byly importovány.");
+    } catch (error) { onError(error); }
+    finally { setBackupBusy(false); }
+  };
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow="NASTAVENÍ" title="Nastavení aplikace"/><span><Check/> Změny se ukládají automaticky</span></div><p className="lead">Správa úložiště, stahování, knihovny a výchozího chování přehrávače.</p>
     <div className="settings-grid">
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
@@ -792,6 +825,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
         <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
         <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
+      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků mohou obsahovat přístupové tokeny. Soubor zálohy proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
       <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><dl className="build-info"><div><dt>Verze</dt><dd>{build?.version ?? "—"}</dd></div><div><dt>Sestaveno</dt><dd>{build?.builtAt ? new Date(build.builtAt).toLocaleString("cs-CZ") : "neuvedeno"}</dd></div><div><dt>Commit</dt><dd>{build?.commit ? <code>{build.commit.slice(0, 7)}</code> : "neuveden"}</dd></div></dl><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
     </div>
   </section>;

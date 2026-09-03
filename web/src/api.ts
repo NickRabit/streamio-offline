@@ -1,4 +1,4 @@
-import type { BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, Stream, Subtitle } from "./types";
+import type { BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, SettingsBackup, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -55,6 +55,8 @@ export const api = {
   clearCompleted: () => request<void>("/api/downloads", { method: "DELETE" }),
   settings: () => request<Settings>("/api/settings"),
   updateSettings: (patch: Partial<Settings>) => request<Settings>("/api/settings", { method: "PATCH", body: JSON.stringify(patch) }),
+  exportSettings: () => request<SettingsBackup>("/api/settings/export"),
+  importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[] }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
   inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
   logs: () => fetch("/api/logs").then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),

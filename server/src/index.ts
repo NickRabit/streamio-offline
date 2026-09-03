@@ -22,6 +22,7 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, MetaItem, StreamItem } from "./types.js";
+import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
@@ -817,6 +818,41 @@ app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clear
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
+app.get("/api/settings/export", (_req, res) => {
+  res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
+  res.json(createSettingsBackup(store.settings(), store.addons()));
+});
+app.post("/api/settings/import", asyncRoute(async (req, res) => {
+  const backup = parseSettingsBackup(req.body);
+  // Manifesty se načtou před jediným zápisem. Nefunkční záloha tak nezmění ani část konfigurace.
+  const loaded = await Promise.all(backup.addons.map(async (saved, index) => {
+    try {
+      const addon = await loadAddon(saved.manifestUrl, saved.role);
+      addon.enabled = saved.enabled;
+      addon.addedAt = saved.addedAt;
+      addon.downloadSettings = saved.downloadSettings;
+      return addon;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Doplněk č. ${index + 1} se nepodařilo načíst: ${reason}`);
+    }
+  }));
+  const identities = new Set<string>();
+  for (const addon of loaded) {
+    const identity = `${addon.manifest.id}\n${addon.manifestUrl}`;
+    if (identities.has(identity)) throw new Error(`Záloha obsahuje doplněk „${addon.manifest.name}“ vícekrát.`);
+    identities.add(identity);
+  }
+  await store.update((state) => {
+    state.settings = backup.settings;
+    state.addons = loaded;
+    state.defaultsInstalled = true;
+  });
+  streamCache.clear();
+  queue.changed();
+  log("INFO", "Importována záloha nastavení", { addons: loaded.length, version: backup.version });
+  res.json({ settings: store.settings(), addons: store.addons().map(publicAddon) });
+}));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));

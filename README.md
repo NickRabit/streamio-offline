@@ -58,6 +58,8 @@ Přepnutí stopy znamená nové mapování pro FFmpeg, takže se převod restart
 
 V **Nastavení** se volí preferovaný jazyk zvuku a titulků, ve výchozím stavu čeština se záložní angličtinou. Přehrávač podle toho vybere stopu sám při startu.
 
+Ve stejné části lze konfiguraci exportovat do JSON a později ji importovat. Záloha obsahuje nastavení aplikace, pořadí a stav nainstalovaných doplňků i jejich pravidla ukládání; neobsahuje účet, knihovnu ani historii sledování. Personalizované URL doplňků mohou obsahovat přístupové tokeny, proto je potřeba se souborem zacházet jako s heslem. Import nahradí aktuální konfiguraci a před uložením znovu ověří všechny manifesty.
+
 V seznamu zdrojů se jazyk odhaduje z názvu, který poslal doplněk. U vybraného zdroje se navíc zobrazí skutečné jazyky zjištěné rozborem souboru.
 
 ## Nasazení na Synology
