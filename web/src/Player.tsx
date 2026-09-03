@@ -98,17 +98,22 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   // Některé prohlížeče vykreslí nativní WebVTT titulky v běžném režimu až pod
   // viditelnou plochou videa. Aktivní cue proto zrcadlíme do vlastní vrstvy.
-  // Ve fullscreenu naopak zůstává nativní renderer, který funguje správně a
-  // dokáže titulky zobrazit i nad systémovými ovladači.
+  // Pouhé zprůhlednění ::cue nestačí: prohlížeč může ponechat jeho černé pozadí
+  // a při změně velikosti videa ho přepočítat jindy než vlastní text. Aktivní
+  // stopy proto mimo nativní fullscreen přepneme do režimu hidden. Cue události
+  // dál fungují, ale prohlížeč už žádný vlastní box nekreslí.
   useEffect(() => {
     if (!open) return;
     const video = videoRef.current;
     if (!video) return;
     const bound = new Map<TextTrack, () => void>();
+    const mirrored = new Set<TextTrack>();
+    let useNativeRenderer = false;
+    let syncingModes = false;
 
     const showActiveCues = () => {
       const lines = Array.from(video.textTracks)
-        .filter((track) => track.mode === "showing" && track.activeCues)
+        .filter((track) => mirrored.has(track) && track.activeCues)
         .flatMap((track) => Array.from(track.activeCues ?? []))
         .map((cue) => {
           const vttCue = cue as VTTCue;
@@ -118,6 +123,16 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         .filter(Boolean);
       setSubtitleText(lines.join("\n"));
     };
+    const syncTrackModes = () => {
+      if (syncingModes) return;
+      syncingModes = true;
+      for (const track of Array.from(video.textTracks)) {
+        if (track.mode === "showing") mirrored.add(track);
+        else if (track.mode === "disabled") mirrored.delete(track);
+        if (mirrored.has(track)) track.mode = useNativeRenderer ? "showing" : "hidden";
+      }
+      syncingModes = false;
+    };
     const bindTracks = () => {
       for (const track of Array.from(video.textTracks)) {
         if (bound.has(track)) continue;
@@ -125,11 +140,15 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         track.addEventListener("cuechange", onCueChange);
         bound.set(track, onCueChange);
       }
+      syncTrackModes();
       showActiveCues();
     };
     const updateFullscreenMode = () => {
       const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
-      setNativeSubtitles(document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen));
+      useNativeRenderer = document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen);
+      setNativeSubtitles(useNativeRenderer);
+      syncTrackModes();
+      showActiveCues();
     };
 
     bindTracks();
@@ -147,6 +166,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       video.removeEventListener("webkitbeginfullscreen", updateFullscreenMode);
       video.removeEventListener("webkitendfullscreen", updateFullscreenMode);
       for (const [track, listener] of bound) track.removeEventListener("cuechange", listener);
+      for (const track of mirrored) if (track.mode === "hidden") track.mode = "showing";
       setSubtitleText("");
       setNativeSubtitles(false);
     };
