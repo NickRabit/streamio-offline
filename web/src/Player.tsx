@@ -82,6 +82,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
   const [mobileLandscape, setMobileLandscape] = useState(false);
   const [cssFullscreen, setCssFullscreen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(true);
+  const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
   // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
   useEffect(() => {
@@ -342,6 +344,27 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
+  const clearControlsTimer = () => {
+    if (controlsTimerRef.current === undefined) return;
+    clearTimeout(controlsTimerRef.current);
+    controlsTimerRef.current = undefined;
+  };
+  const revealControls = () => {
+    setControlsVisible(true);
+    clearControlsTimer();
+    if (videoRef.current?.paused || buffering || error) return;
+    controlsTimerRef.current = window.setTimeout(() => {
+      controlsTimerRef.current = undefined;
+      setControlsVisible(false);
+    }, 3500);
+  };
+  useEffect(() => {
+    if (!open) { clearControlsTimer(); setControlsVisible(true); return; }
+    if (paused || buffering || error) { clearControlsTimer(); setControlsVisible(true); return; }
+    revealControls();
+    return clearControlsTimer;
+  }, [open, paused, buffering, error]);
+
   /** Fullscreen musí obsahovat celou naši vrstvu. iOS umí u videa jen vlastní
    * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
   const enterBrowserFullscreen = async () => {
@@ -407,6 +430,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLSelectElement) return;
       if (event.target instanceof HTMLInputElement && event.target.type !== "range") return;
+      revealControls();
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
@@ -424,7 +448,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}`} role="dialog" aria-modal="true">
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls}>
     <div className="player-head">
       <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
       <button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button>
@@ -455,7 +479,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     <div className="timeline">
       <span>{fmt(position)}</span>
       <input aria-label="Pozice videa" type="range" min="0" max={seekable} step="1" value={Math.min(position, seekable)}
-        onChange={(event) => setScrub(Number(event.target.value))}
+        onChange={(event) => { revealControls(); setScrub(Number(event.target.value)); }}
         onPointerUp={(event) => void seekTo(Number(event.currentTarget.value))}
         onKeyUp={(event) => void seekTo(Number(event.currentTarget.value))} />
       <span>{fmt(duration)}</span>
