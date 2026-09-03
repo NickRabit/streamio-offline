@@ -453,6 +453,9 @@ export class PlaybackManager {
     const subtitleCount = session.info?.subtitleTracks.length ?? 0;
     const subtitle = session.subtitleTrack !== null && session.subtitleTrack < subtitleCount ? session.subtitleTrack : null;
     const crf = process.env.FFMPEG_CRF ?? "23";
+    // VAAPI CQP a libx264 CRF jsou odlišné režimy. Zpětná kompatibilita s jedinou
+    // původní hodnotou zůstává, ale nové instalace je mohou ladit nezávisle.
+    const vaapiQp = process.env.VAAPI_QP ?? crf;
     const args = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
     // -ss před -i seekuje přes HTTP Range, takže se nepřenáší nic před požadovanou pozicí.
     // U kopie videa musí i zvuk začít na klíčovém snímku (noaccurate_seek): přesný ořez zvuku
@@ -506,7 +509,7 @@ export class PlaybackManager {
         : (quality !== null ? `scale=${resize},format=nv12,hwupload` : "format=nv12,hwupload");
       args.push("-vf", filters, "-c:v", "h264_vaapi");
       if (bitrate && this.vaapiBitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
-      else args.push("-qp", crf);
+      else args.push("-qp", vaapiQp);
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
     } else {
       if (quality !== null) args.push("-vf", `scale=-2:min(${quality}\\,ih)`);

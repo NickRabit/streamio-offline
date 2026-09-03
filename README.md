@@ -160,7 +160,9 @@ docker compose -f compose.yml -f compose.synology.yml up -d --build
 
 GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`.
 
-Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici`. Server to při startu neodhaduje: zkusí přes zařízení opravdu zakódovat jeden drobný snímek, a teprve když projde, hlásí dostupnost. Když ne, napíše `VAAPI nefunguje` i s důvodem a hardware už dál nezkouší — každý pokus by jinak zdržel začátek přehrávání o několik sekund.
+Že je enkodér připravený, poznáte v logu podle `VAAPI je k dispozici`. Server při startu opravdu zakóduje zkušební snímek a zvlášť ověří hardwarové škálování a řízení datového toku. Omezené ovladače v Synology proto mohou správně hlásit `gpuScaling:false` nebo `bitrateControl:false`; nejde o chybu. Aplikace pak obraz dekóduje a zmenší na CPU, nahraje jej do GPU a hardwarově zakóduje v režimu konstantní kvality. Skutečný běh na GPU potvrzuje `hardware:true` u záznamu o spuštění, změně stopy nebo posunu.
+
+Pro CQP lze v `.env` nastavit `VAAPI_QP=23`. Nižší číslo znamená vyšší kvalitu a větší datový tok; vyšší číslo šetří místo a síť. `FFMPEG_CRF` a `FFMPEG_PRESET` se používají jen při softwarovém fallbacku. Při hardwarovém převodu se zvuk převádí do AAC kvůli spolehlivému fMP4/HLS výstupu; při pouhém přebalení zůstává beze změny.
 
 Hláška `unknown libva error` znamená, že zařízení jde otevřít, ale ovladač se nerozběhl. Co je k dispozici, zjistíte v terminálu kontejneru:
 
@@ -168,7 +170,7 @@ Hláška `unknown libva error` znamená, že zařízení jde otevřít, ale ovla
 vainfo --display drm --device /dev/dri/renderD128
 ```
 
-Když si libva ovladač nevybere sama, vynuťte ho v `.env` přes `LIBVA_DRIVER_NAME` — `iHD` pro novější Intel (Gemini Lake a novější), `i965` pro starší. Pokud VAAPI nerozchodíte vůbec, nic zásadního se neděje: přímé přehrávání i přebalení běží bez akcelerace naplno a překódování potřebují jen netypické formáty.
+Když si libva ovladač nevybere sama, vynuťte ho v `.env` přes `LIBVA_DRIVER_NAME` — `iHD` pro Gemini Lake a novější, `i965` zejména pro starší Braswell. Pokud VAAPI nerozchodíte vůbec, přímé přehrávání i přebalení dál fungují bez akcelerace a skutečný převod přejde na `libx264`.
 
 ### Když se NAS zadrhává
 
@@ -176,7 +178,7 @@ Přehrávání velkého souboru umí Synology na několik minut položit. Stojí
 
 **Zápisový nával.** Při přebalení běží FFmpeg rychleji než reálný čas, aby byl posun po časové ose svižný, a segmenty sype do `/data`. Při původní osminásobné rychlosti to bylo přes 300 MB za dvacet sekund; slabší NAS se zadusí protlačováním špinavých stránek na disk. Výchozí hodnota je proto `FFMPEG_READRATE_REMUX=3` — posun zůstává stejně rychlý, protože o něm rozhoduje počáteční nával, ale zápis klesne na třetinu. Když to nestačí, snižte ji na `2`. Segmenty relace se uklidí po jejím konci a nečinná relace se ukončí po pěti minutách.
 
-**Vytížený procesor.** Bez akcelerace vezme softwarový převod všechna jádra a DSM přestane reagovat. V `compose.yml` je proto připravený zakomentovaný limit `cpus`, kterým jedno jádro necháte systému. Trvalejší řešení je zprovoznit QuickSync, viz [Hardwarová akcelerace](#hardwarová-akcelerace) — pak se skoro nepřekódovává.
+**Vytížený procesor.** Bez akcelerace vezme softwarový převod všechna jádra a DSM přestane reagovat. V `compose.yml` je proto připravený zakomentovaný limit `cpus`, kterým jedno jádro necháte systému. Trvalejší řešení je zprovoznit QuickSync, viz [Hardwarová akcelerace](#hardwarová-akcelerace) — náročné kódování pak převezme Intel GPU. Pokud log uvádí `gpuScaling:false`, menší část práce se škálováním zůstane na CPU, což je očekávané.
 
 ## Fronta stahování
 
