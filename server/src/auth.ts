@@ -6,8 +6,6 @@ const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, key
 /** Platí jen uvnitř tohoto procesu. FFmpeg si sahá na /api/proxy přes loopback a cookie nemá. */
 export const INTERNAL_TOKEN = randomBytes(32).toString("hex");
 
-export const DEFAULT_USERNAME = "admin";
-export const DEFAULT_PASSWORD = "admin";
 
 export interface AuthState {
   username: string; passwordHash: string; secret: string; isDefault: boolean;

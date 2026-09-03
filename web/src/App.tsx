@@ -179,8 +179,13 @@ export function App() {
     if (!selectedCatalog && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
   const loadDownloads = () => api.downloads().then(setDownloads).catch(fail);
-  useEffect(() => { api.me().then(setSession).catch(() => setSession(null)); }, []);
-  const ready = Boolean(session && !session.mustChangePassword);
+  const [setupNeeded, setSetupNeeded] = useState(false);
+  useEffect(() => {
+    api.me()
+      .then((status) => { if ("setup" in status) { setSetupNeeded(true); setSession(null); } else setSession(status); })
+      .catch(() => setSession(null));
+  }, []);
+  const ready = Boolean(session);
   // Načítat data má smysl až po přihlášení, jinak by to jen sypalo chyby 401.
   useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
   // Nabídka doplňků, ve kterých má smysl hledat, se mění s jejich zapínáním.
@@ -495,7 +500,7 @@ export function App() {
   };
 
   if (session === undefined) return <div className="login-screen"><div className="loading">Načítám…</div></div>;
-  if (!ready) return <LoginScreen session={session} onSession={setSession}/>;
+  if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
     <header className="topbar"><button className="brand brand-home" title="Přejít do čistého katalogu" aria-label="Přejít do čistého katalogu" onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right"><div className="online"><i/> Docker server online</div>

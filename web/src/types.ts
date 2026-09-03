@@ -44,7 +44,9 @@ export interface PlaybackSession {
   quality: number | null;
 }
 
-export interface Session { username: string; mustChangePassword: boolean }
+export interface Session { username: string }
+/** Čerstvá instalace vrátí místo relace pokyn k založení účtu. */
+export type AuthStatus = Session | { setup: true };
 
 export interface LibraryFile { path: string; label: string; season: number | null; episode: number | null; size: number; modified: string }
 export interface LibrarySummary {
