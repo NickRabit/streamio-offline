@@ -102,12 +102,7 @@ export class PlaybackManager {
       if (!this.initialBurst) log("WARN", "FFmpeg je starší než 6, start a posun budou brzděné omezenou rychlostí čtení", { major });
     } catch { log("WARN", "Verzi FFmpeg se nepodařilo zjistit"); }
     const device = process.env.VAAPI_DEVICE;
-    if (device) {
-      // Pouhá existence nestačí: bez členství ve skupině render nodu jde soubor vidět,
-      // ale neotevřít, a hardwarový převod by pak spadl až za běhu.
-      try { await access(device, constants.R_OK | constants.W_OK); this.vaapiDevice = device; log("INFO", "VAAPI je k dispozici", { device }); }
-      catch { log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Zkontrolujte RENDER_GID podle ls -n /dev/dri", { device }); }
-    }
+    if (device) await this.checkVaapi(device);
     setInterval(() => {
       for (const session of [...this.sessions.values()]) {
         if (Date.now() - session.lastAccess > IDLE_MS) { log("INFO", "Nečinná relace ukončena", { id: session.id }); void this.stop(session.id); }
@@ -295,6 +290,32 @@ export class PlaybackManager {
       return videoOk && (!audio || audio === "opus" || audio === "vorbis");
     }
     return false;
+  }
+
+  /** Že zařízení existuje a jde otevřít ještě neznamená, že se přes něj dá kódovat:
+   * na některých sestavách libva selže až při vytváření kontextu. Zkusíme proto
+   * rovnou zakódovat jeden drobný snímek a řídíme se výsledkem, ne dohadem --
+   * jinak by každé přehrávání platilo několikasekundový pokus, který stejně spadne. */
+  private async checkVaapi(device: string) {
+    try { await access(device, constants.R_OK | constants.W_OK); }
+    catch {
+      log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Zkontrolujte RENDER_GID podle ls -n /dev/dri", { device });
+      return;
+    }
+    try {
+      await promisify(execFile)("ffmpeg", [
+        "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-init_hw_device", `vaapi=va:${device}`, "-filter_hw_device", "va",
+        "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
+        "-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi", "-f", "null", "-",
+      ], { timeout: 30_000 });
+      this.vaapiDevice = device;
+      log("INFO", "VAAPI je k dispozici", { device });
+    } catch (error) {
+      const output = (error as { stderr?: string }).stderr ?? String(error);
+      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "neznámá chyba";
+      log("WARN", "VAAPI nefunguje, převod poběží softwarově. Zkuste v .env nastavit LIBVA_DRIVER_NAME=iHD nebo i965; podrobnosti vypíše vainfo v terminálu kontejneru", { device, reason });
+    }
   }
 
   /** Emby tomu říká Direct Stream: kontejner se přebalí, video se jen kopíruje. */

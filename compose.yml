@@ -25,6 +25,8 @@ services:
       # Skupina vlastnící render node. Bez ní by proces po přepnutí na PUID/PGID
       # na /dev/dri nedosáhl; zjistíte ji v terminálu kontejneru: ls -n /dev/dri
       RENDER_GID: "${RENDER_GID:-}"
+      # Některé sestavy si ovladač nevyberou samy; iHD je pro novější Intel, i965 pro starší.
+      LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-}"
     # Hardwarový převod na Synology s Intel iGPU (QuickSync).
     #
     # Z příkazové řádky stačí přidat override:

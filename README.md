@@ -160,7 +160,15 @@ docker compose -f compose.yml -f compose.synology.yml up -d --build
 
 GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`.
 
-Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici` a v přehrávači podle štítku `VAAPI`. Dokud tam svítí `VAAPI_DEVICE není dostupné`, akcelerace vypnutá je. Pokud se hardwarový převod nepodaří spustit, server se sám vrátí k softwarovému. Ovladače QuickSync se instalují jen do amd64 image. Bez akcelerace jede přímé přehrávání i přebalení naplno, softwarové překódování 1080p ale Celeron v reálném čase nestíhá.
+Že akcelerace běží, poznáte v logu podle `VAAPI je k dispozici`. Server to při startu neodhaduje: zkusí přes zařízení opravdu zakódovat jeden drobný snímek, a teprve když projde, hlásí dostupnost. Když ne, napíše `VAAPI nefunguje` i s důvodem a hardware už dál nezkouší — každý pokus by jinak zdržel začátek přehrávání o několik sekund.
+
+Hláška `unknown libva error` znamená, že zařízení jde otevřít, ale ovladač se nerozběhl. Co je k dispozici, zjistíte v terminálu kontejneru:
+
+```bash
+vainfo --display drm --device /dev/dri/renderD128
+```
+
+Když si libva ovladač nevybere sama, vynuťte ho v `.env` přes `LIBVA_DRIVER_NAME` — `iHD` pro novější Intel (Gemini Lake a novější), `i965` pro starší. Pokud VAAPI nerozchodíte vůbec, nic zásadního se neděje: přímé přehrávání i přebalení běží bez akcelerace naplno a překódování potřebují jen netypické formáty.
 
 ### Když se NAS zadrhává
 
