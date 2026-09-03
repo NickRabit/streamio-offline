@@ -1,6 +1,6 @@
 name: Vydání verze
 
-# Otagujete commit a zbytek už jde sám: tahle úloha si zavolá "Obraz pro NAS",
+# Otagujete commit a zbytek už jde sám: tahle úloha si zavolá "Sestavení obrazu",
 # takže se vydávaná verze sestaví a otestuje ze stejného commitu, na který tag
 # ukazuje -- není tedy co si splést. Ke značkám :latest a :<sha>, které přidává
 # samotné sestavení, přibudou ještě :<verze> a :<major.minor>.

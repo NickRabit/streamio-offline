@@ -1,4 +1,4 @@
-name: Obraz pro NAS
+name: Sestavení obrazu
 
 # Sestavení pro amd64 trvá na NASu dlouho a Container Manager navíc staví
 # klasickým builderem, kde se snadno ztratí ovladače VAAPI. Obraz proto vzniká tady
@@ -6,7 +6,7 @@ name: Obraz pro NAS
 # na nich pak obraz stáhne sám místo osmiminutového sestavování přes emulaci.
 #
 # Na push se nestaví -- commitů děláme hodně a obraz z každého z nich by byl
-# zbytečný běh. Sestavení spouští buď člověk (Actions -> Obraz pro NAS -> Run
+# zbytečný běh. Sestavení spouští buď člověk (Actions -> Sestavení obrazu -> Run
 # workflow), nebo "Vydání verze", které si tuhle úlohu zavolá přes workflow_call.
 # Až se vývoj přesune na větve a do main se bude slévat hotová práce, dává smysl
 # vrátit sem "on: push: branches: [main]".
