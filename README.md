@@ -96,8 +96,9 @@ ls -n /downloads
    a projekt restartujte. Terminál Container Manageru je plnohodnotná náhrada
    SSH pro tenhle účel.
 
-6. Otevřete `http://NAS:8090`, přihlaste se jako `admin` / `admin` a nastavte si
-   vlastní heslo. Aplikace si to vynutí, dokud to neuděláte, nepustí nic jiného.
+6. Otevřete `http://NAS:8090`. Čerstvá instalace žádný účet nemá a rovnou vás
+   nechá zvolit jméno a heslo; do té doby server nepustí nic jiného. Žádné
+   výchozí heslo neexistuje, takže není co zapomenout změnit.
 
 ### S SSH
 
@@ -180,5 +181,9 @@ Při první inicializaci se automaticky přidají oficiální **Cinemeta** (kata
 ## Bezpečnost
 
 Server nespouští kód doplňků, pouze čte jejich JSON API. Ve výchozím stavu blokuje manifesty a streamy směřující do privátní sítě. Pro vlastní LAN doplňky lze vědomě nastavit `ALLOW_PRIVATE_ADDONS=1`.
+
+Přihlášení si zakládáte při prvním otevření, výchozí účet se nevytváří. Heslo se ukládá jen jako otisk (scrypt) a relace nese podepsanou známku; odhlášení všech zařízení vymění podpisové tajemství, takže dosud vydané známky rázem neplatí.
+
+Zapomenuté heslo se dá obejít záložními údaji z prostředí: nastavte `ADMIN_USERNAME` a `ADMIN_PASSWORD`, přihlaste se jimi a heslo si v Nastavení změňte. Druhá možnost je smazat klíč `auth` ze souboru `state.json` v datovém svazku — server pak při dalším startu znovu nabídne založení účtu a doplňky ani knihovna se neztratí.
 
 Používejte pouze zdroje a účty, ke kterým máte oprávněný přístup.

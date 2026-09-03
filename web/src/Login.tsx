@@ -6,9 +6,8 @@ import { SettingControl, SettingsSectionHead } from "./settings-ui";
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-export function LoginScreen({ session, onSession }: { session: Session | null; onSession: (session: Session) => void }) {
-  const forced = Boolean(session?.mustChangePassword);
-  const [username, setUsername] = useState(session?.username ?? "");
+export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (session: Session) => void }) {
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [repeat, setRepeat] = useState("");
   const [remember, setRemember] = useState(true);
@@ -19,10 +18,11 @@ export function LoginScreen({ session, onSession }: { session: Session | null; o
     event.preventDefault();
     setError(""); setBusy(true);
     try {
-      if (forced) {
-        if (password.length < 6) throw new Error("Nové heslo musí mít aspoň 6 znaků.");
+      if (setup) {
+        if (username.trim().length < 3) throw new Error("Uživatelské jméno musí mít aspoň 3 znaky.");
+        if (password.length < 6) throw new Error("Heslo musí mít aspoň 6 znaků.");
         if (password !== repeat) throw new Error("Hesla se neshodují.");
-        onSession(await api.changeCredentials({ username: username.trim(), newPassword: password }));
+        onSession(await api.setup(username.trim(), password));
       } else {
         onSession(await api.login(username.trim(), password, remember));
       }
@@ -34,26 +34,26 @@ export function LoginScreen({ session, onSession }: { session: Session | null; o
     <form className="panel login-card" onSubmit={submit}>
       <div className="login-brand"><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></div>
 
-      {forced
-        ? <p className="login-warning"><ShieldAlert/> Účet zatím používá výchozí heslo. Než půjdeme dál, nastavte si prosím vlastní.</p>
+      {setup
+        ? <p className="login-warning"><ShieldAlert/> Server zatím nemá žádný účet. Zvolte si jméno a heslo, kterými se budete přihlašovat.</p>
         : <p className="login-lead">Přihlaste se ke svému serveru.</p>}
 
       <label><span>Uživatelské jméno</span>
-        <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus={!forced} required/></label>
+        <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" autoFocus required/></label>
 
-      <label><span>{forced ? "Nové heslo" : "Heslo"}</span>
+      <label><span>Heslo</span>
         <input type="password" value={password} onChange={(event) => setPassword(event.target.value)}
-          autoComplete={forced ? "new-password" : "current-password"} autoFocus={forced} required/></label>
+          autoComplete={setup ? "new-password" : "current-password"} required/></label>
 
-      {forced && <label><span>Nové heslo znovu</span>
+      {setup && <label><span>Heslo znovu</span>
         <input type="password" value={repeat} onChange={(event) => setRepeat(event.target.value)} autoComplete="new-password" required/></label>}
 
-      {!forced && <label className="login-remember">
+      {!setup && <label className="login-remember">
         <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)}/>
         <span>Zapamatovat přihlášení na tomto zařízení (30 dní)</span></label>}
 
       {error && <p className="login-error">{error}</p>}
-      <button className="primary" disabled={busy}><KeyRound/> {forced ? "Nastavit heslo" : "Přihlásit se"}</button>
+      <button className="primary" disabled={busy}><KeyRound/> {setup ? "Založit účet" : "Přihlásit se"}</button>
     </form>
   </div>;
 }
