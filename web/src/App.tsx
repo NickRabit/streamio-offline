@@ -5,6 +5,7 @@ import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { StatsPanel } from "./Stats";
+import { copyText } from "./clipboard";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
 import type { Addon, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
@@ -742,7 +743,7 @@ function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className=
 function SettingsPage({ settings, languages, session, onSession, onSave, onNotify, onError }: { settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
-  const copyLog = async () => { try { await navigator.clipboard.writeText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
+  const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
   return <section className="settings-page"><div className="settings-title"><Heading eyebrow="NASTAVENÍ" title="Nastavení aplikace"/><span><Check/> Změny se ukládají automaticky</span></div><p className="lead">Správa úložiště, stahování, knihovny a výchozího chování přehrávače.</p>
     <div className="settings-grid">
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
@@ -852,7 +853,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
         </select></label>
       <div className="manifest-actions">
         <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> Uložit</button>
-        <button onClick={async () => { try { await navigator.clipboard.writeText(manifestUrl); onNotify("Adresa zkopírována."); } catch (error) { onError(error); } }}><Copy/> Kopírovat URL</button>
+        <button onClick={async () => { try { await copyText(manifestUrl); onNotify("Adresa zkopírována."); } catch (error) { onError(error); } }}><Copy/> Kopírovat URL</button>
         <button onClick={() => void exportManifest()}><FileJson/> Exportovat JSON</button>
       </div>
     </div>}
