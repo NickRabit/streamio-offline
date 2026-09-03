@@ -279,7 +279,27 @@ export function App() {
     setLocalStream({ url: `file://${path}`, behaviorHints: { filename: path.split("/").pop() } });
     setPlayerOpen(true);
   };
-  useEffect(() => { if (!ready) return; loadDownloads(); const timer = setInterval(loadDownloads, view === "downloads" ? 1200 : 5000); return () => clearInterval(timer); }, [view, ready]);
+  // Polling reschedules itself instead of running on a fixed interval: a hidden tab
+  // does nothing, and a failing server is asked ever less often. A toast on every tick
+  // would only cover the screen while the server restarts.
+  useEffect(() => {
+    if (!ready) return;
+    const base = view === "downloads" ? 1200 : 5000;
+    let delay = base;
+    let timer: number | undefined;
+    let stopped = false;
+    const plan = (ms: number) => { if (!stopped) timer = window.setTimeout(tick, ms); };
+    const tick = async () => {
+      if (document.hidden) return plan(base);
+      try { setDownloads(await api.downloads(8000)); delay = base; }
+      catch (error) { if (error instanceof ApiError && error.status === 401) setSession(null); delay = Math.min(delay * 2, 30_000); }
+      plan(delay);
+    };
+    const wake = () => { if (!document.hidden) { clearTimeout(timer); delay = base; void tick(); } };
+    document.addEventListener("visibilitychange", wake);
+    void tick();
+    return () => { stopped = true; clearTimeout(timer); document.removeEventListener("visibilitychange", wake); };
+  }, [view, ready]);
 
   const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
   // Žánr patří konkrétnímu katalogu. Po přepnutí katalogu zmizí z nabídky, ale ve stavu

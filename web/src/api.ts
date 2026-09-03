@@ -5,8 +5,22 @@ export class ApiError extends Error {
   constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
 }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...options, headers: { "content-type": "application/json", ...options?.headers } });
+/** Every call gets a deadline. A stalled connection would otherwise be held until the
+ * operating system gives up, which takes minutes, and six of those exhaust the browser's
+ * per-origin pool -- the app then looks dead on that one device while others are fine. */
+async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+  const { timeoutMs = 30_000, ...init } = options ?? {};
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+      headers: { "content-type": "application/json", ...init.headers },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError("Server neodpověděl včas.", 408);
+    throw error;
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => ({} as { error?: string; code?: string }));
     throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code);
@@ -32,7 +46,7 @@ export const api = {
   streamSources: (type: string, id: string) => request<Array<{ key: string; name: string }>>(`/api/stream-sources/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
-  downloads: () => request<Download[]>("/api/downloads"),
+  downloads: (timeoutMs?: number) => request<Download[]>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, stream, media }) }),
   downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, media?: { id?: string; metaType?: string; poster?: string }) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, media }) }),
   downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
