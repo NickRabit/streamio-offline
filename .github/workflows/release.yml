@@ -1,9 +1,9 @@
 name: Vydání verze
 
-# Verzovaný build nestaví nic nového -- otagujete commit, který "Obraz pro NAS"
-# už postavil a otestoval (obvykle špička main), a tahle úloha jen přidá čitelné
-# značky ke stejnému otisku. Bez samostatného sestavení tak odpadá otázka, jestli
-# se release náhodou nesestavil z něčeho jiného než to, co běželo na main.
+# Otagujete commit a zbytek už jde sám: tahle úloha si zavolá "Obraz pro NAS",
+# takže se vydávaná verze sestaví a otestuje ze stejného commitu, na který tag
+# ukazuje -- není tedy co si splést. Ke značkám :latest a :<sha>, které přidává
+# samotné sestavení, přibudou ještě :<verze> a :<major.minor>.
 #
 # Vydání: git tag v0.4.0 && git push origin v0.4.0
 on:
@@ -11,42 +11,39 @@ on:
     tags: ["v*.*.*"]
 
 jobs:
-  otagovat:
+  verze:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      minor: ${{ steps.v.outputs.minor }}
+    steps:
+      - id: v
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
+
+  obraz:
+    needs: verze
+    uses: ./.github/workflows/image.yml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    with:
+      znacky: "${{ needs.verze.outputs.version }} ${{ needs.verze.outputs.minor }}"
+
+  # Vydání na GitHubu vzniká až po úspěšném sestavení, aby v seznamu vydání
+  # nestála verze, jejíž obraz se nepovedlo postavit.
+  vydani:
+    needs: obraz
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Určit verzi a název obrazu
-        id: verze
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Otisk, na který tag ukazuje, musí už mít "Obraz pro NAS" postavený a
-      # odeslaný pod :<sha> -- to je normální stav, když se značí commit z main.
-      - name: Přidat verzi ke stejnému otisku
-        run: |
-          docker buildx imagetools create \
-            -t "$IMAGE:${{ steps.verze.outputs.version }}" \
-            -t "$IMAGE:${{ steps.verze.outputs.minor }}" \
-            -t "$IMAGE:latest" \
-            "$IMAGE:${{ github.sha }}"
-      - run: docker buildx imagetools inspect "$IMAGE:${{ steps.verze.outputs.version }}"
-
       - name: Vydání na GitHubu s automatickými poznámkami
         env:
           GH_TOKEN: ${{ github.token }}

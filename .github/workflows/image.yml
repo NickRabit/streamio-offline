@@ -4,21 +4,26 @@ name: Obraz pro NAS
 # klasickým builderem, kde se snadno ztratí ovladače VAAPI. Obraz proto vzniká tady
 # a NAS ho jen stáhne. arm64 se přidává kvůli Macům s Apple Silicon -- Docker si
 # na nich pak obraz stáhne sám místo osmiminutového sestavování přes emulaci.
+#
+# Na push se nestaví -- commitů děláme hodně a obraz z každého z nich by byl
+# zbytečný běh. Sestavení spouští buď člověk (Actions -> Obraz pro NAS -> Run
+# workflow), nebo "Vydání verze", které si tuhle úlohu zavolá přes workflow_call.
+# Až se vývoj přesune na větve a do main se bude slévat hotová práce, dává smysl
+# vrátit sem "on: push: branches: [main]".
 on:
-  push:
-    branches: [main]
-    paths:
-      - "server/**"
-      - "web/**"
-      - "Dockerfile"
-      - "entrypoint.sh"
-      - "package.json"
-      - "package-lock.json"
-      - ".github/workflows/image.yml"
   workflow_dispatch:
     inputs:
       balik:
         description: "Přiložit i balík ke stažení pro amd64 (docker save, ~250 MB)"
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      znacky:
+        description: "Značky navíc k :latest a :<sha>, oddělené mezerou"
+        type: string
+        default: ""
+      balik:
         type: boolean
         default: false
 
@@ -125,12 +130,19 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
 
+      # Značky navíc chodí zvenčí (z "Vydání verze"), takže se do příkazu dostávají
+      # přes proměnnou prostředí, ne dosazením do textu skriptu.
       - name: Vytvořit a odeslat seznam
         working-directory: /tmp/digests
+        env:
+          ZNACKY: ${{ inputs.znacky }}
         run: |
+          navic=""
+          for znacka in $ZNACKY; do navic="$navic -t $IMAGE:$znacka"; done
           docker buildx imagetools create \
             -t "$IMAGE:latest" \
             -t "$IMAGE:${{ github.sha }}" \
+            $navic \
             $(printf "$IMAGE@sha256:%s " *)
       - run: docker buildx imagetools inspect "$IMAGE:${{ github.sha }}"
 
