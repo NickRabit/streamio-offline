@@ -1,0 +1,56 @@
+# Nasazení na NAS z hotového obrazu: nic se tu nestaví, jen stahuje.
+# V Container Manageru zvolte tenhle soubor místo compose.yml.
+#
+#   docker compose -f compose.pull.yml pull
+#   docker compose -f compose.pull.yml up -d
+#
+services:
+  stremio-offline:
+    # Obraz sestavuje GitHub Actions, NAS ho jen stáhne. Konkrétní verzi místo
+    # :latest zvolíte doplněním otisku commitu, třeba :a1b2c3d.
+    image: ghcr.io/nickrabit/streamio-offline:latest
+    container_name: stremio-offline
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${STREMIO_OFFLINE_PORT:-8090}:8080"
+    environment:
+      TZ: "${TZ:-Europe/Prague}"
+      # Pod kým běžet. Na Synology nastavte podle vlastníka složky se stahováním.
+      PUID: "${PUID:-1000}"
+      PGID: "${PGID:-1000}"
+      FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
+      DATA_DIR: /data
+      DOWNLOAD_DIR: /downloads
+      ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
+      ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
+      FFMPEG_PRESET: "${FFMPEG_PRESET:-veryfast}"
+      FFMPEG_CRF: "${FFMPEG_CRF:-23}"
+      FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
+      FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-3}"
+      VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
+      # Skupina vlastnící render node. Bez ní by proces po přepnutí na PUID/PGID
+      # na /dev/dri nedosáhl; zjistíte ji v terminálu kontejneru: ls -n /dev/dri
+      RENDER_GID: "${RENDER_GID:-}"
+      # Některé sestavy si ovladač nevyberou samy; iHD je pro novější Intel, i965 pro starší.
+      LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-}"
+    # Hardwarový převod přes Intel QuickSync. Na stroji bez /dev/dri tyhle dva
+    # řádky zakomentujte, jinak se kontejner odmítne spustit.
+    devices:
+      - /dev/dri:/dev/dri
+    # Softwarový převod si vezme všechna jádra a DSM pak nereaguje. Na slabším NAS
+    # odkomentujte a nechte jedno jádro systému (např. 3 ze 4).
+    #
+    # cpus: "3.0"
+    # Restart politika má smysl jen když je poznat, že server žije.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      # Data serveru (účet, doplňky, náhledy, statistiky) leží v normální složce,
+      # ne ve skrytém svazku Dockeru -- jde je zálohovat i prohlédnout jako cokoli jiného.
+      - "${DATA_PATH:-./data}:/data"
+      - "${DOWNLOAD_PATH:-./downloads}:/downloads"

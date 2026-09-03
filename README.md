@@ -188,6 +188,31 @@ V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť 
 
 Při první inicializaci se automaticky přidají oficiální **Cinemeta** (katalog a metadata) a **OpenSubtitles v3** (titulky). Lze je vypnout nebo odstranit; po vědomém odstranění se při restartu samy nevrátí.
 
+## Sestavení obrazu
+
+Stavět na NASu se nevyplácí: trvá to dlouho a Container Manager používá klasický builder, kde se kvůli prázdnému `ARG TARGETARCH` snadno ztratí ovladače VAAPI. Obraz proto vzniká jinde a NAS ho jen dostane hotový.
+
+**Místně** to udělá jeden příkaz — přeloží, projede testy, sestaví pro zvolenou architekturu, vypíše, co v obrazu je, a zabalí ho:
+
+```bash
+./scripts/build-image.sh
+```
+
+Vznikne `dist/stremio-offline-amd64-<datum>.tar.gz`, který nahrajete na NAS a v Container Manageru přidáte přes **Image → Přidat → Přidat ze souboru**. Přepínače `--arch`, `--tag` a `--out` mění architekturu, značku a cílovou složku.
+
+**Na GitHubu** to samé dělá workflow `Obraz pro NAS` při každé změně v `server/`, `web/`, `Dockerfile` nebo `entrypoint.sh`. Nejdřív pustí testy, pak sestaví obraz pro amd64, odešle ho do GHCR jako `ghcr.io/nickrabit/streamio-offline:latest` (a pod otiskem commitu) a nakonec ověří, že v něm ovladače VAAPI opravdu jsou — jinak úloha spadne.
+
+NAS pak obraz jen stahuje. Použijte `compose.pull.yml` místo `compose.yml`:
+
+```bash
+docker compose -f compose.pull.yml pull
+docker compose -f compose.pull.yml up -d
+```
+
+Balíček v GHCR zdědí soukromí repozitáře, takže se k němu NAS musí přihlásit tokenem (Container Manager → Registry → Nastavení). Pokud vám nevadí, že obraz uvidí kdokoli, je jednodušší přepnout balíček v GitHubu na veřejný — repozitář může zůstat soukromý a přihlašování odpadne. Obraz nenese žádné údaje, jen aplikaci.
+
+Ruční spuštění workflow (**Actions → Obraz pro NAS → Run workflow**) navíc umí přiložit balík ke stažení, když se do GHCR pouštět nechcete.
+
 ## Kde leží data
 
 Server si vedle stažených filmů drží vlastní data: účet, seznam doplňků, náhledy knihovny, statistiky a frontu stahování. Sídlí v `/data` a cestu k nim určuje `DATA_PATH`, ve výchozím stavu složka `data` vedle `compose.yml`.
