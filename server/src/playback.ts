@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { INTERNAL_TOKEN } from "./auth.js";
@@ -299,7 +299,16 @@ export class PlaybackManager {
   private async checkVaapi(device: string) {
     try { await access(device, constants.R_OK | constants.W_OK); }
     catch {
-      log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Zkontrolujte RENDER_GID podle ls -n /dev/dri", { device });
+      // Report which group actually owns the device and which ones the process holds:
+      // otherwise finding the right RENDER_GID means a trip to the container terminal.
+      let owner: number | undefined;
+      try { owner = (await stat(device)).gid; } catch { /* device may be gone entirely */ }
+      log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Nastavte v .env RENDER_GID na hodnotu deviceGroup", {
+        device,
+        deviceGroup: owner,
+        ourGroups: process.getgroups?.() ?? [],
+        runningAs: `${process.getuid?.()}:${process.getgid?.()}`,
+      });
       return;
     }
     try {
