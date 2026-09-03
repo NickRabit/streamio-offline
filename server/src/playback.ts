@@ -461,11 +461,17 @@ export class PlaybackManager {
       if (copyVideo) args.push("-noaccurate_seek");
       args.push("-ss", offset.toFixed(3));
     }
-    // Without a video processing unit the frames have to come back to system memory,
-    // otherwise the software scaler has nothing to work with.
+    // Když funguje VAAPI video processing, můžeme nechat dekódování, scaling i encoding
+    // na GPU. Slabší Intel GPU v Synology ale často umí jen encoder. V takovém případě
+    // nedáváme FFmpegu -hwaccel: dekóduje a škáluje v RAM a explicitně inicializované
+    // zařízení použije až hwupload + h264_vaapi. Vyhneme se tak problematickému převodu
+    // VAAPI surfaces zpět do systémové paměti.
     if (!copyVideo && hardware) {
-      args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!);
-      if (this.vaapiScaling) args.push("-hwaccel_output_format", "vaapi");
+      if (this.vaapiScaling) {
+        args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
+      } else {
+        args.push("-init_hw_device", `vaapi=va:${this.vaapiDevice!}`, "-filter_hw_device", "va");
+      }
     }
     // Náskok se platí zápisem na disk: při přebalení 8x rychleji než reálný čas nasype
     // FFmpeg ~340 MB za 20 s a slabší NAS se zadusí protlačováním špinavých stránek.
@@ -507,7 +513,11 @@ export class PlaybackManager {
       args.push("-c:v", "libx264", "-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*2)");
       if (bitrate) args.push("-maxrate", bitrate, "-bufsize", bitrate);
     }
-    if (hasAudio) args.push(...(copyAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
+    // Audio passthrough má smysl jen u remuxu. Při transkódování obrazu může zejména
+    // kopírované E-AC-3 zablokovat inicializaci fMP4 HLS ("codec frame size is not set").
+    // AAC je pro webové klienty nejspolehlivější a jeho převod zatěžuje NAS minimálně.
+    const passthroughAudio = copyVideo && copyAudio;
+    if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
     if (subtitle !== null) args.push("-c:s", "webvtt");
 
     // fMP4 segmenty: jediný způsob, jak propustit HEVC nebo AC3 bez překódování.
