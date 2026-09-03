@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue } from "./downloads.js";
-import { StatsLog, type DownloadEvent } from "./stats.js";
+import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
-import { PlaybackManager } from "./playback.js";
+import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
 import { initLogger, log, readLog } from "./logger.js";
@@ -31,11 +31,19 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 const stats = new StatsLog();
 
 /** Poskytovatele bereme z adresy zdroje; doplněk ji může mít u každého streamu jiný. */
-const statEvent = (job: { at: string; bytes: number; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): DownloadEvent => {
-  let provider = "neznámý";
-  try { if (job.url) provider = new URL(job.url).hostname; } catch { /* zůstane neznámý */ }
-  return { at: job.at, bytes: job.bytes, provider, addonKey: job.addonKey, addonName: job.addonName, title: job.title, kind: job.kind === "movie" || job.kind === "episode" ? job.kind : "other" };
-};
+const providerOf = (url?: string) => { try { return url ? new URL(url).hostname : "neznámý"; } catch { return "neznámý"; } };
+
+const statMeta = (job: { source?: TrafficMeta["source"]; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficMeta => ({
+  source: job.source ?? "download",
+  provider: providerOf(job.url),
+  addonKey: job.addonKey,
+  addonName: job.addonName,
+  title: job.title,
+  kind: job.kind === "movie" || job.kind === "episode" ? job.kind : "other",
+});
+
+const statEvent = (job: { at: string; bytes: number; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficEvent =>
+  ({ ...statMeta(job), at: job.at, bytes: job.bytes, items: 1 });
 if (!store.defaultsInstalled()) {
   const defaults = [
     { url: "https://v3-cinemeta.strem.io/manifest.json", role: "catalog" as const },
@@ -94,6 +102,24 @@ const currentSession = (req: express.Request) => {
 const currentUser = (req: express.Request) => currentSession(req)?.username;
 
 app.use(express.json({ limit: "256kb" }));
+/** Změří, kolik dat odpověď opravdu odešle, a hlásí to statistikám. Počítá se až
+ * u zápisu do odpovědi, takže co si klient objednal a pak přehrávání zavřel,
+ * se do součtu nedostane. */
+const countBytes = (res: express.Response, meta: TrafficMeta) => {
+  const measure = (chunk: unknown) => {
+    if (typeof chunk === "string" || chunk instanceof Uint8Array) stats.add(meta, Buffer.byteLength(chunk));
+  };
+  const write = res.write.bind(res) as (...args: unknown[]) => boolean;
+  const end = res.end.bind(res) as (...args: unknown[]) => express.Response;
+  res.write = ((...args: unknown[]) => { measure(args[0]); return write(...args); }) as typeof res.write;
+  res.end = ((...args: unknown[]) => { measure(args[0]); return end(...args); }) as typeof res.end;
+};
+
+/** Přehrávání z knihovny čte soubor z disku, přehrávání z katalogu jde ven přes proxy. */
+const playbackMeta = (stream: StreamItem): TrafficMeta => stream.url?.startsWith("file://")
+  ? { source: "library", provider: "knihovna", title: path.basename(stream.url.slice(7)), kind: "other" }
+  : statMeta({ source: "catalog", url: stream.url, title: sourceTitle(stream) || providerOf(stream.url), addonKey: stream.addonKey, addonName: stream.addonName });
+
 const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
 
 // Bez přihlášení je otevřený jen stav serveru a samotné přihlášení. Zvlášť /api/proxy
@@ -698,9 +724,13 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 
 // Dokončení zneplatní sken okamžitě. U líných úloh zde poprvé známe cílovou cestu,
 // takže teprve teď lze uložit vazbu na katalog a plakát.
+// Bajty se do statistik zapisují, jak tečou; dokončení už jen doplní, že z toho
+// vznikla celá položka. Přerušené stahování tak ve statistikách zůstane -- data
+// linkou prošla, i když se soubor nakonec neuložil.
+queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
 queue.onCompleted = async (job) => {
   libraryCache = undefined;
-  await stats.record(statEvent({ at: job.updatedAt, bytes: job.received, url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
+  await stats.complete(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
@@ -711,7 +741,8 @@ queue.onCompleted = async (job) => {
 await queue.load();
 await stats.load();
 // Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
-// se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam.
+// se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam. Doplní se
+// jen to, co je starší než vlastní záznam -- novější už v něm je.
 await stats.seed(queue.history().map(statEvent));
 
 app.post("/api/library/match", asyncRoute(async (req, res) => {
@@ -732,6 +763,9 @@ app.get("/api/library/file", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "");
   const target = relative && resolveInside(DOWNLOAD_DIR, relative);
   if (!target) return res.status(400).json({ error: "Neplatná cesta k souboru." });
+  // Tudy tečou všechny bajty přehrávání z knihovny -- přímo do prohlížeče i do
+  // FFmpeg, když se převádí. Disk ale není linka ven, takže jdou do vlastní kategorie.
+  countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" });
   res.sendFile(target, { acceptRanges: true, dotfiles: "deny" }, (error) => {
     if (error && !res.headersSent) res.status(404).json({ error: "Soubor nebyl nalezen." });
   });
@@ -822,7 +856,11 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
   if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
-  res.status(201).json(await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options));
+  const started = await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options);
+  // Bajty počítá proxy, respektive knihovna; tady se přidává jen samotná položka,
+  // aby "kolik toho bylo" nezůstalo jen u stahování.
+  void stats.complete(playbackMeta(req.body.stream as StreamItem));
+  res.status(201).json(started);
 }));
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
@@ -859,6 +897,14 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
 
 app.get("/api/proxy", asyncRoute(async (req, res) => {
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw);
+  // Proxy je jediné místo, kudy jde přehrávání z katalogu ven -- přímé i převáděné,
+  // protože i FFmpeg si zdroj bere přes ni. Měřit stačí tady.
+  const meta = statMeta({
+    source: "catalog", url: raw, title: String(req.query.title ?? "") || providerOf(raw),
+    addonKey: typeof req.query.addonKey === "string" ? req.query.addonKey : undefined,
+    addonName: typeof req.query.addonName === "string" ? req.query.addonName : undefined,
+  });
+  countBytes(res, meta);
   const streamHeaders = typeof req.query.headers === "string" ? JSON.parse(Buffer.from(req.query.headers, "base64url").toString()) : {};
   const headers: Record<string, string> = { ...streamHeaders };
   if (req.headers.range) headers.range = req.headers.range;
@@ -873,6 +919,7 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
     const proxied = (value: string) => {
       const params = new URLSearchParams({ url: new URL(value, upstream.url).toString() });
       if (headerToken) params.set("headers", headerToken);
+      for (const name of ["addonKey", "addonName", "title"]) { const carried = req.query[name]; if (typeof carried === "string") params.set(name, carried); }
       return `/api/proxy?${params}`;
     };
     const playlist = (await upstream.text()).split(/\r?\n/).map((line) => {

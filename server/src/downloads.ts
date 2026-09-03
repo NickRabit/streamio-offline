@@ -22,6 +22,9 @@ export class DownloadQueue {
   private readonly stateFile: string; private readonly downloadDir: string;
   /** Zavolá se po úspěšném dokončení, aby knihovna mohla rovnou vyrobit náhled. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
+  /** Přenesené bajty, jak přitékají. Statistiky je tak zapíšou do chvíle, kdy
+   * provoz opravdu tekl, a započítají i to, co se stáhlo před chybou nebo zrušením. */
+  onProgress?: (job: Readonly<DownloadJob>, bytes: number) => void;
   constructor(private concurrency: () => number = () => 1, private perProvider: () => number = () => 1, dataDir = process.env.DATA_DIR ?? "/data", downloadDir = process.env.DOWNLOAD_DIR ?? "/downloads") { this.stateFile = path.join(dataDir, "downloads.json"); this.downloadDir = downloadDir; }
   /** Výběr zdroje pro líné úlohy si drží index.ts, protože potřebuje doplňky a nastavení. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
@@ -166,7 +169,7 @@ export class DownloadQueue {
       // a rozpočet se vrací; jinak by velký soubor umřel na pár škytnutí za hodinu.
       const recoveredAt = 50 * 1024 * 1024; let recovered = false;
       let received = offset; let lastAt = Date.now(); let lastBytes = received; let lastLog = received; inactivity = setInterval(() => { if (Date.now() - lastAt > 90_000) { stalled = true; log("WARN", "Přenos se 90 s neposunul", { id: job.id, received }); controller.abort(); } }, 5_000);
-      const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => { received += chunk.byteLength; job.received = received; if (!recovered && received - offset >= recoveredAt) { recovered = true; job.retryCount = 0; } const now = Date.now(); if (now - lastAt > 800) { job.speed = (received - lastBytes) / ((now - lastAt) / 1000); lastAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon(); } if (received - lastLog >= 50 * 1024 * 1024) { log("INFO", "Průběh stahování", { id: job.id, received, total: job.total, speed: Math.round(job.speed) }); lastLog = received; } output.enqueue(chunk); } });
+      const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => { received += chunk.byteLength; job.received = received; this.onProgress?.(job, chunk.byteLength); if (!recovered && received - offset >= recoveredAt) { recovered = true; job.retryCount = 0; } const now = Date.now(); if (now - lastAt > 800) { job.speed = (received - lastBytes) / ((now - lastAt) / 1000); lastAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon(); } if (received - lastLog >= 50 * 1024 * 1024) { log("INFO", "Průběh stahování", { id: job.id, received, total: job.total, speed: Math.round(job.speed) }); lastLog = received; } output.enqueue(chunk); } });
       await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
       clearInterval(inactivity); if (job.total && job.received !== job.total) throw new Error(`Stažená velikost nesouhlasí (${job.received} / ${job.total}).`); await rename(partial, target); job.status = "completed"; job.speed = 0; log("INFO", "Stahování dokončeno", { id: job.id, received: job.received, target: job.target });
       try { await this.onCompleted?.(job); }

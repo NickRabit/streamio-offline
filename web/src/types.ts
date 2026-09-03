@@ -33,8 +33,8 @@ export interface StatsSummary {
   hour: StatsWindow; day: StatsWindow; week: StatsWindow; month: StatsWindow; total: StatsWindow;
   step: "minute" | "hour" | "day";
   points: Array<{ at: string; bytes: number; count: number }>;
-  providers: StatsBucket[]; addons: StatsBucket[];
-  byProvider: StatsSeries[]; byAddon: StatsSeries[];
+  providers: StatsBucket[]; addons: StatsBucket[]; sources: StatsBucket[];
+  byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
 }
 export interface Settings { concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }

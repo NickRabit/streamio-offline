@@ -38,6 +38,10 @@ export interface PlaybackDescriptor {
 }
 
 /** Povolené cílové kvality a strop datového toku videa pro každou z nich. */
+/** Jak se zdroj jmenuje ve statistikách. Sdílené s index.ts, ať přenesené bajty
+ * a spuštěná přehrání spadnou do jedné položky, a ne do dvou skoro stejných. */
+export const sourceTitle = (stream: StreamItem) => stream.behaviorHints?.filename ?? stream.title ?? stream.name;
+
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 
 /** Jednoduchá fronta operací pro jednu relaci. Seek a změna stopy nesmějí
@@ -269,6 +273,12 @@ export class PlaybackManager {
     const params = new URLSearchParams({ url: stream.url! });
     const headers = stream.behaviorHints?.proxyHeaders?.request ?? {};
     if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
+    // Proxy zná jen adresu, ale ve statistikách má provoz stát u svého doplňku,
+    // stejně jako stahování. Odkud vede, jí proto řekneme rovnou v adrese.
+    if (stream.addonKey) params.set("addonKey", stream.addonKey);
+    if (stream.addonName) params.set("addonName", stream.addonName);
+    const title = sourceTitle(stream);
+    if (title) params.set("title", title);
     return `/api/proxy?${params}`;
   }
   /** Volání zevnitř serveru se prokazuje procesním tokenem, protože cookie prohlížeče nemá. */

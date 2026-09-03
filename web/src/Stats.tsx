@@ -8,7 +8,7 @@ const size = (value: number) => !value ? "0 B"
   : value >= 1e6 ? `${Math.round(value / 1e6)} MB`
   : `${Math.round(value / 1e3)} kB`;
 
-const files = (count: number) => count === 1 ? "1 soubor" : count >= 2 && count <= 4 ? `${count} soubory` : `${count} souborů`;
+const files = (count: number) => count === 1 ? "1 položka" : count >= 2 && count <= 4 ? `${count} položky` : `${count} položek`;
 
 const PERIODS = [
   { hours: 1, label: "hodina" },
@@ -50,7 +50,7 @@ function Card({ title, window }: { title: string; window: { bytes: number; count
 }
 
 /** Bez výběru kreslíme celkový objem sloupci, s výběrem každou řadu vlastní linkou. */
-function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSeries & { color: string }> }) {
+function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSeries & { color: string; dashed?: boolean }> }) {
   const peak = Math.max(1, ...(lines.length ? lines.flatMap((line) => line.points) : summary.points.map((point) => point.bytes)));
   const width = 1000, height = 200;
   const stride = summary.points.length > 1 ? width / (summary.points.length - 1) : width;
@@ -67,7 +67,7 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
         ? <>
             <svg className="stats-lines" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Průběh vybraných zdrojů">
               {lines.map((line) => <polyline key={line.key} fill="none" stroke={line.color} strokeWidth={2} vectorEffect="non-scaling-stroke"
-                strokeLinejoin="round" strokeLinecap="round"
+                strokeDasharray={line.dashed ? "6 4" : undefined} strokeLinejoin="round" strokeLinecap="round"
                 points={line.points.map((value, index) => `${index * stride},${height - (value / peak) * (height - 6)}`).join(" ")}/>)}
             </svg>
             {/* Průhledné sloupce nad grafem nesou bublinu s hodnotami všech vybraných řad. */}
@@ -99,7 +99,7 @@ function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
   const total = items.reduce((sum, item) => sum + item.bytes, 0);
   return <section className="panel stats-breakdown">
     <h3>{title}</h3>
-    {!items.length ? <p className="stats-empty">Žádná stahování v období.</p> : <ul>
+    {!items.length ? <p className="stats-empty">V období není co ukázat.</p> : <ul>
       {items.map((item) => {
         const id = `${kind}:${item.key}`;
         const color = colors.get(id);
@@ -147,6 +147,7 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
     const pool = [
       ...summary.byProvider.map((line) => ({ ...line, id: `provider:${line.key}` })),
       ...summary.byAddon.map((line) => ({ ...line, id: `addon:${line.key}` })),
+      ...summary.bySource.map((line) => ({ ...line, id: `source:${line.key}`, dashed: line.key === "library" })),
     ].filter((line) => chosen.has(line.id));
     const lines = pool.map((line, index) => {
       const color = COLORS[index % COLORS.length];
@@ -159,10 +160,10 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   return <section className="stats-page">
     <div className="stats-head">
       <div>
-        <h2>Statistiky stahování</h2>
+        <h2>Statistiky provozu</h2>
         <p>{summary?.since
-          ? `Měříme od ${new Date(summary.since).toLocaleDateString("cs-CZ")}.`
-          : "Zatím není co měřit — přehled se plní po dokončení stahování."}</p>
+          ? `Karty a sloupce mluví o externím provozu — stahování a přehrávání z katalogu. Měříme od ${new Date(summary.since).toLocaleDateString("cs-CZ")}.`
+          : "Zatím není co měřit — přehled se plní, jak data tečou."}</p>
       </div>
       <div className="stats-periods" role="group" aria-label="Období">
         {PERIODS.map((period) => <button key={period.hours} className={period.hours === hours ? "active" : ""} onClick={() => setHours(period.hours)}>{period.label}</button>)}
@@ -188,14 +189,16 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
         </div>
         {summary.points.some((point) => point.bytes) || lines.length
           ? <Chart summary={summary} lines={lines}/>
-          : <p className="stats-empty">V tomhle období se nic nestáhlo.</p>}
+          : <p className="stats-empty">V tomhle období netekla data ven.</p>}
       </section>
 
-      <p className="stats-hint">Kliknutím na zdroj nebo doplněk přidáte jeho vlastní linii do grafu; vybrat jich jde víc naráz.</p>
+      <p className="stats-hint">Kliknutím na položku přidáte její vlastní linii do grafu; vybrat jich jde víc naráz.
+        Přehrávání z knihovny čte soubor z disku, takže ve sloupcích ani v kartách není — do grafu se dá přidat jako čárkovaná linka.</p>
 
       <div className="stats-columns">
         <Breakdown title="Podle zdroje" kind="provider" items={summary.providers} chosen={chosen} onToggle={toggle} colors={colors}/>
         <Breakdown title="Podle doplňku" kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors}/>
+        <Breakdown title="Podle druhu provozu" kind="source" items={summary.sources} chosen={chosen} onToggle={toggle} colors={colors}/>
       </div>
     </>}
   </section>;
