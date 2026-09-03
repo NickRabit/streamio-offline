@@ -89,6 +89,9 @@ export class PlaybackManager {
   private vaapiDevice?: string;
   /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
   private vaapiScaling = true;
+  /** Some drivers only offer constant quality, so a target bitrate makes the encoder refuse to open. */
+  private vaapiBitrate = true;
+  private vaapiFailures = 0;
   /** -readrate_initial_burst existuje až od FFmpeg 6; starší verzi by volba shodila. */
   private initialBurst = false;
 
@@ -320,8 +323,10 @@ export class PlaybackManager {
       // separate piece and DSM chips often lack it. Probing the encoder alone would
       // let playback fail later with "the requested VAProfile is not supported".
       this.vaapiScaling = await this.probeVaapi(device, "format=nv12,hwupload,scale_vaapi=w=128:h=72:format=nv12");
-      log("INFO", "VAAPI je k dispozici", { device, gpuScaling: this.vaapiScaling });
+      this.vaapiBitrate = await this.probeVaapi(device, "format=nv12,hwupload", ["-b:v", "1M", "-maxrate", "1M"]);
+      log("INFO", "VAAPI je k dispozici", { device, gpuScaling: this.vaapiScaling, bitrateControl: this.vaapiBitrate });
       if (!this.vaapiScaling) log("INFO", "GPU neumí škálovat, zmenšení obrazu poběží na procesoru", { device });
+      if (!this.vaapiBitrate) log("INFO", "GPU neumí cílový datový tok, kóduje se na konstantní kvalitu", { device });
     } catch (error) {
       const output = (error as { stderr?: string }).stderr ?? String(error);
       const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "neznámá chyba";
@@ -329,17 +334,17 @@ export class PlaybackManager {
     }
   }
 
-  private async runVaapiProbe(device: string, filters: string) {
+  private async runVaapiProbe(device: string, filters: string, encoder: string[] = []) {
     await promisify(execFile)("ffmpeg", [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-init_hw_device", `vaapi=va:${device}`, "-filter_hw_device", "va",
       "-f", "lavfi", "-i", "nullsrc=s=256x144:d=0.1",
-      "-vf", filters, "-c:v", "h264_vaapi", "-f", "null", "-",
+      "-vf", filters, "-c:v", "h264_vaapi", ...encoder, "-f", "null", "-",
     ], { timeout: 30_000 });
   }
 
-  private async probeVaapi(device: string, filters: string) {
-    try { await this.runVaapiProbe(device, filters); return true; }
+  private async probeVaapi(device: string, filters: string, encoder: string[] = []) {
+    try { await this.runVaapiProbe(device, filters, encoder); return true; }
     catch { return false; }
   }
 
@@ -375,7 +380,16 @@ export class PlaybackManager {
       this.assertActive(session);
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
-      if (hardware) log("WARN", "VAAPI selhalo, zkouším softwarový převod", { id: session.id, reason: session.error });
+      if (hardware) {
+        log("WARN", "VAAPI selhalo, zkouším softwarový převod", { id: session.id, reason: session.error });
+        // A driver that refuses twice will refuse every time, and each attempt costs the
+        // viewer about twenty seconds before playback starts. Stop offering it.
+        this.vaapiFailures += 1;
+        if (this.vaapiFailures >= 2) {
+          this.vaapiDevice = undefined;
+          log("WARN", "VAAPI opakovaně selhalo, do restartu se používat nebude", { failures: this.vaapiFailures });
+        }
+      }
     }
     throw new Error(session.error || "Převod videa se nepodařilo spustit.");
   }
@@ -483,7 +497,7 @@ export class PlaybackManager {
         // Scaling on the processor is still far cheaper than encoding, so the encoder stays on the GPU.
         : (quality !== null ? `scale=${resize},format=nv12,hwupload` : "format=nv12,hwupload");
       args.push("-vf", filters, "-c:v", "h264_vaapi");
-      if (bitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
+      if (bitrate && this.vaapiBitrate) args.push("-b:v", bitrate, "-maxrate", bitrate);
       else args.push("-qp", crf);
       args.push("-g", "48", "-force_key_frames", "expr:gte(t,n_forced*2)");
     } else {
