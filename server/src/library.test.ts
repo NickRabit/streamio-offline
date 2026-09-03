@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, isPathWithin, isVideo, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, isPathWithin, isVideo, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -192,4 +192,23 @@ test("oblíbené se filtrují před stránkováním", async () => {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("smazaný titul přestane mít vazbu na katalog", () => {
+  const meta = {
+    "filmy/Duna": { type: "movie", id: "tt1160419" },
+    "serialy/Přátelé": { type: "series", id: "tt0108778" },
+  };
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna")], ["movie:tt1160419"]);
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy")], ["movie:tt1160419"], "smazaná nadsložka platí taky");
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna 2")], [], "cizí cesta nic nezapomíná");
+});
+
+test("titul držený ještě jinou cestou zůstává", () => {
+  const meta = {
+    "serialy/Přátelé": { type: "series", id: "tt0108778" },
+    "archiv/Přátelé": { type: "series", id: "tt0108778" },
+  };
+  assert.deepEqual([...orphanedCatalogKeys(meta, "serialy/Přátelé")], [], "druhá složka titul pořád drží");
+  assert.deepEqual([...orphanedCatalogKeys(meta, "archiv")], []);
 });
