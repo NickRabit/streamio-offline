@@ -15,6 +15,7 @@ Stažené soubory se ukládají do hostitelského adresáře nastaveného promě
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
+DATA_PATH=/volume1/docker/stremio-offline/data
 ```
 
 ## Doplňky a Real-Debrid
@@ -74,6 +75,7 @@ sdílených složek. Postup existuje s SSH i bez něj.
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
+DATA_PATH=/volume1/docker/stremio-offline/data
 ALLOW_ADDON_HOSTS=192.168.1.205
 PUID=1000
 PGID=100
@@ -177,6 +179,20 @@ V **Nastavení** se volí, kolik souborů se stahuje najednou dohromady a kolik 
 V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť nastavit ukládání filmů a seriálů. Hostitelský adresář určuje `DOWNLOAD_PATH`; v kartě doplňku se zadává jen relativní podsložka uvnitř něj. Prázdná podsložka znamená přímo základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.
 
 Při první inicializaci se automaticky přidají oficiální **Cinemeta** (katalog a metadata) a **OpenSubtitles v3** (titulky). Lze je vypnout nebo odstranit; po vědomém odstranění se při restartu samy nevrátí.
+
+## Kde leží data
+
+Server si vedle stažených filmů drží vlastní data: účet, seznam doplňků, náhledy knihovny, statistiky a frontu stahování. Sídlí v `/data` a cestu k nim určuje `DATA_PATH`, ve výchozím stavu složka `data` vedle `compose.yml`.
+
+Je to normální složka, ne skrytý svazek Dockeru — zálohujete ji zkopírováním a smazáním ji server vrátíte do stavu po instalaci (přijdete o účet a doplňky, stažené soubory zůstanou). Na Synology dává smysl ji dát do sdílené složky, ať je vidět ve File Stationu.
+
+Dřívější verze držely data v pojmenovaném svazku `stremio-offline-data` ve skrytém `/volume1/@docker/`. Přenos proběhne sám: je-li nová složka prázdná a starý svazek připojený, obsah se při prvním startu zkopíruje a v logu se objeví `Přenáším data ze staršího svazku`. Až budete mít přeneseno, můžete z `compose.yml` smazat řádek s `/legacy-data` i sekci `volumes` na konci.
+
+Kdybyste data potřebovali přenést ručně, přes SSH to zvládne jeden příkaz — název svazku zjistíte z `docker volume ls`:
+
+```bash
+docker run --rm -v stremio-offline_stremio-offline-data:/from -v /volume1/docker/stremio-offline/data:/to alpine sh -c 'cp -a /from/. /to/'
+```
 
 ## Bezpečnost
 

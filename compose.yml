@@ -49,8 +49,14 @@ services:
       retries: 3
       start_period: 20s
     volumes:
-      - stremio-offline-data:/data
+      # Data serveru (účet, doplňky, náhledy, statistiky) leží v normální složce,
+      # ne ve skrytém svazku Dockeru -- jde je zálohovat i prohlédnout jako cokoli jiného.
+      - "${DATA_PATH:-./data}:/data"
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
+      # Přenos ze starších verzí, které držely data ve svazku Dockeru: obsah se
+      # při prvním startu zkopíruje do složky výše. Až budete mít přeneseno,
+      # tenhle řádek i sekci volumes dole můžete smazat.
+      - "stremio-offline-data:/legacy-data:ro"
 
 volumes:
   stremio-offline-data:
