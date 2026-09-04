@@ -60,6 +60,7 @@ export function App() {
   const restoringScroll = useRef(false);
   const viewRef = useRef<View>("catalog");
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const [detailCompact, setDetailCompact] = useState(false);
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
   const [sourcesLoaded, setSourcesLoaded] = useState(false);
@@ -201,6 +202,28 @@ export function App() {
       for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
     };
   }, [view]);
+  useEffect(() => {
+    const panel = detailRef.current;
+    if (!panel || !selected) return;
+    let startX = 0;
+    let startY = 0;
+    const onStart = (event: TouchEvent) => {
+      startX = event.touches[0]?.clientX ?? 0;
+      startY = event.touches[0]?.clientY ?? 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (!window.matchMedia("(orientation: landscape)").matches) return;
+      const dx = (event.touches[0]?.clientX ?? 0) - startX;
+      const dy = (event.touches[0]?.clientY ?? 0) - startY;
+      if (Math.abs(dx) > Math.abs(dy)) event.preventDefault();
+    };
+    panel.addEventListener("touchstart", onStart, { passive: true });
+    panel.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      panel.removeEventListener("touchstart", onStart);
+      panel.removeEventListener("touchmove", onMove);
+    };
+  }, [selected]);
 
   const resetCatalog = () => {
     const firstCatalog = catalogs[0];
@@ -560,7 +583,7 @@ export function App() {
     finally { if (!stale()) setBusy(false); }
   };
   const openMeta = async (item: Meta) => {
-    setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
+    setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
     requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
@@ -569,7 +592,7 @@ export function App() {
   };
   const closeMeta = () => {
     sourcesRequestRef.current += 1;
-    setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
+    setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null); setDetailCompact(false);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
@@ -698,13 +721,13 @@ export function App() {
               title={submittedQuery ? "Nic se nenašlo" : searchRequired ? "Zadejte hledaný název" : "Katalog je prázdný"}
               text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
             {busy && <div className="loading">Načítám…</div>}
-          </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
+          </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={closeMeta}><ChevronLeft/> Výsledky</button><strong>{selected.name}</strong></div>
             <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
               <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
                 onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title="Zvětšit poster a zobrazit náhledy"><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? `${galleryImages.length} náhledů` : "Zvětšit"}</span></button>}</div></div>
             <div className="detail-workflow">
-            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list">{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
+            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
             {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{visibleStreams.length === streams.length ? streams.length : `${visibleStreams.length} z ${streams.length}`}{pendingSources > 0 ? ` · načítám z ${pendingSources} ${pendingSources === 1 ? "doplňku" : "doplňků"}…` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
                 <label><span>Doplněk</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
@@ -721,7 +744,7 @@ export function App() {
                   <option value="size-asc">Od nejmenšího</option>
                   <option value="addon">Podle priority doplňku</option>
                 </select></label>
-              </div>}<div className="stream-list">{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.url ? "HTTP" : stream.infoHash ? "P2P" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.url ? "HTTP" : stream.infoHash ? "P2P" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">Ptám se doplňků…</div>}
               {Boolean(streams.length) && !visibleStreams.length && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}

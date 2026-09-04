@@ -547,9 +547,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
    * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
   const enterBrowserFullscreen = async () => {
     if (document.fullscreenElement) return true;
+    const node = overlayRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
     try {
-      if (overlayRef.current?.requestFullscreen) {
-        await overlayRef.current.requestFullscreen();
+      if (node?.requestFullscreen) {
+        await node.requestFullscreen();
+        return true;
+      }
+      if (node?.webkitRequestFullscreen) {
+        await node.webkitRequestFullscreen();
         return true;
       }
     } catch { /* Bez uživatelského gesta může prohlížeč automatický fullscreen odmítnout. */ }
@@ -578,10 +583,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
       if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => { automaticFullscreenRef.current = entered; }), 80);
-      } else if (!landscape && previous && automaticFullscreenRef.current && document.fullscreenElement === overlayRef.current) {
-        void document.exitFullscreen().catch(() => undefined);
+        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => {
+          automaticFullscreenRef.current = entered;
+          if (!entered) setCssFullscreen(true);
+        }), 80);
+      } else if (!landscape && previous) {
+        if (automaticFullscreenRef.current && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
         automaticFullscreenRef.current = false;
+        setCssFullscreen(false);
       }
       previous = landscape;
     };
@@ -610,6 +619,20 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     finally { setDeviceDownloadBusy(false); }
   };
 
+  const closePlayer = () => {
+    videoRef.current?.pause();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
+    setCssFullscreen(false);
+    const fullscreen = document.fullscreenElement;
+    onClose();
+    // Nejdřív sundáme overlay, teprve potom fullscreen. Jinak Safari při křížku
+    // nahoře vysune záložky ještě přes video.
+    if (fullscreen) window.setTimeout(() => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    }, 80);
+  };
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -628,7 +651,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
       else if (event.key === "c" || event.key === "t") { event.preventDefault(); setSubtitlesHidden((value) => !value); }
       else if (event.key === "f") void toggleFullscreen();
-      else if (event.key === "Escape" && !document.fullscreenElement) onClose();
+      else if (event.key === "Escape" && !document.fullscreenElement) closePlayer();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -644,7 +667,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls}>
     <div className="player-head">
       <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
-      <button className="icon-button" aria-label="Zavřít přehrávač" onClick={onClose}><X /></button>
+      <button className="icon-button" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
     </div>
     <div className="player-host">
       <video ref={videoRef} playsInline
@@ -685,6 +708,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
+      <button className="icon-button player-close-control" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
       <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
       <button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
       <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
