@@ -282,6 +282,24 @@ tokeny a hesla vůbec.
 
 Podrobnosti o požadavcích a průběhu převodu přidá `LOG_LEVEL=DEBUG` v `.env`.
 
+### Když doplněk neodpovídá
+
+Dotazy na doplňky (katalog, metadata, streamy, titulky, plakáty) jdou přes pojistku, která
+hlídá každý server zvlášť. Naráz na něj jde nanejvýš `ADDON_MAX_CONCURRENT` dotazů (výchozí 4)
+s odstupem `ADDON_MIN_INTERVAL_MS` (100 ms), takže ho nezahltíme ani při hledání ve všech
+katalogech naráz.
+
+Po `ADDON_BREAKER_FAILURES` selháních za sebou (výchozích 5) se doplněk na `ADDON_BREAKER_COOLDOWN_MS`
+(30 s) odstaví: další dotazy skončí okamžitě místo čekání na timeout, takže mrtvý zdroj
+nezdržuje hledání. Po vypršení projde jeden zkušební dotaz — když uspěje, doplněk se vrátí do
+hry, když ne, pauza se zdvojnásobí až na `ADDON_BREAKER_MAX_COOLDOWN_MS` (5 minut). Jako selhání
+se počítá jen chyba spojení, timeout, HTTP 5xx a 429; běžné 404 doplněk neodstaví. Když zdroj
+pošle `Retry-After`, pauza se řídí jím.
+
+Stav je vidět v `/api/diagnostics` v položce `outbound` a každá změna se zapíše do logu.
+`ADDON_GUARD=0` celou pojistku vypne. Stahování a přehrávání videa přes ni nejdou — dlouhý
+přenos by jinak zabíral místo a přerušené přehrávání by vypadalo jako výpadek zdroje.
+
 ## Kde leží data
 
 Server si vedle stažených filmů drží vlastní data: účet, seznam doplňků, náhledy knihovny, statistiky a frontu stahování. Sídlí v `/data` a cestu k nim určuje `DATA_PATH`, ve výchozím stavu složka `data` vedle `compose.yml`.

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
-import { safeFetch, validateRemoteUrl } from "./security.js";
+import { validateRemoteUrl } from "./security.js";
+import { guardedFetch } from "./outbound.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { log } from "./logger.js";
 
@@ -11,7 +12,7 @@ const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
 
 async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS): Promise<T> {
   const url = await validateRemoteUrl(rawUrl);
-  const response = await safeFetch(url.toString(), {
+  const response = await guardedFetch(url.toString(), {
     signal: AbortSignal.timeout(timeoutMs),
     headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
   });

@@ -3,7 +3,7 @@ import { access, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { log } from "./logger.js";
-import { safeFetch } from "./security.js";
+import { guardedFetch } from "./outbound.js";
 
 const run = promisify(execFile);
 
@@ -40,7 +40,7 @@ async function writeAtomic(target: string, data: Buffer) {
 /** Stáhne obrázek na přesné místo. Používá se pro plakát, který klient poslal z katalogu. */
 export async function savePosterAs(target: string, url: string): Promise<boolean> {
   try {
-    const response = await safeFetch(url, { signal: AbortSignal.timeout(20_000) });
+    const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) return false;
     if (!(response.headers.get("content-type") ?? "").startsWith("image/")) return false;
     const data = Buffer.from(await response.arrayBuffer());
@@ -52,7 +52,7 @@ export async function savePosterAs(target: string, url: string): Promise<boolean
 
 export async function savePosterFromUrl(directory: string, url: string): Promise<boolean> {
   try {
-    const response = await safeFetch(url, { signal: AbortSignal.timeout(20_000) });
+    const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
     if (!response.ok) return false;
     const type = response.headers.get("content-type") ?? "";
     if (!type.startsWith("image/")) return false;
