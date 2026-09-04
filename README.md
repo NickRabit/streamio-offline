@@ -405,6 +405,30 @@ logged as scheme and host only; tokens and passwords are not logged at all.
 
 `LOG_LEVEL=DEBUG` in `.env` adds request and conversion detail.
 
+### When an addon stops answering
+
+Addon requests (catalog, metadata, streams, subtitles, artwork) go through a
+guard that watches each host on its own. At most `ADDON_MAX_CONCURRENT`
+requests (default 8) reach one host at a time. The cap is there only to bound
+a runaway pile-up, not to slow an ordinary fan-out: a single addon routinely
+serves a dozen catalogs from one address. Spacing requests apart
+(`ADDON_MIN_INTERVAL_MS`) is off by default and worth setting only when a
+provider says it is getting too many.
+
+After `ADDON_BREAKER_FAILURES` consecutive failures (default 5) the host is
+taken out of service for `ADDON_BREAKER_COOLDOWN_MS` (30 s): further requests
+fail immediately instead of waiting for a timeout, so a dead source stops
+holding up search. One request then probes the host once the pause expires —
+on success the addon is back in service, on another failure the pause doubles
+up to `ADDON_BREAKER_MAX_COOLDOWN_MS` (5 minutes). Only connection errors,
+timeouts, HTTP 5xx and 429 count as failures; a plain 404 never takes an addon
+out. When the source sends `Retry-After`, that decides the pause instead.
+
+The state is visible in `/api/diagnostics` under `outbound` and in the
+Diagnostics panel; every change is logged. `ADDON_GUARD=0` turns the whole
+guard off. Downloads and video playback do not go through it — a long
+transfer would hold a slot, and stopping playback would look like an outage.
+
 ## Where data lives
 
 Beside downloaded films, the server keeps its own data: the account, addon

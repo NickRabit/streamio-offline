@@ -6,3 +6,4 @@ downloads/
 *.log
 .DS_Store
 .test-addon/
+*.tsbuildinfo

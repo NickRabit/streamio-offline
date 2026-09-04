@@ -10,6 +10,7 @@ import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
+import { guardedFetch, outbound } from "./outbound.js";
 import { Store } from "./store.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
@@ -285,7 +286,7 @@ app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(
   await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitle", asyncRoute(async (req, res) => {
-  const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await safeFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
+  const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await guardedFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
   let text = await response.text(); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
   const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
@@ -980,6 +981,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
       failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error })),
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
+    outbound: outbound.diagnostics(),
     storage: [await freeSpace(process.env.DATA_DIR ?? "/data"), await freeSpace(DOWNLOAD_DIR)],
   });
 }));

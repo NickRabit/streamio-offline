@@ -41,6 +41,7 @@ export interface Diagnostics {
   };
   downloads: { total: number; byStatus: Record<string, number>; failed: Array<{ id: string; title: string; error?: string }> };
   addons: Array<{ name: string; role: string; enabled: boolean }>;
+  outbound: Array<{ host: string; state: "closed" | "open" | "half-open"; active: number; queued: number; failures: number; rejected: number; opened: number; opensInSeconds?: number }>;
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;
 }
 export interface StatsWindow { bytes: number; count: number }

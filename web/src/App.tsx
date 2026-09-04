@@ -1026,6 +1026,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   const vaapi = info?.playback.vaapi;
   const sessions = info?.playback.sessions ?? [];
   const failed = info?.downloads.failed ?? [];
+  const troubled = info?.outbound ?? [];
   const queue = Object.entries(info?.downloads.byStatus ?? {});
   const reports = issues.reduce((sum, issue) => sum + issue.count, 0);
   const worst = issues.some((issue) => issue.level === "ERROR") ? "error" : issues.length ? "warn" : "ok";
@@ -1054,6 +1055,13 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 
       {failed.length > 0 && <ul className="diagnostics-list">{failed.map((job) => <li key={job.id}>
         <strong>{job.title}</strong><span>{job.error ?? "chyba bez popisu"}</span>
+      </li>)}</ul>}
+
+      {troubled.length > 0 && <ul className="diagnostics-list">{troubled.map((host) => <li key={host.host}>
+        <strong>{host.host}</strong>
+        <span>{host.state === "open" ? `odstaven, další pokus za ${host.opensInSeconds ?? 0} s`
+          : host.state === "half-open" ? "zkouší se po výpadku"
+          : `${host.failures} selhání po sobě`}{host.rejected ? ` · ${host.rejected} odmítnutých dotazů` : ""}</span>
       </li>)}</ul>}
 
       <div className="diagnostics-filters">
