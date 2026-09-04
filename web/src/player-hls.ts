@@ -45,3 +45,15 @@ export async function waitForSeekable(
   }
   return relative <= Math.max(0, playlistEnd() - 0.5);
 }
+
+export const DECODE_RECOVER_LIMIT = 2;
+export const DECODE_RECOVER_WINDOW_MS = 60_000;
+
+/** Chrome/VideoToolbox sometimes rejects a copied HEVC access unit after a remux seek. */
+export function canRecoverDecode(stamps: number[], now = Date.now()) {
+  return stamps.filter((at) => now - at < DECODE_RECOVER_WINDOW_MS).length < DECODE_RECOVER_LIMIT;
+}
+
+export function recordDecodeRecover(stamps: number[], now = Date.now()) {
+  return [...stamps.filter((at) => now - at < DECODE_RECOVER_WINDOW_MS), now];
+}

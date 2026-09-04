@@ -1074,6 +1074,11 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(awai
   time: Number(req.body.time) || 0,
 }))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
+app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
+  const file = playback.sidecarFile(String(req.params.id));
+  if (!file) return res.status(404).end();
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "no-store").sendFile(file, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+}));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));
   // Po restartu převodu si klient ještě chvíli říká o starou generaci; jako 404 je to v pořádku,

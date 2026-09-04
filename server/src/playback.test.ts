@@ -242,3 +242,43 @@ test("incompatible codecs, HLS and notWebReady still force a conversion", () => 
   const avi = { container: "avi", video: { codec: "mpeg4" }, audio: { codec: "mp3" } };
   assert.equal(manager.directPlay({ url: "https://cdn.example/a.avi" }, avi, playCaps).ok, false);
 });
+
+test("a playable mp4 with a preferred subtitle stays on direct play", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback-sidecar") as any;
+  manager.inspect = async () => ({
+    container: "mov,mp4,m4a,3gp,3g2,mj2",
+    video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
+    audioTracks: [{ index: 0, codec: "aac", language: "en" }],
+    subtitleTracks: [{ index: 0, codec: "subrip", language: "cs" }],
+  });
+  let spawned = false;
+  manager.spawnAt = async () => { spawned = true; return "/nope"; };
+  let extracted = 0;
+  manager.extractSidecar = () => { extracted += 1; };
+  const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
+  assert.equal(spawned, false);
+  assert.equal(started.mode, "direct");
+  assert.equal(started.subtitleTrack, 0);
+  assert.equal(extracted, 1);
+  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt$/);
+});
+
+test("mkv with subtitles still remuxes", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback-sidecar-mkv") as any;
+  manager.inspect = async () => ({
+    container: "matroska,webm",
+    video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
+    audioTracks: [{ index: 0, codec: "aac", language: "en" }],
+    subtitleTracks: [{ index: 0, codec: "subrip", language: "cs" }],
+  });
+  let spawned = false;
+  manager.spawnAt = async (session: { mode: string; offset: number }, time: number) => {
+    spawned = true;
+    session.offset = time;
+    return "/hls";
+  };
+  const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { subtitleLanguage: "cs" });
+  assert.equal(spawned, true);
+  assert.equal(started.mode, "remux");
+  assert.equal(started.sidecarUrl, undefined);
+});
