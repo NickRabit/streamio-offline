@@ -10,6 +10,101 @@ interface Props { open: boolean; title: string; stream: Stream | null; subtitles
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
+/** Native range thumbs are the only draggable part on iOS. A press anywhere on
+ *  the track grabs the current position; the finger then nudges it by how far
+ *  it moves, instead of jumping to the press point. A tap still seeks there. */
+const TAP_PX = 10;
+
+const timeAtClientX = (clientX: number, track: HTMLElement, max: number) => {
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0 || max <= 0) return 0;
+  return Math.min(max, Math.max(0, ((clientX - rect.left) / rect.width) * max));
+};
+
+const timeFromDelta = (clientX: number, track: HTMLElement, startX: number, startValue: number, max: number) => {
+  const width = track.getBoundingClientRect().width;
+  if (width <= 0 || max <= 0) return startValue;
+  return Math.min(max, Math.max(0, startValue + ((clientX - startX) / width) * max));
+};
+
+function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
+  value: number; max: number; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const maxRef = useRef(max);
+  const valueRef = useRef(value);
+  const onScrubRef = useRef(onScrub);
+  const onSeekRef = useRef(onSeek);
+  const onRevealRef = useRef(onReveal);
+  maxRef.current = max;
+  valueRef.current = value;
+  onScrubRef.current = onScrub;
+  onSeekRef.current = onSeek;
+  onRevealRef.current = onReveal;
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const track = trackRef.current;
+      if (!track) return;
+      event.preventDefault();
+      onRevealRef.current();
+      if (!drag.moved && Math.abs(event.clientX - drag.startX) < TAP_PX) return;
+      drag.moved = true;
+      onScrubRef.current(timeFromDelta(event.clientX, track, drag.startX, drag.startValue, maxRef.current));
+    };
+    const onUp = (event: PointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const track = trackRef.current;
+      dragRef.current = null;
+      setDragging(false);
+      if (!track) { onScrubRef.current(null); return; }
+      if (event.type === "pointercancel") { onScrubRef.current(null); return; }
+      if (drag.moved) onSeekRef.current(timeFromDelta(event.clientX, track, drag.startX, drag.startValue, maxRef.current));
+      else onSeekRef.current(timeAtClientX(event.clientX, track, maxRef.current));
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  return <div
+    ref={trackRef}
+    className={`timeline-bar${dragging ? " scrubbing" : ""}`}
+    role="slider"
+    tabIndex={0}
+    aria-label="Pozice videa"
+    aria-valuemin={0}
+    aria-valuemax={Math.round(max)}
+    aria-valuenow={Math.round(Math.min(value, max))}
+    aria-valuetext={fmt(value)}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+      dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: valueRef.current, moved: false };
+      setDragging(true);
+      onReveal();
+      onScrub(valueRef.current);
+    }}>
+    <div className="timeline-rail" aria-hidden="true">
+      <i className="timeline-fill" style={{ width: `${percent}%` }} />
+      <b className="timeline-thumb" style={{ left: `${percent}%` }} />
+    </div>
+    {dragging && <span className="timeline-preview" style={{ left: `${percent}%` }}>{fmt(value)}</span>}
+  </div>;
+}
+
 /** Prohlížeč sám nejlépe ví, co zvládne. Server podle toho rozhodne, co kopírovat a co překódovat. */
 const supports = (type: string) => {
   try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE není k dispozici */ }
@@ -435,7 +530,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const revealControls = () => {
     setControlsVisible(true);
     clearControlsTimer();
-    if (videoRef.current?.paused || buffering || error) return;
+    if (videoRef.current?.paused || buffering || error || scrub !== null) return;
     controlsTimerRef.current = window.setTimeout(() => {
       controlsTimerRef.current = undefined;
       setControlsVisible(false);
@@ -443,10 +538,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
   useEffect(() => {
     if (!open) { clearControlsTimer(); setControlsVisible(true); return; }
-    if (paused || buffering || error) { clearControlsTimer(); setControlsVisible(true); return; }
+    if (paused || buffering || error || scrub !== null) { clearControlsTimer(); setControlsVisible(true); return; }
     revealControls();
     return clearControlsTimer;
-  }, [open, paused, buffering, error]);
+  }, [open, paused, buffering, error, scrub]);
 
   /** Fullscreen musí obsahovat celou naši vrstvu. iOS umí u videa jen vlastní
    * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
@@ -583,10 +678,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     </div>
     <div className="timeline">
       <span>{fmt(position)}</span>
-      <input aria-label="Pozice videa" type="range" min="0" max={seekable} step="1" value={Math.min(position, seekable)}
-        onChange={(event) => { revealControls(); setScrub(Number(event.target.value)); }}
-        onPointerUp={(event) => void seekTo(Number(event.currentTarget.value))}
-        onKeyUp={(event) => void seekTo(Number(event.currentTarget.value))} />
+      <TimelineBar value={Math.min(position, seekable)} max={seekable}
+        onScrub={(next) => { revealControls(); setScrub(next); }}
+        onSeek={(next) => void seekTo(next)}
+        onReveal={revealControls} />
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
