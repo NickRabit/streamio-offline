@@ -48,6 +48,8 @@ export const api = {
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: (timeoutMs?: number) => request<Download[]>("/api/downloads", { timeoutMs }),
   download: (title: string, stream: Stream, media?: Record<string, unknown>) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, stream, media }) }),
+  prepareDeviceDownload: (payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) =>
+    request<{ url: string; filename: string }>("/api/device-download", { method: "POST", body: JSON.stringify(payload) }),
   downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, media?: { id?: string; metaType?: string; poster?: string }) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, media }) }),
   downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
@@ -95,5 +97,18 @@ export const api = {
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
   changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),
 };
+
+/** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */
+export async function saveToDevice(payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) {
+  const prepared = await api.prepareDeviceDownload(payload);
+  const link = document.createElement("a");
+  link.href = prepared.url;
+  link.download = prepared.filename;
+  link.hidden = true;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  return prepared.filename;
+}
 
 export const subtitleUrl = (url: string, offset = 0) => `/api/subtitle?${new URLSearchParams(offset ? { url, offset: offset.toFixed(3) } : { url })}`;

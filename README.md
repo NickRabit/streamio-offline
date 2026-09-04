@@ -186,6 +186,13 @@ Přehrávání velkého souboru umí Synology na několik minut položit. Stojí
 
 Fronta přežije restart, umí navázat na `.part` soubor pomocí HTTP Range a podporuje pozastavení, pokračování, opakování chyby, změnu pořadí, odstranění a 1–8 souběžných stahování. Dokončený soubor se při odstranění z historie nemaže.
 
+The selected source and the player offer two destinations: **Do knihovny** adds
+the file to the server queue, while **Do zařízení** starts a native download in
+the current browser. Individual library files can also be downloaded from their
+context menu. External streams always pass through the server proxy: the browser's
+download connection targets only Stremio Offline and the debrid URL is never put
+in the download link. Filenames follow the same rules as library downloads.
+
 V **Nastavení** se volí, kolik souborů se stahuje najednou dohromady a kolik z jednoho zdroje. Poskytovatelé obvykle omezují počet souběžných spojení a přebytečné přenosy utnou nebo je nechají hladovět, dokud je nesejme hlídač nečinnosti; jeden přenos na zdroj je proto nejbezpečnější. Přerušené spojení fronta sama naváže, a jakmile se přenos zase rozjede, vrátí se i rozpočet pokusů.
 
 V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť nastavit ukládání filmů a seriálů. Hostitelský adresář určuje `DOWNLOAD_PATH`; v kartě doplňku se zadává jen relativní podsložka uvnitř něj. Prázdná podsložka znamená přímo základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.

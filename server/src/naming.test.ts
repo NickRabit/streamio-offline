@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, targetPath } from "./naming.js";
+import { deviceFilename, joinTarget, normalizeDownloadSettings, safeName, safeSubfolder, streamExtension, targetPath } from "./naming.js";
 
 test("film jde do vlastní složky se stejným názvem", () => {
   const { directory, base } = targetPath({ kind: "movie", title: "The Matrix" }, "cokoli", ".mkv");
@@ -97,4 +97,16 @@ test("výchozí nastavení migruje na základní složku a strukturu", () => {
 test("podsložka nesmí uniknout mimo downloads", () => {
   for (const value of ["../tajne", "/etc", "C:\\Windows", "filmy/../../etc"]) assert.throws(() => safeSubfolder(value));
   assert.equal(safeSubfolder("Doplňky/Webshare"), "Doplňky/Webshare");
+});
+
+test("device downloads use the same filename as the library", () => {
+  const stream = { url: "https://download.example/video?id=secret", behaviorHints: { filename: "release.mkv" } };
+  const media = { kind: "episode" as const, title: "Seriál", season: 2, episode: 3, episodeTitle: "Díl" };
+  const settings = { subfolder: "Provider/Seriály", layout: "structured" as const };
+  assert.equal(streamExtension(stream), ".mkv");
+  assert.equal(deviceFilename(stream, media, "fallback", settings), "03 - Díl.mkv");
+});
+
+test("URL extensions do not include the debrid query string", () => {
+  assert.equal(streamExtension({ url: "https://download.example/Film.mp4?token=velmi-tajny" }), ".mp4");
 });

@@ -4,7 +4,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AddonDownloadSettings, StreamItem } from "./types.js";
-import { defaultDownloadSettings, joinTarget, targetPath, type MediaInfo } from "./naming.js";
+import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
 import { log } from "./logger.js";
@@ -37,8 +37,7 @@ export class DownloadQueue {
     const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new Error("Tenhle zdroj už ve frontě je.");
     if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new Error("Tenhle zdroj už je stažený v knihovně.");
-    const hinted = stream.behaviorHints?.filename;
-    const extension = path.extname(hinted ?? new URL(stream.url).pathname) || ".mp4";
+    const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
     const now = new Date().toISOString();
@@ -131,8 +130,7 @@ export class DownloadQueue {
     }
     job.stream = resolved.stream;
     const settings = job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie;
-    const hinted = resolved.stream.behaviorHints?.filename;
-    const extension = path.extname(hinted ?? new URL(resolved.stream.url!).pathname) || ".mp4";
+    const extension = streamExtension(resolved.stream);
     const { directory, base } = targetPath(job.media, job.title, extension, settings);
     job.target = await this.uniqueTarget(directory, base, extension);
     await this.save();

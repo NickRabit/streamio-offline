@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
-import { api, ApiError } from "./api";
+import { api, ApiError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
@@ -83,7 +83,15 @@ export function App() {
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
     if (!confirm(`Opravdu smazat ${folder ? "složku" : "soubor"} „${label}“?${folder ? " Smaže se i vše uvnitř." : ""} Tohle nejde vrátit.`)) return;
-    try { await api.deleteLibraryItem(itemPath); notify("Smazáno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+    // Se souborem mizí i jeho rozkoukanost a hvězdička v katalogu, takže se oba
+    // seznamy načtou znovu -- jinak by smazaný titul zůstal v řadách viset.
+    try {
+      await api.deleteLibraryItem(itemPath);
+      notify("Smazáno.");
+      await loadBrowse(browsePath);
+      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
+      setResume(nextResume); setWatchlist(nextWatchlist);
+    } catch (error) { fail(error); }
   };
   const toggleFavorite = async (itemPath: string, favorite: boolean) => {
     setMenuFor(null);
@@ -486,13 +494,30 @@ export function App() {
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
   };
+  const selectedMedia = () => selectedVideo
+    ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
+    : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
   const enqueue = async () => {
     if (!selectedStream) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
-    const media = selectedVideo
-      ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
-      : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
+    const media = selectedMedia();
     try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); return true; } catch (e) { fail(e); return false; }
+  };
+
+  const downloadStreamToDevice = async () => {
+    if (!selectedStream?.url) return false;
+    try {
+      const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
+      notify(`Stahování ${filename} spuštěno přes server.`);
+      return true;
+    } catch (e) { fail(e); return false; }
+  };
+  const downloadLibraryFile = async (filePath: string) => {
+    try {
+      const filename = await saveToDevice({ path: filePath });
+      notify(`Stahování ${filename} spuštěno.`);
+      return true;
+    } catch (e) { fail(e); return false; }
   };
 
   /** Hromadné stažení: fronta dostane líné úlohy a zdroj (největší v preferovaném jazyce)
@@ -622,7 +647,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.url && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><Download/> Stáhnout</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div></div>
+                {selectedStream?.url && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.url} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div></div>
             </div>}
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
         </>}
@@ -707,6 +732,7 @@ export function App() {
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> Označit jako neshlédnuté</button>}
+                      <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> Stáhnout do zařízení</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
                     </span>}
@@ -737,7 +763,9 @@ export function App() {
       progressPoster={localStream ? localPoster : selected?.poster}
       favorite={localStream?.url ? libraryFavorites.includes(localStream.url.slice(7)) : inWatchlist(selected?.type, selected?.id)}
       onToggleFavorite={localStream?.url || selected ? () => void togglePlayerFavorite() : undefined}
-      onDownload={enqueue} onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+      onDownload={enqueue}
+      onDeviceDownload={() => localStream?.url ? downloadLibraryFile(localStream.url.slice(7)) : downloadStreamToDevice()}
+      onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {galleryIndex !== null && galleryImages[galleryIndex] && <MediaGallery images={galleryImages} index={galleryIndex} onIndex={setGalleryIndex} onClose={() => setGalleryIndex(null)}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;

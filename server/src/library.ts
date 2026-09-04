@@ -70,6 +70,16 @@ export function isPathWithin(value: string, parent: string): boolean {
   return value === parent || value.startsWith(`${parent}${path.sep}`);
 }
 
+/** Tituly katalogu, na které po smazání cesty už v knihovně nic neukazuje.
+ * Co drží i jiná cesta -- třeba seriál rozdělený do dvou složek --, zůstává:
+ * mazání jedné z nich neznamená, že titul z knihovny zmizel. */
+export function orphanedCatalogKeys(meta: Record<string, { type: string; id: string }>, relative: string): Set<string> {
+  const removed = new Set<string>(); const kept = new Set<string>();
+  for (const [key, value] of Object.entries(meta)) (isPathWithin(key, relative) ? removed : kept).add(`${value.type}:${value.id}`);
+  for (const key of kept) removed.delete(key);
+  return removed;
+}
+
 interface FoundFile { relative: string; size: number; modified: string }
 
 async function walk(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
