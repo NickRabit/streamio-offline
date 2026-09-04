@@ -8,6 +8,7 @@
 
 ## Git Workflow
 
+- Write everything in English: commit messages, branch names, pull request titles and descriptions, and comments on issues or pull requests. Chat replies to the user stay in the language the user writes in.
 - For every task, create a dedicated branch from `main` (or `master` if that is the repository's default branch).
 - Commit task changes only to that branch.
 - After committing, push the task branch and create a pull request targeting `main` or `master`.

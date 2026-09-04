@@ -8,6 +8,9 @@
   already editing that code.)
 
 ## Git workflow
+- Write everything in English: commit messages, branch names, pull request
+  titles and descriptions, and comments on issues or pull requests.
+  (Chat replies to the user stay in the language the user writes in.)
 - For every task, create a branch off `main`.
 - Commit only into that branch. Never merge it into `main` and never push
   directly to `main`.
