@@ -15,7 +15,7 @@
   "workspaces": ["server", "web"],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",
-    "test": "npm run test -w server",
+    "test": "npm run test -w server && npm run test -w web",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web"
   },

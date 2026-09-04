@@ -37,5 +37,5 @@ docker compose logs --tail=50 stremio-offline
 
 ## Useful commands
 - `npm run build` — build web + server workspaces
-- `npm test` — server test suite
+- `npm test` — server + client unit test suites (see `TESTING.md`)
 - `npm run dev:server` / `npm run dev:web` — local dev

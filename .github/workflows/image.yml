@@ -29,17 +29,7 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-      - run: npm ci
-      - run: npx tsc --noEmit -p server
-      - run: npx tsc --noEmit -p web
-      - run: npm test
+    uses: ./.github/workflows/ci.yml
 
   # Each architecture builds on its own machine (the repository is public, so
   # a native arm64 runner is free) and is pushed to GHCR as a digest only --
