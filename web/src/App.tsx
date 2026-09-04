@@ -181,22 +181,6 @@ export function App() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    const sync = () => {
-      document.documentElement.style.setProperty("--vv-top", `${viewport?.offsetTop ?? 0}px`);
-      document.documentElement.style.setProperty("--vv-height", `${viewport?.height ?? window.innerHeight}px`);
-    };
-    sync();
-    viewport?.addEventListener("resize", sync);
-    viewport?.addEventListener("scroll", sync);
-    window.addEventListener("orientationchange", sync);
-    return () => {
-      viewport?.removeEventListener("resize", sync);
-      viewport?.removeEventListener("scroll", sync);
-      window.removeEventListener("orientationchange", sync);
-    };
-  }, []);
   // Obsah sekce se dotahuje asynchronně, takže se na uloženou pozici chvíli doskakuje.
   useEffect(() => {
     viewRef.current = view;
