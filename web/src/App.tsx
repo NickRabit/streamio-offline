@@ -53,6 +53,10 @@ export function App() {
     try { return localStorage.getItem("sidebar-collapsed") === "1"; } catch { return false; }
   });
   const [catalogReset, setCatalogReset] = useState(0);
+  const [statsReset, setStatsReset] = useState(0);
+  const scrollByView = useRef<Partial<Record<View, number>>>({});
+  const restoringScroll = useRef(false);
+  const viewRef = useRef<View>("catalog");
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const [selectedCatalog, setSelectedCatalog] = useState(""); const [search, setSearch] = useState(""); const [items, setItems] = useState<Meta[]>([]); const [selected, setSelected] = useState<Meta | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<Video | null>(null); const [streams, setStreams] = useState<Stream[]>([]); const [selectedStream, setSelectedStream] = useState<Stream | null>(null); const [subtitles, setSubtitles] = useState<Subtitle[]>([]);
@@ -167,8 +171,36 @@ export function App() {
     setError(value instanceof Error ? value.message : String(value)); setTimeout(() => setError(""), 6000);
   };
 
+  useEffect(() => {
+    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = window.scrollY; };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  // Obsah sekce se dotahuje asynchronně, takže se na uloženou pozici chvíli doskakuje.
+  useEffect(() => {
+    viewRef.current = view;
+    const wanted = scrollByView.current[view] ?? 0;
+    restoringScroll.current = true;
+    const deadline = performance.now() + 1500;
+    let handle = 0;
+    const apply = () => {
+      window.scrollTo(0, wanted);
+      if (Math.abs(window.scrollY - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
+      else restoringScroll.current = false;
+    };
+    handle = requestAnimationFrame(apply);
+    // Doskakování ustoupí, jakmile se uživatel dotkne stránky sám.
+    const stop = () => { cancelAnimationFrame(handle); restoringScroll.current = false; };
+    for (const event of ["wheel", "touchstart", "keydown"]) window.addEventListener(event, stop, { passive: true, once: true });
+    return () => {
+      stop();
+      for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
+    };
+  }, [view]);
+
   const resetCatalog = () => {
     const firstCatalog = catalogs[0];
+    scrollByView.current.catalog = 0;
     setView("catalog");
     setSearch(""); setSubmittedQuery(""); setSearchAddon(""); setTypeFilter(""); setGenre(""); setSort("default");
     setSelectedCatalog(firstCatalog ? `${firstCatalog.addonKey}:${firstCatalog.type}:${firstCatalog.id}` : "");
@@ -176,6 +208,21 @@ export function App() {
     setGalleryIndex(null);
     setStreamAddon(""); setStreamLanguage(""); setStreamSort(settings.streamSort as StreamSort);
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
+  };
+  const resetLibrary = () => {
+    setMenuFor(null); setFromFavorites(false);
+    setBrowsePath(""); setBrowseQuery("");
+    setBrowseSort("name"); setBrowseDesc(false); setOnlyFavorites(false);
+  };
+  /** Klik na sekci, ve které už jsme, ji vrátí do výchozího stavu; jinak se
+   * obnoví poslední filtry i pozice stránky. */
+  const openView = (target: View) => {
+    if (target !== view) { setView(target); return; }
+    scrollByView.current[target] = 0;
+    if (target === "catalog") resetCatalog();
+    else if (target === "library") resetLibrary();
+    else if (target === "stats") setStatsReset((value) => value + 1);
+    window.scrollTo(0, 0);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
@@ -554,12 +601,12 @@ export function App() {
     <header className="topbar"><button className="brand brand-home" title="Přejít do čistého katalogu" aria-label="Přejít do čistého katalogu" onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right"><div className="online"><i/> Docker server online</div>
       <button className="signout" title={`Přihlášen jako ${session?.username ?? ""}`} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit</button></div></header>
     <aside className="sidebar"><nav>
-      <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => setView("catalog")}/>
-      <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => setView("library")}/>
-      <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => setView("downloads")}/>
-      <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => setView("addons")}/>
-      <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => setView("settings")}/>
-      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => setView("stats")}/>
+      <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => openView("catalog")}/>
+      <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => openView("library")}/>
+      <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((d) => d.status === "downloading" || d.status === "queued").length} onClick={() => openView("downloads")}/>
+      <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
+      <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => openView("settings")}/>
+      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => openView("stats")}/>
     </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"} aria-label={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}</span></button><div className="addon-status"><small>AKTIVNÍ DOPLŇKY</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>katalogy a zdroje</span></div></div></aside>
     <main className={view === "catalog" ? "view-catalog" : ""}>
       {view === "catalog" && <section className="catalog-view"><Heading eyebrow="KATALOG" title="Co chcete sledovat?"/>
@@ -750,7 +797,7 @@ export function App() {
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
       {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
-      {view === "stats" && <StatsPanel onError={fail}/>}
+      {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
         setSettings(restored.settings);
