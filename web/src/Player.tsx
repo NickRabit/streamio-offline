@@ -310,7 +310,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       // prohlížeč sám okamžitě, místo restartu FFmpeg na serveru.
       // maxBufferHole přemostí drobné mezery na hranicích segmentů (kopie videa řeže jen
       // na klíčových snímcích), místo aby na nich přehrávání zamrzlo.
-      const hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 90, maxBufferHole: 1 });
+      // EVENT playlists have no live edge. The default live sync waits for extra
+      // segments and shows bufferStalledError right after start or a seek.
+      const hls = new Hls({
+        maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 90, maxBufferHole: 1,
+        liveDurationInfinity: true, liveSyncDurationCount: 1, maxLiveSyncPlaybackRate: 1, testBandwidth: false,
+      });
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       // Jakmile něco doopravdy hraje, je předchozí zotavení uzavřená věc.

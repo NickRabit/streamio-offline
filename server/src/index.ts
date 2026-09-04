@@ -1117,18 +1117,29 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
   const headers: Record<string, string> = { ...streamHeaders };
   if (req.headers.range) headers.range = req.headers.range;
   const controller = new AbortController();
-  const headerTimeout = setTimeout(() => controller.abort(), 30_000);
+  let headerTimedOut = false;
+  const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, 30_000);
+  // Seek and stop close the previous Range. Without aborting here the old
+  // upstream keeps downloading from the debrid host and starves the new one.
+  res.on("close", () => { if (!res.writableEnded) controller.abort(); });
   let upstream: Response;
   try { upstream = await safeFetch(raw, { headers, signal: controller.signal }); }
   catch (error) {
-    // Bez tohohle řádku vypadá umřelý zdroj v prohlížeči jen jako zaseklý přehrávač.
+    if (res.destroyed || res.writableEnded) {
+      log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
+      return;
+    }
     log("WARN", "The source did not respond", {
       req: req.id, url: raw, range: req.headers.range,
-      reason: controller.signal.aborted ? "no response within 30 s" : (error instanceof Error ? error.message : String(error)),
+      reason: headerTimedOut ? "no response within 30 s" : (error instanceof Error ? error.message : String(error)),
     });
     throw error;
   }
   finally { clearTimeout(headerTimeout); }
+  if (res.destroyed || res.writableEnded) {
+    await upstream.body?.cancel().catch(() => undefined);
+    return;
+  }
   if (upstream.status >= 400) log("WARN", "The source refused the request", { req: req.id, url: raw, status: upstream.status, range: req.headers.range });
   const contentType = upstream.headers.get("content-type") ?? "";
   if (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8")) {
@@ -1144,6 +1155,7 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
       if (!line.startsWith("#")) return proxied(line);
       return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => `URI="${proxied(uri)}"`);
     }).join("\n");
+    if (res.destroyed || res.writableEnded) return;
     res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store").send(playlist);
     return;
   }
@@ -1151,9 +1163,9 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
   for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
   if (!upstream.body) return res.end();
   const { Readable } = await import("node:stream");
-  try { await pipeline(Readable.fromWeb(upstream.body as never), res); }
+  try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
   catch (error) {
-    // Zavření přehrávače nebo seek běžně ukončí předchozí Range požadavek.
+    await upstream.body?.cancel().catch(() => undefined);
     if (!res.destroyed && !res.writableEnded) {
       log("WARN", "The transfer from the source broke off", { req: req.id, url: raw, range: req.headers.range, reason: error instanceof Error ? error.message : String(error) });
       throw error;

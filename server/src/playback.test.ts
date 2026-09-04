@@ -161,3 +161,34 @@ test("relaci, kterou si žádný klient nepřevzal, zavře úklid dřív než ne
 
   assert.deepEqual(stopped, ["neprevzata"]);
 });
+
+test("concurrent inspect of the same URL runs ffprobe once", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  let calls = 0;
+  manager.probeSource = async () => {
+    calls += 1;
+    await pause(30);
+    return { video: { codec: "h264" }, duration: 120, audioTracks: [{ codec: "aac" }], subtitleTracks: [] };
+  };
+  const stream = { url: "https://cdn.example/movie.mkv" };
+  const [first, second] = await Promise.all([manager.inspect(stream), manager.inspect(stream)]);
+  assert.equal(calls, 1);
+  assert.equal(first, second);
+  await manager.inspect(stream);
+  assert.equal(calls, 1);
+});
+
+test("inspect of different URLs is not coalesced", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const seen: string[] = [];
+  manager.probeSource = async (stream: { url: string }) => {
+    seen.push(stream.url);
+    await pause(10);
+    return { video: { codec: "h264" }, duration: 60, audioTracks: [], subtitleTracks: [] };
+  };
+  await Promise.all([
+    manager.inspect({ url: "https://cdn.example/a.mkv" }),
+    manager.inspect({ url: "https://cdn.example/b.mkv" }),
+  ]);
+  assert.deepEqual(seen.sort(), ["https://cdn.example/a.mkv", "https://cdn.example/b.mkv"]);
+});
