@@ -285,9 +285,11 @@ Podrobnosti o požadavcích a průběhu převodu přidá `LOG_LEVEL=DEBUG` v `.e
 ### Když doplněk neodpovídá
 
 Dotazy na doplňky (katalog, metadata, streamy, titulky, plakáty) jdou přes pojistku, která
-hlídá každý server zvlášť. Naráz na něj jde nanejvýš `ADDON_MAX_CONCURRENT` dotazů (výchozí 4)
-s odstupem `ADDON_MIN_INTERVAL_MS` (100 ms), takže ho nezahltíme ani při hledání ve všech
-katalogech naráz.
+hlídá každý server zvlášť. Naráz na něj jde nanejvýš `ADDON_MAX_CONCURRENT` dotazů (výchozí 8) —
+strop je jen proti nekonečnému hromadění, běžné hledání ve všech katalogech nezdržuje, protože
+jeden doplněk běžně obsluhuje deset i více katalogů z jedné adresy. Odstup mezi dotazy
+(`ADDON_MIN_INTERVAL_MS`) je ve výchozím stavu vypnutý; má smysl ho nastavit, jen když zdroj
+sám hlásí, že je dotazů moc.
 
 Po `ADDON_BREAKER_FAILURES` selháních za sebou (výchozích 5) se doplněk na `ADDON_BREAKER_COOLDOWN_MS`
 (30 s) odstaví: další dotazy skončí okamžitě místo čekání na timeout, takže mrtvý zdroj

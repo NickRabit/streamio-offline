@@ -2,12 +2,16 @@ import { log } from "./logger.js";
 import { safeFetch } from "./security.js";
 
 /**
- * Guards outgoing calls to third-party addons. Two independent mechanisms per host:
- * a concurrency/spacing limit so we never pile requests onto one provider, and a
- * circuit breaker so a dead addon fails instantly instead of costing a full timeout
- * on every search. Media transfers deliberately do not go through here -- they are
- * long-lived by design and would both hold a slot and trip the breaker when the
- * user simply stops playback.
+ * Guards outgoing calls to third-party addons. The circuit breaker is the point of
+ * this module: a dead addon fails instantly instead of costing a full timeout on
+ * every search. The concurrency cap only stops requests from piling up without
+ * bound; it sits high enough not to slow down a normal fan-out, because one addon
+ * routinely serves a dozen catalogs from a single host. Spacing requests apart is
+ * off unless a provider actually asks for it.
+ *
+ * Media transfers deliberately do not go through here -- they are long-lived by
+ * design and would both hold a slot and trip the breaker when the user simply
+ * stops playback.
  */
 
 export interface GuardConfig {
@@ -28,8 +32,8 @@ const number = (value: string | undefined, fallback: number, min = 0) => {
 export function configFromEnv(env: NodeJS.ProcessEnv = process.env): GuardConfig {
   return {
     enabled: env.ADDON_GUARD !== "0",
-    maxConcurrent: Math.max(1, number(env.ADDON_MAX_CONCURRENT, 4, 1)),
-    minIntervalMs: number(env.ADDON_MIN_INTERVAL_MS, 100),
+    maxConcurrent: Math.max(1, number(env.ADDON_MAX_CONCURRENT, 8, 1)),
+    minIntervalMs: number(env.ADDON_MIN_INTERVAL_MS, 0),
     maxQueue: Math.max(1, number(env.ADDON_MAX_QUEUE, 32, 1)),
     failureThreshold: Math.max(1, number(env.ADDON_BREAKER_FAILURES, 5, 1)),
     cooldownMs: Math.max(1000, number(env.ADDON_BREAKER_COOLDOWN_MS, 30_000, 1000)),
@@ -135,9 +139,13 @@ export class OutboundGuard {
       await new Promise<void>((resolve) => entry.queue.push(resolve));
     }
     entry.active += 1;
-    const wait = entry.lastStartedAt + this.config.minIntervalMs - this.now();
+    if (!this.config.minIntervalMs) return;
+    // The slot in time is claimed before the wait, otherwise everything released
+    // together would compute the same delay and start as one burst anyway.
+    const start = Math.max(this.now(), entry.lastStartedAt + this.config.minIntervalMs);
+    entry.lastStartedAt = start;
+    const wait = start - this.now();
     if (wait > 0) await this.delay(wait);
-    entry.lastStartedAt = this.now();
   }
 
   private release(entry: HostState) {

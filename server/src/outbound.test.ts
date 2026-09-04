@@ -126,6 +126,23 @@ test("no more than the configured number of requests reach one host at a time", 
   assert.equal(peak, 2);
 });
 
+test("requests are spaced apart only when a gap is configured", async () => {
+  const record = (gap: number) => {
+    const waits: number[] = [];
+    let now = 1000;
+    const guard = new OutboundGuard(config({ minIntervalMs: gap }), () => now, async (ms) => { waits.push(ms); now += ms; });
+    return { waits, run: () => Promise.all(Array.from({ length: 3 }, () => guard.run("addon.test", reply(200)))) };
+  };
+
+  const spaced = record(200);
+  await spaced.run();
+  assert.deepEqual(spaced.waits, [200, 200]);
+
+  const immediate = record(0);
+  await immediate.run();
+  assert.deepEqual(immediate.waits, []);
+});
+
 test("hosts do not share a breaker", async () => {
   const { guard } = harness();
   for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(guard.run("broken.test", boom));
@@ -153,10 +170,11 @@ test("Retry-After is read both as seconds and as a date", () => {
 test("the environment falls back to sane defaults", () => {
   const defaults = configFromEnv({});
   assert.equal(defaults.enabled, true);
-  assert.equal(defaults.maxConcurrent, 4);
+  assert.equal(defaults.maxConcurrent, 8);
+  assert.equal(defaults.minIntervalMs, 0);
   assert.equal(defaults.failureThreshold, 5);
   assert.equal(configFromEnv({ ADDON_GUARD: "0" }).enabled, false);
-  assert.equal(configFromEnv({ ADDON_MAX_CONCURRENT: "0" }).maxConcurrent, 4);
+  assert.equal(configFromEnv({ ADDON_MAX_CONCURRENT: "0" }).maxConcurrent, 8);
   assert.equal(configFromEnv({ ADDON_MAX_CONCURRENT: "8" }).maxConcurrent, 8);
   assert.equal(configFromEnv({ ADDON_BREAKER_COOLDOWN_MS: "5" }).cooldownMs, 30_000);
 });
