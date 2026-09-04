@@ -11,6 +11,8 @@
 - For every task, create a branch off `main`.
 - Commit only into that branch. Never merge it into `main` and never push
   directly to `main`.
+- After committing, push the task branch and create a pull request targeting
+  `main`.
 - Leave the merge to the user.
 
 ## After implementing

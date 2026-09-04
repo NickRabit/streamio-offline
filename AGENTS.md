@@ -10,6 +10,7 @@
 
 - For every task, create a dedicated branch from `main` (or `master` if that is the repository's default branch).
 - Commit task changes only to that branch.
+- After committing, push the task branch and create a pull request targeting `main` or `master`.
 - Never merge the task branch into `main` or `master`; leave merging to the user.
 
 ## After Implementation
