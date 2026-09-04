@@ -149,7 +149,7 @@ export function App() {
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
   // Vlastní seznamy se tváří jako katalog, jen nepocházejí od doplňku.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
@@ -412,7 +412,6 @@ export function App() {
     if (!grid || !hasMore) return;
     const onScroll = () => { if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 400) void loadPage(false); };
     grid.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
     return () => grid.removeEventListener("scroll", onScroll);
   }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
@@ -533,10 +532,15 @@ export function App() {
   };
   const openMeta = async (item: Meta) => {
     setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
+    requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
     try { detail = { ...item, ...await api.meta(type, item.id) }; setSelected(detail); } catch { /* catalog item is still useful */ }
     if (type !== "series" && !detail.videos?.length) await fetchSources(type, item.id);
+  };
+  const closeMeta = () => {
+    sourcesRequestRef.current += 1;
+    setSelected(null); setSelectedVideo(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
   };
   const loadSources = async (video?: Video) => {
     if (!selected) return; await fetchSources(selected.type || currentCatalog?.type || "movie", video?.id || selected.id, video);
@@ -627,7 +631,7 @@ export function App() {
                   <label><span>Typ</span><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">Vše</option><option value="movie">Filmy</option><option value="series">Seriály</option></select></label>
                 </>
               : <>
-                  <label><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
+                  <label className="catalog-filter"><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     <option value={VIRTUAL.watchlist}>★ Můj seznam ({watchlist.length})</option>
                     <option value={VIRTUAL.resume}>▸ Pokračovat ve sledování ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
@@ -665,10 +669,12 @@ export function App() {
               title={submittedQuery ? "Nic se nenašlo" : searchRequired ? "Zadejte hledaný název" : "Katalog je prázdný"}
               text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
             {busy && <div className="loading">Načítám…</div>}
-          </section><section className={`panel detail-panel ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
-            <div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
+          </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
+            <div className="mobile-detail-head"><button onClick={closeMeta}><ChevronLeft/> Výsledky</button><strong>{selected.name}</strong></div>
+            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
               <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title="Zvětšit poster a zobrazit náhledy"><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? `${galleryImages.length} náhledů` : "Zvětšit"}</span></button>}</div>
+                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title="Zvětšit poster a zobrazit náhledy"><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? `${galleryImages.length} náhledů` : "Zvětšit"}</span></button>}</div></div>
+            <div className="detail-workflow">
             {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list">{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
             {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{visibleStreams.length === streams.length ? streams.length : `${visibleStreams.length} z ${streams.length}`}{pendingSources > 0 ? ` · načítám z ${pendingSources} ${pendingSources === 1 ? "doplňku" : "doplňků"}…` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
@@ -696,6 +702,7 @@ export function App() {
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
                 {selectedStream?.url && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.url} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div></div>
             </div>}
+            </div>
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
         </>}
       </section>}
