@@ -1,0 +1,46 @@
+# Screenshot baselines are only comparable when every one of them is produced in
+# the same place. Regenerating them by hand means remembering to use the
+# container; this does it, and pushes the result back to the branch.
+name: Update screenshot baselines
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to regenerate the baselines on"
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright test --update-snapshots
+        env:
+          HOME: /root
+      - name: Commit the new baselines
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- e2e/tests/layout/__screenshots__; then
+            echo "Baselines already match; nothing to commit."
+            exit 0
+          fi
+          git add e2e/tests/layout/__screenshots__
+          git commit -m "test: refresh screenshot baselines"
+          git push origin HEAD:${{ inputs.branch }}

@@ -136,12 +136,40 @@ been shipped:
   test would be dictating the layout rather than guarding it.
 - no poster hangs past the edge of its grid
 
-**b) Screenshot baselines.** `toHaveScreenshot` on roughly five key screens per
-viewport. These only work if the baselines are generated in the *same*
-environment that CI uses -- macOS and Ubuntu render fonts differently and every
-run would otherwise fail. Baselines are therefore always produced inside the
-official `mcr.microsoft.com/playwright:v1.x-noble` image, both locally and in
-CI, via a dedicated script.
+**b) Screenshot baselines** (`e2e/tests/layout/screenshots.spec.ts`). Four
+screens -- catalog, a title detail with its sources, the library and settings --
+across four of the five projects. They live in
+`e2e/tests/layout/__screenshots__/<project>/`.
+
+They are only comparable when every one of them is produced in the same place,
+so they are always generated inside `mcr.microsoft.com/playwright:v1.56.1-noble`:
+
+```
+npm run test:e2e:snapshots
+```
+
+The **Update screenshot baselines** workflow does the same thing on a branch and
+pushes the result, which is the easier path when a design change touches several
+screens.
+
+Two decisions worth knowing about:
+
+- **The tolerance is a fixed 120 pixels, not a percentage.** A 1% ratio sounds
+  safe and is not: bumping the poster title from 12px to 16px stayed under it on
+  every screen. Runs inside the container are byte-stable, so the small fixed
+  budget only has to absorb renderer noise.
+- **`desktop-short` has no baselines.** These four screens look the same at
+  1280x760 as at 1440x900. That project earns its place through the invariants,
+  which cover the 780px height rule; a megabyte of near-identical images does
+  not.
+
+**What baselines do not cover here.** Most of this app's content lives inside
+panes that scroll on their own -- the poster grid, the source list, the episode
+list. `fullPage` does not expand those, so a baseline captures the frame and
+whatever is above the inner scroll boundary. That is genuinely where the
+regressions have been (navigation placement, a clipped toolbar, landscape
+chrome), but a change to a poster tile's title, three rows down inside the grid,
+will not show up. Do not read a passing baseline as "the screen is unchanged".
 
 **c) Accessibility** (`e2e/tests/layout/accessibility.spec.ts`).
 `@axe-core/playwright` on the same matrix, WCAG 2.0 and 2.1 at A and AA. It
@@ -185,11 +213,11 @@ pull request branch, so updating them is not a local-environment chore.
 | 1 | `ci.yml` on pull requests, Vitest set up, unit tests for pure client logic | Done |
 | 2 | Playwright plus the fixture stack, first end-to-end journeys | Done |
 | 3 | Viewport matrix, layout invariants, accessibility checks | Done |
-| 4 | Screenshot baselines and the container workflow that updates them | Planned |
+| 4 | Screenshot baselines and the container workflow that updates them | Done |
 
-Phase 3 comes before phase 4 on purpose. Layout invariants catch most real
+Phase 3 came before phase 4 on purpose. Layout invariants catch most real
 regressions and need no maintenance; screenshots are convincing but are a
-recurring source of noise, so they are added last and kept to a small number of
+recurring source of noise, so they were added last and kept to a small number of
 screens.
 
 ## Commands
@@ -200,8 +228,9 @@ npm test -w server       # server only
 npm test -w web          # client unit tests
 npm run test:watch -w web
 
-npm run test:e2e         # Playwright, using a locally installed browser
-npm run test:e2e:docker  # the same run inside the image CI uses
+npm run test:e2e            # Playwright, using a locally installed browser
+npm run test:e2e:docker     # the same run inside the image CI uses
+npm run test:e2e:snapshots  # regenerate the screenshot baselines
 ```
 
 `npm run test:e2e` needs the browser on the machine
