@@ -152,6 +152,10 @@ The **Update screenshot baselines** workflow does the same thing on a branch and
 pushes the result, which is the easier path when a design change touches several
 screens.
 
+The image is what matters, not the machine: baselines generated in the container
+on an Apple Silicon Mac match what the amd64 CI runner produces. Generating them
+locally is fine.
+
 Two decisions worth knowing about:
 
 - **The tolerance is a fixed 120 pixels, not a percentage.** A 1% ratio sounds
