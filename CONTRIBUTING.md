@@ -48,5 +48,9 @@ Use the pull request template. Say why the change exists, what you changed, and
 how you verified it. Run `npm test` and, for anything that affects runtime
 behaviour, rebuild the local container and hit `/api/status`.
 
+User-facing features and fixes bump the patch version in the same PR
+(`package.json`, `server/package.json`, `web/package.json`, and
+`package-lock.json`). Docs and other non-shipping work do not.
+
 Issues and pull requests are the right place for bugs, small features, and
 documentation. Larger product questions belong in [PLAN.md](PLAN.md).

@@ -16,6 +16,11 @@
   directly to `main`.
 - After committing, push the task branch and create a pull request targeting
   `main`.
+- When that pull request ships a user-facing feature or fix, bump the patch
+  version in the same PR before opening it. Keep `package.json`,
+  `server/package.json`, `web/package.json`, and `package-lock.json` in sync.
+  Bump minor or major only when the user asks. Skip the bump for docs, rules,
+  and other non-shipping work.
 - Leave the merge to the user.
 
 ## After implementing
