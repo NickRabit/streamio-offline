@@ -99,5 +99,36 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 .stream-filters select{width:100%;max-width:none}
 @media(max-width:700px){.stream-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-filters label:last-child:nth-child(odd){grid-column:1/-1}}
 
+.mobile-detail-head{display:none}
+@media(max-width:700px){
+  .catalog-view>.heading,.catalog-view>.searchbar,.catalog-view>.filterbar{transition:opacity .15s ease}
+  .catalog-layout .detail-panel{display:none}
+  .catalog-layout .detail-panel.mobile-open{position:fixed;z-index:45;inset:66px 0 68px;display:flex;flex-direction:column;min-height:0;margin:0;padding:0 12px 12px;overflow-y:auto;overscroll-behavior:contain;border:0;border-radius:0;background:var(--bg);box-shadow:none}
+  .mobile-detail-head{position:sticky;z-index:8;top:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:10px;margin:0 -12px 10px;padding:9px 12px;border-bottom:1px solid var(--line);background:#0b0e13f2;backdrop-filter:blur(14px)}
+  .mobile-detail-head:after{content:"";width:72px}
+  .mobile-detail-head button{padding:8px 10px;background:transparent;color:var(--accent2);font-size:12px}
+  .mobile-detail-head button svg{width:16px;height:16px}
+  .mobile-detail-head strong{overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+  .detail-panel .hero{min-height:132px;margin:0 0 10px;padding:14px;background-position:center}
+  .detail-panel .hero.has-gallery .detail-copy{max-width:calc(100% - 72px)}
+  .detail-panel .detail-copy h2{margin:8px 0 3px;font-size:21px;line-height:1.12}
+  .detail-panel .detail-copy p{margin:5px 0;font-size:11px}
+  .detail-panel .detail-copy>p:last-child{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}
+  .detail-panel .gallery-open{top:7px;right:7px}
+  .detail-panel .episodes{margin-top:0}
+  .detail-panel .episode-list{max-height:none}
+  .detail-panel .episode-list button{min-height:44px}
+  .detail-panel .sources{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;margin-top:12px}
+  .detail-panel .stream-list{flex:1 1 auto;min-height:120px;max-height:none;padding-bottom:2px}
+  .detail-panel .stream-list button{min-height:48px}
+  .detail-panel .source-footer{bottom:-12px;margin:8px -12px -12px;padding:9px 12px calc(12px + env(safe-area-inset-bottom));border-radius:0;background:#121721f8}
+  .detail-panel .source-footer .source-info{max-height:40px;overflow:auto;margin-bottom:7px;font-size:10px}
+  .detail-panel .source-footer .actions{display:grid;grid-template-columns:1fr 1fr}
+  .detail-panel .source-footer .actions .primary{grid-column:1/-1;min-height:44px;order:-1}
+  .detail-panel .source-footer .actions button:not(.primary),.detail-panel .source-footer .actions .button{min-height:40px;font-size:11px}
+  .detail-panel.series-sources-layout{min-height:0;overflow-y:auto}
+  .detail-panel.series-sources-layout .hero{height:auto;min-height:112px;max-height:132px}
+}
+
 /* Dlouhý seznam katalogových zdrojů nesmí zvětšit výšku celého řádku dlaždic. */
 .poster-card small{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
