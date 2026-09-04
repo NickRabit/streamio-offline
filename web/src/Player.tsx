@@ -10,6 +10,84 @@ interface Props { open: boolean; title: string; stream: Stream | null; subtitles
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
+/** Native range thumbs are the only draggable part on iOS. Mapping the finger
+ *  to the track lets a press-and-drag start anywhere, including the unplayed side. */
+const timeAtClientX = (clientX: number, track: HTMLElement, max: number) => {
+  const rect = track.getBoundingClientRect();
+  if (rect.width <= 0 || max <= 0) return 0;
+  return Math.min(max, Math.max(0, ((clientX - rect.left) / rect.width) * max));
+};
+
+function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
+  value: number; max: number; onScrub: (value: number) => void; onSeek: (value: number) => void; onReveal: () => void;
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<number | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const maxRef = useRef(max);
+  const onScrubRef = useRef(onScrub);
+  const onSeekRef = useRef(onSeek);
+  const onRevealRef = useRef(onReveal);
+  maxRef.current = max;
+  onScrubRef.current = onScrub;
+  onSeekRef.current = onSeek;
+  onRevealRef.current = onReveal;
+
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      if (dragRef.current !== event.pointerId) return;
+      const track = trackRef.current;
+      if (!track) return;
+      event.preventDefault();
+      onRevealRef.current();
+      onScrubRef.current(timeAtClientX(event.clientX, track, maxRef.current));
+    };
+    const onUp = (event: PointerEvent) => {
+      if (dragRef.current !== event.pointerId) return;
+      const track = trackRef.current;
+      dragRef.current = null;
+      setDragging(false);
+      if (!track) return;
+      onSeekRef.current(timeAtClientX(event.clientX, track, maxRef.current));
+    };
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+  }, []);
+
+  const percent = max > 0 ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  return <div
+    ref={trackRef}
+    className={`timeline-bar${dragging ? " scrubbing" : ""}`}
+    role="slider"
+    tabIndex={0}
+    aria-label="Pozice videa"
+    aria-valuemin={0}
+    aria-valuemax={Math.round(max)}
+    aria-valuenow={Math.round(Math.min(value, max))}
+    aria-valuetext={fmt(value)}
+    onPointerDown={(event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
+      dragRef.current = event.pointerId;
+      setDragging(true);
+      onReveal();
+      onScrub(timeAtClientX(event.clientX, event.currentTarget, max));
+    }}>
+    <div className="timeline-rail" aria-hidden="true">
+      <i className="timeline-fill" style={{ width: `${percent}%` }} />
+      <b className="timeline-thumb" style={{ left: `${percent}%` }} />
+    </div>
+    {dragging && <span className="timeline-preview" style={{ left: `${percent}%` }}>{fmt(value)}</span>}
+  </div>;
+}
+
 /** Prohlížeč sám nejlépe ví, co zvládne. Server podle toho rozhodne, co kopírovat a co překódovat. */
 const supports = (type: string) => {
   try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE není k dispozici */ }
@@ -435,7 +513,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const revealControls = () => {
     setControlsVisible(true);
     clearControlsTimer();
-    if (videoRef.current?.paused || buffering || error) return;
+    if (videoRef.current?.paused || buffering || error || scrub !== null) return;
     controlsTimerRef.current = window.setTimeout(() => {
       controlsTimerRef.current = undefined;
       setControlsVisible(false);
@@ -443,10 +521,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
   useEffect(() => {
     if (!open) { clearControlsTimer(); setControlsVisible(true); return; }
-    if (paused || buffering || error) { clearControlsTimer(); setControlsVisible(true); return; }
+    if (paused || buffering || error || scrub !== null) { clearControlsTimer(); setControlsVisible(true); return; }
     revealControls();
     return clearControlsTimer;
-  }, [open, paused, buffering, error]);
+  }, [open, paused, buffering, error, scrub]);
 
   /** Fullscreen musí obsahovat celou naši vrstvu. iOS umí u videa jen vlastní
    * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
@@ -583,10 +661,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     </div>
     <div className="timeline">
       <span>{fmt(position)}</span>
-      <input aria-label="Pozice videa" type="range" min="0" max={seekable} step="1" value={Math.min(position, seekable)}
-        onChange={(event) => { revealControls(); setScrub(Number(event.target.value)); }}
-        onPointerUp={(event) => void seekTo(Number(event.currentTarget.value))}
-        onKeyUp={(event) => void seekTo(Number(event.currentTarget.value))} />
+      <TimelineBar value={Math.min(position, seekable)} max={seekable}
+        onScrub={(next) => { revealControls(); setScrub(next); }}
+        onSeek={(next) => void seekTo(next)}
+        onReveal={revealControls} />
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
