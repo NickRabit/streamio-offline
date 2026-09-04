@@ -30,6 +30,10 @@ npm run dev:server
 npm run dev:web
 ```
 
+`npm test` runs both suites: the server suite (`node:test`) and the client unit
+suite (Vitest). `npm run test:watch -w web` watches the client one. See
+[TESTING.md](TESTING.md) for what belongs in which layer.
+
 The supported runtime is Docker:
 
 ```bash

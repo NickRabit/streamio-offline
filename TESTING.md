@@ -1,0 +1,164 @@
+# Testing strategy
+
+This document describes how the project is tested, and the plan for the layers
+that are not built yet. It is written so that any phase can be picked up
+independently of the others.
+
+## Why
+
+The client is where most of the recent bugs have been: mobile catalog layout,
+title detail, landscape Safari chrome, sideways pans on the source list. All of
+them were found by hand, on a device, after the fact. None of them would have
+been caught by the server test suite.
+
+The client also has no obvious seam for testing. `web/src/App.tsx` holds most of
+the application state in one component, and responsive behaviour lives almost
+entirely in CSS media queries -- which a DOM emulator does not evaluate at all.
+The strategy below works with that reality instead of demanding a refactor
+first: pure logic is unit tested, everything layout-shaped is tested in a real
+browser.
+
+## Layers
+
+| Layer | Tool | Runs against | Purpose |
+| --- | --- | --- | --- |
+| L0 | `node:test` via `tsx` | `server/src` | Server logic. Exists today. |
+| L1 | Vitest + Testing Library | `web/src`, jsdom | Pure client logic and components. |
+| L2 | Playwright | Built app + real server + fake addon | End-to-end user journeys. |
+| L3 | Playwright projects | Same, across viewports | Responsive layout, visual and accessibility regressions. |
+
+### L0 -- server (existing)
+
+`npm test` runs `tsx --test server/src/*.test.ts`. No change planned.
+
+### L1 -- client unit and component tests
+
+Runner: **Vitest** with the `jsdom` environment, sharing Vite's existing
+transform pipeline so there is no second build configuration to keep in sync.
+
+Highest value per line of test code, in order:
+
+1. Pure modules with no DOM dependency -- `streams.ts` (size parsing from free
+   text, sorting and filtering), `languages.ts` (flag and word detection),
+   `log-groups.ts` (log parsing, fingerprinting, grouping).
+2. Modules with a narrow DOM surface -- `clipboard.ts` (the secure-context
+   fallback path that exists because the NAS serves over plain HTTP),
+   `diagnostics.ts` (repeat suppression, host extraction).
+3. `api.ts` error handling -- `ApiError` status and code propagation, the
+   timeout branch, the 204 no-content branch.
+4. Component tests for the small, self-contained components (`Login`, `Stats`),
+   with HTTP mocked at the network boundary.
+
+Two rules that keep this layer useful:
+
+- **Mock at the network boundary, not at the module boundary.** Use `msw` for
+  component tests rather than stubbing the `api` object, so the tests keep
+  exercising `api.ts` and break when a route changes.
+- **Never assert layout in jsdom.** jsdom does not apply CSS, so a media query
+  test there proves nothing. Layout belongs to L3.
+
+`App.tsx` is deliberately not the target of this layer. Rather than refactoring
+it up front, pull pure logic (stream ranking, episode selection, filter
+handling) out into modules opportunistically, whenever that part of the file is
+being changed for another reason, and unit test it as it comes out.
+
+### L2 -- end-to-end journeys
+
+Runner: **Playwright**, driving the built web bundle served by the real server.
+
+Fixture stack:
+
+- Server started with `STREMIO_OFFLINE_DATA` pointing at a per-run temporary
+  directory, so no test touches real data.
+- A fake Stremio addon served locally (the `.test-addon/` fixture is the
+  starting point), so no test reaches the public internet.
+- A small local MP4 for playback tests. Real streams are slow and flaky, and
+  the player only needs *a* playable source to exercise its own logic.
+
+Journeys worth covering: login, adding an addon, browsing a catalog, opening a
+title detail, picking a source, queueing a download, the library view, settings,
+and diagnostics.
+
+### L3 -- responsive, visual, accessibility
+
+Same Playwright installation, one set of tests run across several `projects`.
+The viewports are chosen to sit on either side of the breakpoints that actually
+exist in `web/src/style.css`:
+
+| Project | Viewport | Covers |
+| --- | --- | --- |
+| `desktop` | 1440x900 | The >=981px layout: sidebar, two-column catalog |
+| `desktop-short` | 1280x760 | The `max-height: 780px` series-sources branch |
+| `tablet` | 820x1180, touch | The 701-980px band |
+| `mobile` | 390x844 (iPhone 13) | The <=700px layout: bottom nav, 3-column poster grid |
+| `mobile-landscape` | 844x390, touch | `max-width:980 and max-height:500 and orientation:landscape`, plus the `mobileLandscape` branch in `Player.tsx` |
+
+Three kinds of assertion, in increasing order of maintenance cost:
+
+**a) Layout invariants.** Deterministic, no stored baselines, no upkeep. These
+catch the class of bug that has actually been shipped:
+
+- no horizontal overflow: `document.documentElement.scrollWidth <= clientWidth`
+- on touch projects, every visible interactive element has a tap target of at
+  least 40px
+- the bottom navigation is present only below 700px and the sidebar only above
+- player controls in landscape are inside the viewport and not overlapped
+- elements do not sit flush against the screen edge where a safe-area inset
+  should apply
+
+**b) Screenshot baselines.** `toHaveScreenshot` on roughly five key screens per
+viewport. These only work if the baselines are generated in the *same*
+environment that CI uses -- macOS and Ubuntu render fonts differently and every
+run would otherwise fail. Baselines are therefore always produced inside the
+official `mcr.microsoft.com/playwright:v1.x-noble` image, both locally and in
+CI, via a dedicated script.
+
+**c) Accessibility.** `@axe-core/playwright` on the same matrix: contrast, roles,
+focus order.
+
+Chromium is enough to start. WebKit is worth adding for Safari-shaped bugs, but
+note that Playwright's WebKit is not iOS Safari -- it does not reproduce the
+mobile browser chrome, the collapsing URL bar, or the safe-area behaviour that
+caused several of the landscape fixes. Those still need a real device.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every pull request and on pushes to `main`,
+and is also callable from `image.yml` through `workflow_call` so the release
+path does not duplicate the checks.
+
+Jobs:
+
+1. `check` -- type-check both workspaces, run the server suite and the web unit
+   suite. Roughly one to two minutes.
+2. `e2e` (from phase 2) -- runs inside the Playwright container image, covering
+   L2 and L3, sharded across the viewport matrix.
+3. On failure, the Playwright HTML report and any image diffs are uploaded as
+   build artifacts.
+
+Screenshot baselines are refreshed through a separate manually triggered
+workflow that regenerates them in the container and pushes the result to the
+pull request branch, so updating them is not a local-environment chore.
+
+## Phases
+
+| Phase | Content | Status |
+| --- | --- | --- |
+| 1 | `ci.yml` on pull requests, Vitest set up, unit tests for pure client logic | Done |
+| 2 | Playwright plus the fixture stack, first end-to-end journeys | Planned |
+| 3 | Viewport matrix, layout invariants, accessibility checks | Planned |
+| 4 | Screenshot baselines and the container workflow that updates them | Planned |
+
+Phase 3 comes before phase 4 on purpose. Layout invariants catch most real
+regressions and need no maintenance; screenshots are convincing but are a
+recurring source of noise, so they are added last and kept to a small number of
+screens.
+
+## Commands
+
+```
+npm test              # every workspace suite
+npm test -w server    # server only
+npm test -w web       # client unit tests
+npm run test:watch -w web
+```

@@ -1,0 +1,29 @@
+# Runs on every pull request. The image workflow calls it as well, so the
+# release path checks the same things without repeating them here.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit -p server
+      # "npm run build" type-checks the web workspace on its way through, and
+      # the bundle is otherwise only built inside the image -- which never runs
+      # on a pull request.
+      - run: npm run build
+      - run: npm test
