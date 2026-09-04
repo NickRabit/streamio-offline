@@ -79,7 +79,14 @@ const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const DIRECT_MP4 = new Set([".mp4", ".m4v", ".mov"]);
+const MP4_FORMAT = new Set(["mp4", "mov", "m4a", "m4v", "3gp", "3g2", "mj2", "ism"]);
+const WEBM_VIDEO = new Set(["vp8", "vp9", "av1"]);
+const WEBM_AUDIO = new Set(["opus", "vorbis"]);
 const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", mp3: "mp3", opus: "opus", ac3: "ac3", eac3: "eac3", flac: "flac" };
+
+/** True when hls.js can start: one media segment, or a finished short playlist. */
+export const hlsCanStart = (playlist: string) =>
+  playlist.includes("#EXT-X-ENDLIST") || (playlist.match(/#EXTINF/g) ?? []).length >= 1;
 // AC-3 family does not expose enough codec information to the fragmented MP4 muxer
 // until the first packet arrives. After an input seek video can arrive first, making
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
@@ -374,30 +381,44 @@ export class PlaybackManager {
     return path.extname(name).toLowerCase();
   }
 
+  /** Probe beats a misleading filename: a Matroska file named .mp4 is not MP4. */
+  private directKind(stream: StreamItem, info: MediaInfo): "mp4" | "webm" | "other" {
+    const extension = this.extension(stream);
+    const tokens = new Set((info.container ?? "").toLowerCase().split(",").map((item) => item.trim()).filter(Boolean));
+    if ([...tokens].some((token) => MP4_FORMAT.has(token))) return "mp4";
+    const video = info.video?.codec ?? "";
+    if ((tokens.has("webm") || tokens.has("matroska")) && WEBM_VIDEO.has(video)) return "webm";
+    if (tokens.has("matroska") || tokens.has("webm")) return "other";
+    if (DIRECT_MP4.has(extension)) return "mp4";
+    if (extension === ".webm") return "webm";
+    return "other";
+  }
+
   /** Nejlevnější cesta: soubor, který prohlížeč zvládne sám. Seek pak jede nativně přes HTTP Range.
    * Zamítnutí nese i důvod: "proč se to převádí" je první otázka u každého problému
    * s přehráváním a bez ní ji z logu nikdo nevyčte. */
   private directPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities): { ok: boolean; reason: string } {
     if (stream.behaviorHints?.notWebReady) return { ok: false, reason: "addon marks the source as not web ready" };
     if (!info?.video) return { ok: false, reason: "source has no probed video stream" };
+    const kind = this.directKind(stream, info);
     const extension = this.extension(stream);
     const video = info.video.codec;
     const audio = info.audio?.codec;
-    if (DIRECT_MP4.has(extension)) {
+    if (kind === "mp4") {
       if (!(video === "h264" || (video === "hevc" && hevcPlayable(info.video, caps)))) {
         return { ok: false, reason: `client cannot play video codec ${video || "unknown"}${info.video.profile ? ` (${info.video.profile})` : ""}` };
       }
-      if (audio && audio !== "aac" && audio !== "mp3") return { ok: false, reason: `audio codec ${audio} is not playable in ${extension}` };
+      if (audio && audio !== "aac" && audio !== "mp3") return { ok: false, reason: `audio codec ${audio} is not playable in mp4` };
       return { ok: true, reason: "container and codecs are playable as they are" };
     }
-    if (extension === ".webm") {
+    if (kind === "webm") {
       if (!(video === "vp8" || video === "vp9" || (video === "av1" && caps.av1 === true))) {
         return { ok: false, reason: `client cannot play video codec ${video || "unknown"} in webm` };
       }
-      if (audio && audio !== "opus" && audio !== "vorbis") return { ok: false, reason: `audio codec ${audio} is not playable in webm` };
+      if (audio && !WEBM_AUDIO.has(audio)) return { ok: false, reason: `audio codec ${audio} is not playable in webm` };
       return { ok: true, reason: "container and codecs are playable as they are" };
     }
-    return { ok: false, reason: `container ${extension || "unknown"} is not directly playable` };
+    return { ok: false, reason: `container ${info.container || extension || "unknown"} is not directly playable` };
   }
   private canDirectPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities) {
     return this.directPlay(stream, info, caps).ok;
@@ -526,24 +547,16 @@ export class PlaybackManager {
     // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
     const ready = path.join(directory, "index-0.m3u8");
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
-    // S jediným segmentem v playlistu hls.js přehraje pár sekund a čeká na obnovení playlistu —
-    // to je to bliknutí „Načítám“ chvíli po startu či posunu. Díky burst čtení bývá druhý
-    // segment hotový hned, tak na něj krátce počkáme; déle než 4 s kvůli tomu start nezdržujeme.
-    let firstSegmentAt: number | undefined;
+    // EVENT playlists have no live edge. Waiting for a second segment used to hide
+    // hls.js stalling; liveDurationInfinity on the client makes one segment enough.
     for (let attempt = 0; attempt < 400; attempt += 1) {
       if (session.stopped) { child.kill("SIGTERM"); break; }
       try {
         const playlist = await readFile(ready, "utf8");
-        const segments = (playlist.match(/#EXTINF/g) ?? []).length;
-        const playable = () => {
+        if (hlsCanStart(playlist)) {
+          const segments = (playlist.match(/#EXTINF/g) ?? []).length;
           log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
           return url;
-        };
-        if (segments >= 2 || playlist.includes("#EXT-X-ENDLIST")) return playable();
-        if (segments >= 1) {
-          if (finished) return playable();
-          firstSegmentAt ??= Date.now();
-          if (Date.now() - firstSegmentAt > 4000) return playable();
         }
       } catch { /* playlist ještě neexistuje */ }
       if (finished) break;
