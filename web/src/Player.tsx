@@ -691,7 +691,6 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
-      <button className="icon-button player-close-control" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
       <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
       <button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
       <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>

@@ -1175,7 +1175,8 @@ function shiftVtt(text: string, offset: number) {
 }
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
-app.use(express.static(webRoot)); app.get("/{*path}", (_req, res) => res.sendFile(path.join(webRoot, "index.html")));
+app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
+app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
   // Výchozích 400 se drží záměrně: rozhraní na jiný kód než 401 nereaguje jinak
   // a měnit to teď by byla změna chování, ne diagnostiky.
