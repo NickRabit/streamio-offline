@@ -2,6 +2,16 @@
   "name": "stremio-offline",
   "private": true,
   "version": "0.3.2",
+  "description": "Self-hosted web client for Stremio addons",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NickRabit/streamio-offline.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NickRabit/streamio-offline/issues"
+  },
+  "homepage": "https://github.com/NickRabit/streamio-offline#readme",
   "workspaces": ["server", "web"],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",

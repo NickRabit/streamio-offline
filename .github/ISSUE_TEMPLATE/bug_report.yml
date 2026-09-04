@@ -1,0 +1,56 @@
+name: Bug report
+description: Something does not work the way the README says it should.
+title: "fix: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please attach a redacted diagnostics excerpt rather than screenshots of the whole log.
+        Stream URLs already store only scheme and host; still strip tokens if you pasted a manifest URL.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you got instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Image tag, GitHub release, or git commit. Settings → Diagnostics shows this.
+      placeholder: "0.3.2 or ghcr.io/nickrabit/streamio-offline:latest"
+    validations:
+      required: true
+  - type: dropdown
+    id: how-run
+    attributes:
+      label: How you run it
+      options:
+        - Docker Compose (build locally)
+        - Docker Compose (compose.pull.yml / GHCR)
+        - Synology Container Manager
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: host
+    attributes:
+      label: Host
+      description: For example DS920+, Mac M2, Windows + Docker Desktop.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Relevant lines from Settings → Diagnostics or `docker compose logs --tail=80 stremio-offline`.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I can reproduce this after a container restart.
+        - label: I am using sources and accounts I have the right to access.

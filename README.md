@@ -1,81 +1,119 @@
 # Stremio Offline
 
-Docker-only webový klient pro standardní Stremio doplňky. Umí pracovat s oddělenými katalogovými a zdrojovými manifesty, agregovat streamy a titulky, přehrávat HTTP zdroje přes kompatibilní HLS vrstvu a ukládat přímé streamy do perzistentní fronty.
+Self-hosted web client for standard [Stremio](https://www.stremio.com/) addons.
+It talks to catalog and stream manifests, aggregates streams and subtitles,
+plays HTTP sources through a compatible HLS layer, and saves direct streams
+into a persistent download queue and a local library.
 
-## Spuštění
+Unofficial. Not affiliated with Stremio or Smart Code Ltd.
+
+## Quick start
 
 ```bash
 cp .env.example .env
 docker compose up -d --build
 ```
 
-Webové rozhraní bude na `http://localhost:8090`.
-
-Stažené soubory se ukládají do hostitelského adresáře nastaveného proměnnou `DOWNLOAD_PATH`. Na Synology nastavte například:
+The UI is at `http://localhost:8090`. Downloaded files land in the host
+directory set by `DOWNLOAD_PATH`. On Synology, for example:
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
 DATA_PATH=/volume1/docker/stremio-offline/data
 ```
 
-## Doplňky a Real-Debrid
+A first-run screen creates the only account. There is no default password.
 
-V části **Doplňky** vložte úplnou adresu `manifest.json`. Katalogový manifest poskytuje filmy, seriály a metadata, zdrojový manifest poskytuje streamy nebo titulky. Jeden manifest může mít obě role.
+## Addons and Real-Debrid
 
-Personalizované manifesty doplňků nakonfigurovaných pro Real-Debrid jsou podporované. Citlivá část URL se po uložení v UI nezobrazuje. Pokud doplněk vrátí už rozlišenou HTTPS adresu, lze ji přehrát a stáhnout. Samostatné rozlišení nezpracovaného `infoHash` přes Real-Debrid API je plánováno pro další verzi.
+In **Addons**, paste a full `manifest.json` URL. A catalog manifest supplies
+movies, series, and metadata. A source manifest supplies streams or subtitles.
+One manifest can do both.
 
-## Přehrávání
+Personalized addon URLs configured for Real-Debrid work. The sensitive part of
+the URL is hidden after you save it. If the addon already returns a resolved
+HTTPS address, it can be played and downloaded. Resolving a raw `infoHash`
+through the Real-Debrid API is not built in.
 
-Docker image obsahuje FFmpeg a přehrávač volí vždy nejlevnější možnou cestu. Prohlížeč při startu ohlásí, jaké kodeky umí, a server se podle toho rozhodne:
+## Playback
 
-| Zdroj | Režim | Zátěž NASu |
+The Docker image includes FFmpeg. The player always picks the cheapest path.
+The browser reports which codecs it can handle, and the server decides:
+
+| Source | Mode | NAS load |
 | --- | --- | --- |
-| MP4/WebM, který prohlížeč zvládne sám | přímé přehrání, FFmpeg se vůbec nespustí | žádná |
-| MKV s H.264 nebo HEVC | přebalení do fMP4, video i zvuk se kopírují | zanedbatelná |
-| Zvuk AC3, DTS nebo TrueHD | přebalení, převede se jen zvuk do AAC | malá |
-| MPEG-4 ASP, VC-1 a podobné | skutečné překódování do H.264 | vysoká |
+| MP4/WebM the browser can play | direct play, FFmpeg never starts | none |
+| MKV with H.264 or HEVC | remux to fMP4, video and audio copied | negligible |
+| AC3, DTS, or TrueHD audio | remux, audio only converted to AAC | low |
+| MPEG-4 ASP, VC-1, and similar | real transcode to H.264 | high |
 
-Aktuální režim ukazuje popisek nad obrazem, vedle ovládání jsou vidět skutečné kodeky zdroje.
+The current mode is shown above the picture; the real source codecs sit next to
+the controls.
 
-Volba kvality do téhle úvahy zasahuje: cokoli jiného než **Původní** znamená skutečné překódování, protože zmenšit obraz kopírováním nejde. Na NASu bez QuickSync se proto vyplatí zůstat na původní kvalitě — popisek pak ukazuje `PŘEBALENO` a procesor je prakticky nevytížený.
+Quality other than **Original** forces a real transcode, because shrinking the
+picture cannot be done by copying. On a NAS without QuickSync, stay on original
+quality — the label then reads `PŘEBALENO` (remuxed) and the CPU stays idle.
 
-Když se přehrávání opakovaně zadrhává, přehrávač nabídne snížení kvality: menší datový tok spraví výpadky způsobené sítí. Nabídne ho ale jen tam, kde server má hardwarovou akceleraci — jinak by softwarové překódování slabý procesor zavalilo a zadrhávání by se ještě zhoršilo.
+When playback stalls repeatedly, the player offers a lower quality. A smaller
+bitrate helps network drop-outs. The offer appears only when the server has
+hardware acceleration; software transcode on a weak CPU would make stalling
+worse.
 
-### Posun po časové ose
+### Seeking
 
-Uvnitř už převedeného úseku se skáče okamžitě. Při skoku dál se převod restartuje od nové pozice pomocí `-ss`, což díky HTTP Range nestahuje nic před ní; skok na libovolné místo filmu trvá řádově sekundu. Titulky se o stejnou hodnotu automaticky posunou. V režimu přímého přehrání jde seek nativně přes prohlížeč. Klávesy: mezerník přehrát a pozastavit, šipky ±10 s, `f` celá obrazovka, `c` skrýt a zobrazit titulky.
+Inside an already converted stretch, seeking is instant. A jump further ahead
+restarts conversion from the new position with `-ss`. HTTP Range means nothing
+before that point is downloaded; a jump anywhere in a film takes about a
+second. Subtitles shift by the same amount. Direct play seeks natively in the
+browser. Keys: space play/pause, arrows ±10 s, `f` fullscreen, `c` hide/show
+subtitles.
 
-Protože se video při přebalení jen kopíruje, začíná přehrávání od nejbližšího klíčového snímku před požadovaným časem — odchylka bývá několik sekund. Stejně se chová i Emby nebo Jellyfin.
+Because remux copies video, playback starts at the nearest keyframe before the
+requested time — usually a few seconds off. Emby and Jellyfin do the same.
 
-### Zvukové stopy a titulky
+### Audio tracks and subtitles
 
-Přehrávač nabízí výběr zvukové stopy a titulků včetně vypnutí. Titulky se berou ze dvou zdrojů:
+The player lists audio tracks and subtitles, including off. Subtitles come from
+two places:
 
-- **vestavěné v souboru** — vypadnou jako samostatná WebVTT stopa ze stejného průchodu FFmpegem, takže se soubor nestahuje podruhé,
-- **z titulkových doplňků** (například OpenSubtitles) — připojí se přímo v prohlížeči.
+- **embedded in the file** — extracted as a WebVTT track from the same FFmpeg
+  pass, so the file is not downloaded twice,
+- **subtitle addons** (for example OpenSubtitles) — attached in the browser.
 
-Přepnutí stopy znamená nové mapování pro FFmpeg, takže se převod restartuje na aktuální pozici, stejně jako u posunu. Obrázkové titulky (PGS, VobSub) se nenabízejí — do WebVTT je převést nelze.
+Switching a track remaps FFmpeg, so conversion restarts at the current
+position, same as a seek. Bitmap subtitles (PGS, VobSub) are not offered;
+they cannot be turned into WebVTT.
 
-Klik na ikonku titulků v ovládání (nebo klávesa `c`) proto stopu nepřepíná: jen přestane vykreslovat text. Přehrávání ani převod se nezastaví a opětovné zapnutí je okamžité, i uprostřed repliky. Volba **Vypnuto** v seznamu naopak stopu z převodu skutečně odebere, a proto ho restartuje.
+The subtitle icon in the controls (or `c`) does not change the track: it only
+stops drawing the text. Playback and conversion keep going, and turning
+subtitles back on is instant, even mid-line. **Off** in the list really drops
+the track from the conversion, so that *does* restart it.
 
-V **Nastavení** se volí preferovaný jazyk zvuku a titulků, ve výchozím stavu čeština se záložní angličtinou. Přehrávač podle toho vybere stopu sám při startu.
+**Settings** pick preferred audio and subtitle languages, Czech then English by
+default. The player selects a track on start from that list.
 
-Ve stejné části lze konfiguraci exportovat do JSON a později ji importovat. Záloha obsahuje nastavení aplikace, pořadí a stav nainstalovaných doplňků i jejich pravidla ukládání; neobsahuje účet, knihovnu ani historii sledování. Personalizované URL doplňků mohou obsahovat přístupové tokeny, proto je potřeba se souborem zacházet jako s heslem. Import nahradí aktuální konfiguraci a před uložením znovu ověří všechny manifesty.
+The same page can export configuration to JSON and import it later. The backup
+holds app settings, installed addon order and state, and their save rules. It
+does not hold the account, the library, or watch history. Personalized addon
+URLs may contain access tokens — treat the file as a password. Import replaces
+the current configuration and re-checks every manifest before saving.
 
-V seznamu zdrojů se jazyk odhaduje z názvu, který poslal doplněk. U vybraného zdroje se navíc zobrazí skutečné jazyky zjištěné rozborem souboru.
+In the source list, language is guessed from the title the addon sent. The
+selected source also shows the real languages found by probing the file.
 
-## Nasazení na Synology
+## Deploy on Synology
 
-Kontejner se umí spustit pod vaším uživatelem, takže není nutné přepisovat práva
-sdílených složek. Postup existuje s SSH i bez něj.
+The container can run as your user, so shared-folder permissions do not have to
+be rewritten. The steps work with or without SSH.
 
-### Bez SSH, přes Container Manager
+### Without SSH, through Container Manager
 
-1. Na GitHubu **Code → Download ZIP** z `https://github.com/NickRabit/streamio-offline`.
-2. Ve **File Station** nahrajte ZIP například do `/volume1/docker/` a rozbalte ho
-   (pravým tlačítkem → Extrahovat).
-3. Ve File Station vytvořte v té složce soubor `.env` (Vytvořit → Textový soubor)
-   a vložte do něj:
+1. On GitHub, **Code → Download ZIP** from
+   `https://github.com/NickRabit/streamio-offline`.
+2. In **File Station**, upload the ZIP to `/volume1/docker/` (or similar) and
+   extract it (right-click → Extract).
+3. In File Station, create a `.env` file in that folder (Create → Text file)
+   and put this in it:
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
@@ -85,169 +123,246 @@ PUID=1000
 PGID=100
 ```
 
-4. V **Container Manageru → Projekt → Vytvořit** vyberte tu složku a jako zdroj
-   `docker-compose.yml` zvolte `compose.yml`.
+4. In **Container Manager → Project → Create**, pick that folder and set
+   `compose.yml` as the compose source.
 
-   **Container Manager umí jen jeden compose soubor**, takže se v něm override
-   `compose.synology.yml` neuplatní. Hardwarová akcelerace se tam zapíná ručně,
-   viz [Hardwarová akcelerace](#hardwarová-akcelerace).
-5. Po prvním startu otevřete v Container Manageru **Terminál** kontejneru a
-   zjistěte, komu složka patří:
+   **Container Manager accepts only one compose file**, so the
+   `compose.synology.yml` override is ignored there. Hardware acceleration is
+   turned on by hand, see [Hardware acceleration](#hardware-acceleration).
+5. After the first start, open the container **Terminal** in Container Manager
+   and see who owns the folder:
 
 ```bash
 ls -n /downloads
 ```
 
-   První dvě čísla jsou uid a gid. Zapište je do `.env` jako `PUID` a `PGID`
-   a projekt restartujte. Terminál Container Manageru je plnohodnotná náhrada
-   SSH pro tenhle účel.
+   The first two numbers are uid and gid. Write them into `.env` as `PUID` and
+   `PGID` and restart the project. The Container Manager terminal is a full
+   substitute for SSH for this.
 
-6. Otevřete `http://NAS:8090`. Čerstvá instalace žádný účet nemá a rovnou vás
-   nechá zvolit jméno a heslo; do té doby server nepustí nic jiného. Žádné
-   výchozí heslo neexistuje, takže není co zapomenout změnit.
+6. Open `http://NAS:8090`. A fresh install has no account and asks you to
+   choose a name and password; until then the server serves nothing else.
 
-### S SSH
+### With SSH
 
 ```bash
 cd /volume1/docker
 git clone https://github.com/NickRabit/streamio-offline.git
 cd streamio-offline
 cp .env.example .env
-# doplnit DOWNLOAD_PATH, ALLOW_ADDON_HOSTS a PUID/PGID podle:
+# set DOWNLOAD_PATH, ALLOW_ADDON_HOSTS, and PUID/PGID from:
 stat -c '%u %g' /volume1/video/downloads
 docker compose -f compose.yml -f compose.synology.yml up -d --build
 ```
 
-### Když se nedaří zapisovat
+### When writes fail
 
-Server při startu ohlásí, pokud do `/downloads` zapisovat nemůže. Máte tři možnosti,
-seřazené od nejšetrnější:
+The server logs at start if it cannot write to `/downloads`. Three options,
+gentlest first:
 
-- **`PUID` a `PGID`** podle skutečného vlastníka složky. Nic se nepřepisuje.
-- **Ve File Station** přidat složce oprávnění pro čtení a zápis a použít je i na
-  podsložky.
-- **`FIX_PERMISSIONS=1`** v `.env`. Při startu jednorázově přepíše vlastníka celé
-  složky se stahováním. U velké knihovny to chvíli trvá, proto to není výchozí.
+- **`PUID` and `PGID`** matching the real folder owner. Nothing is rewritten.
+- **In File Station**, grant read and write on the folder and apply that to
+  subfolders.
+- **`FIX_PERMISSIONS=1`** in `.env`. On start, once, it chowns the whole
+  download folder. On a large library that takes a while, so it is not the
+  default.
 
-### Přístup zvenčí
+### Access from outside
 
-Na domácí síti stačí, co je popsané výše. **Ven aplikaci nevystavujte přímo.**
-Přihlášení sice existuje, ale po HTTP jde relační cookie po síti nechráněná a
-kdokoli na cestě ji může odposlechnout. Použijte reverzní proxy DSM s HTTPS
-certifikátem; jakmile server uvidí `X-Forwarded-Proto: https`, začne cookie
-označovat jako `Secure` sám.
+On the home network, the steps above are enough. **Do not publish the app
+directly to the internet.** Login exists, but over HTTP the session cookie
+travels in the clear. Use DSM's reverse proxy with an HTTPS certificate; once
+the server sees `X-Forwarded-Proto: https`, it marks the cookie `Secure` itself.
 
-### Hardwarová akcelerace
+### Hardware acceleration
 
-Na Synology s Intel iGPU (Celeron s QuickSync, např. DS220+/DS920+) potřebuje kontejner dvě věci: přístup k zařízení `/dev/dri` a členství ve skupině, která render node vlastní. Bez té skupiny proces po přepnutí na `PUID`/`PGID` zařízení neotevře a server se tiše vrátí k softwarovému převodu.
+On Synology with an Intel iGPU (Celeron with QuickSync, for example DS220+ /
+DS920+) the container needs two things: access to `/dev/dri` and membership in
+the group that owns the render node. Without that group, the process cannot
+open the device after switching to `PUID`/`PGID` and the server silently falls
+back to software conversion.
 
-**V Container Manageru** (bez SSH) odkomentujte v `compose.yml` blok
+**In Container Manager** (no SSH), uncomment this block in `compose.yml`:
 
 ```yaml
     devices:
       - /dev/dri:/dev/dri
 ```
 
-a do `.env` doplňte `VAAPI_DEVICE=/dev/dri/renderD128` a `RENDER_GID`. Správný GID zjistíte v **Terminálu** kontejneru:
+and add `VAAPI_DEVICE=/dev/dri/renderD128` and `RENDER_GID` to `.env`. The
+right GID is in the container **Terminal**:
 
 ```bash
 ls -n /dev/dri
 ```
 
-Druhé číslo u `renderD128` je hledaná skupina; na DSM 7 to bývá 937 (`videodriver`). Pak projekt zastavte a znovu sestavte.
+The second number on `renderD128` is the group; on DSM 7 it is usually 937
+(`videodriver`). Then stop the project and build it again.
 
-**Přes SSH** je jednodušší override, který obojí nastaví sám:
+**Over SSH** the override sets both for you:
 
 ```bash
 docker compose -f compose.yml -f compose.synology.yml up -d --build
 ```
 
-GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`.
+Override `RENDER_GID` in `.env` if needed; on the NAS, `stat -c "%g" /dev/dri/renderD128`.
 
-Že je enkodér připravený, poznáte v logu podle `VAAPI is available`. Server při startu opravdu zakóduje zkušební snímek a zvlášť ověří hardwarové škálování a řízení datového toku. Omezené ovladače v Synology proto mohou správně hlásit `gpuScaling:false` nebo `bitrateControl:false`; nejde o chybu. Aplikace pak obraz dekóduje a zmenší na CPU, nahraje jej do GPU a hardwarově zakóduje v režimu konstantní kvality. Skutečný běh na GPU potvrzuje `hardware:true` u záznamu o spuštění, změně stopy nebo posunu.
+The encoder is ready when the log says `VAAPI is available`. At start the
+server actually encodes a test frame and separately checks hardware scaling
+and bitrate control. Limited Synology drivers can correctly report
+`gpuScaling:false` or `bitrateControl:false`; that is not a bug. The app then
+decodes and shrinks on CPU, uploads to the GPU, and hardware-encodes in
+constant-quality mode. Real GPU work is confirmed by `hardware:true` on the
+start, track-change, or seek log line.
 
-Pro CQP lze v `.env` nastavit `VAAPI_QP=23`. Nižší číslo znamená vyšší kvalitu a větší datový tok; vyšší číslo šetří místo a síť. `FFMPEG_CRF` a `FFMPEG_PRESET` se používají jen při softwarovém fallbacku. Při hardwarovém převodu se zvuk převádí do AAC kvůli spolehlivému fMP4/HLS výstupu; při pouhém přebalení zůstává beze změny.
+For CQP, set `VAAPI_QP=23` in `.env`. Lower means higher quality and more
+bitrate. `FFMPEG_CRF` and `FFMPEG_PRESET` apply only to the software fallback.
+Hardware conversion always transcodes audio to AAC for a reliable fMP4/HLS
+output; a plain remux leaves audio untouched.
 
-Hláška `unknown libva error` znamená, že zařízení jde otevřít, ale ovladač se nerozběhl. Co je k dispozici, zjistíte v terminálu kontejneru:
+`unknown libva error` means the device opens but the driver did not start. See
+what is available in the container terminal:
 
 ```bash
 vainfo --display drm --device /dev/dri/renderD128
 ```
 
-Když si libva ovladač nevybere sama, vynuťte ho v `.env` přes `LIBVA_DRIVER_NAME` — `iHD` pro Gemini Lake a novější, `i965` zejména pro starší Braswell. Pokud VAAPI nerozchodíte vůbec, přímé přehrávání i přebalení dál fungují bez akcelerace a skutečný převod přejde na `libx264`.
+If libva does not pick a driver, force it in `.env` with `LIBVA_DRIVER_NAME` —
+`iHD` for Gemini Lake and newer, `i965` especially for older Braswell. If
+VAAPI never comes up, direct play and remux still work and real transcode
+falls back to `libx264`.
 
-### Když se NAS zadrhává
+### When the NAS stalls
 
-Přehrávání velkého souboru umí Synology na několik minut položit. Stojí za tím dvě věci a obě se dají srovnat.
+Playing a large file can freeze Synology for minutes. Two causes, both
+fixable.
 
-**Zápisový nával.** Při přebalení běží FFmpeg rychleji než reálný čas, aby byl posun po časové ose svižný, a segmenty sype do `/data`. Při původní osminásobné rychlosti to bylo přes 300 MB za dvacet sekund; slabší NAS se zadusí protlačováním špinavých stránek na disk. Výchozí hodnota je proto `FFMPEG_READRATE_REMUX=3` — posun zůstává stejně rychlý, protože o něm rozhoduje počáteční nával, ale zápis klesne na třetinu. Když to nestačí, snižte ji na `2`. Segmenty relace se uklidí po jejím konci a nečinná relace se ukončí po pěti minutách.
+**Write burst.** During remux, FFmpeg runs faster than real time so seeking
+stays snappy, and it dumps segments into `/data`. At the old 8× rate that was
+over 300 MB in twenty seconds; a weaker NAS chokes pushing dirty pages to
+disk. The default is therefore `FFMPEG_READRATE_REMUX=3` — seeking stays as
+fast, because that is decided by the initial burst, but writes drop to a
+third. If that is not enough, set it to `2`. Session segments are cleaned up
+when it ends; an idle session stops after five minutes.
 
-**Vytížený procesor.** Bez akcelerace vezme softwarový převod všechna jádra a DSM přestane reagovat. V `compose.yml` je proto připravený zakomentovaný limit `cpus`, kterým jedno jádro necháte systému. Trvalejší řešení je zprovoznit QuickSync, viz [Hardwarová akcelerace](#hardwarová-akcelerace) — náročné kódování pak převezme Intel GPU. Pokud log uvádí `gpuScaling:false`, menší část práce se škálováním zůstane na CPU, což je očekávané.
+**Saturated CPU.** Without acceleration, software transcode takes every core
+and DSM stops responding. `compose.yml` has a commented `cpus` limit so you
+can leave one core for the system. The lasting fix is QuickSync, see
+[Hardware acceleration](#hardware-acceleration). If the log says
+`gpuScaling:false`, a slice of the scaling work stays on CPU; that is
+expected.
 
-## Fronta stahování
+## Download queue
 
-Fronta přežije restart, umí navázat na `.part` soubor pomocí HTTP Range a podporuje pozastavení, pokračování, opakování chyby, změnu pořadí, odstranění a 1–8 souběžných stahování. Dokončený soubor se při odstranění z historie nemaže.
+The queue survives a restart, resumes a `.part` file with HTTP Range, and
+supports pause, resume, retry, reorder, remove, and 1–8 concurrent downloads.
+Removing a finished job from history does not delete the file.
 
-The selected source and the player offer two destinations: **Do knihovny** adds
-the file to the server queue, while **Do zařízení** starts a native download in
-the current browser. Individual library files can also be downloaded from their
-context menu. External streams always pass through the server proxy: the browser's
-download connection targets only Stremio Offline and the debrid URL is never put
-in the download link. Filenames follow the same rules as library downloads.
+The selected source and the player offer two destinations: **To library**
+(`Do knihovny`) adds the file to the server queue, while **To device**
+(`Do zařízení`) starts a native download in the current browser. Individual
+library files can also be downloaded from their context menu. External streams
+always pass through the server proxy: the browser talks only to Stremio
+Offline, and the debrid URL is never placed in the download link. Filenames
+follow the same rules as library downloads.
 
-V **Nastavení** se volí, kolik souborů se stahuje najednou dohromady a kolik z jednoho zdroje. Poskytovatelé obvykle omezují počet souběžných spojení a přebytečné přenosy utnou nebo je nechají hladovět, dokud je nesejme hlídač nečinnosti; jeden přenos na zdroj je proto nejbezpečnější. Přerušené spojení fronta sama naváže, a jakmile se přenos zase rozjede, vrátí se i rozpočet pokusů.
+**Settings** choose how many files download at once overall and how many from
+one source. Providers usually cap concurrent connections and kill or starve
+the extras; one transfer per source is the safest default. A dropped
+connection is resumed, and once the transfer is moving again the retry budget
+is restored.
 
-V části **Doplňky** lze pro každý doplněk poskytující streamy zvlášť nastavit ukládání filmů a seriálů. Hostitelský adresář určuje `DOWNLOAD_PATH`; v kartě doplňku se zadává jen relativní podsložka uvnitř něj. Prázdná podsložka znamená přímo základní `DOWNLOAD_PATH`; lze použít i více úrovní, například `Webshare/Filmy`. Strukturovaný režim vytváří pro film složku podle názvu a pro seriál složky seriálu a série. Plochý režim ukládá přímo do zvolené podsložky, například `Film.mkv` nebo `Seriál - S01E07 - Název dílu.mkv`. Změna se projeví u nově přidaných položek ve frontě.
+In **Addons**, each stream addon can set where movies and series are saved.
+The host directory is `DOWNLOAD_PATH`; the addon card takes only a relative
+subdirectory inside it. An empty subdirectory means `DOWNLOAD_PATH` itself;
+nested paths such as `Webshare/Movies` work. Structured mode creates a folder
+named after the movie, or show and season folders for a series. Flat mode
+writes straight into the chosen subdirectory, for example `Movie.mkv` or
+`Show - S01E07 - Episode title.mkv`. The change applies to newly queued items.
 
-Při první inicializaci se automaticky přidají oficiální **Cinemeta** (katalog a metadata) a **OpenSubtitles v3** (titulky). Lze je vypnout nebo odstranit; po vědomém odstranění se při restartu samy nevrátí.
+On first start the official **Cinemeta** (catalog and metadata) and
+**OpenSubtitles v3** (subtitles) addons are installed. They can be disabled or
+removed; after a deliberate removal they are not restored on restart.
 
-## Sestavení obrazu
+## Building the image
 
-Stavět na NASu se nevyplácí: trvá to dlouho a Container Manager používá klasický builder, kde se kvůli prázdnému `ARG TARGETARCH` snadno ztratí ovladače VAAPI. Obraz proto vzniká jinde a NAS ho jen dostane hotový.
+Building on the NAS is a poor use of time, and Container Manager uses the
+classic builder, where an empty `ARG TARGETARCH` silently drops VAAPI drivers.
+The image is built elsewhere and the NAS only pulls it.
 
-**Místně** to udělá jeden příkaz — přeloží, projede testy, sestaví pro zvolenou architekturu, vypíše, co v obrazu je, a zabalí ho:
+**Locally**, one command typechecks, runs tests, builds for the chosen
+architecture, prints what is in the image, and packs it:
 
 ```bash
 ./scripts/build-image.sh
 ```
 
-Vznikne `dist/stremio-offline-amd64-<datum>.tar.gz`, který nahrajete na NAS a v Container Manageru přidáte přes **Image → Přidat → Přidat ze souboru**. Přepínače `--arch`, `--tag` a `--out` mění architekturu, značku a cílovou složku.
+That produces `dist/stremio-offline-amd64-<date>.tar.gz`. Upload it to the NAS
+and add it in Container Manager via **Image → Add → Add from file**. `--arch`,
+`--tag`, and `--out` change architecture, tag, and output directory.
 
-**Na GitHubu** to samé dělá workflow `Sestavení obrazu`, spouštěný ručně (**Actions → Sestavení obrazu → Run workflow**) a při vydání verze. Nejdřív pustí testy, pak sestaví obraz zvlášť pro `linux/amd64` a `linux/arm64` (repozitář je veřejný, takže má pro obě architektury zdarma nativní runner — žádná emulace), spojí je do jednoho seznamu a odešle do GHCR jako `ghcr.io/nickrabit/streamio-offline:latest` (a pod otiskem commitu). Nakonec ověří, že amd64 obraz opravdu nese ovladače VAAPI — jinak úloha spadne. arm64 se na ovladače nekontroluje, tam QuickSync stejně nejede.
+**On GitHub**, the `Build image` workflow does the same. Run it by hand
+(**Actions → Build image → Run workflow**) or by publishing a version. It
+runs tests, builds `linux/amd64` and `linux/arm64` separately (the repository
+is public, so both architectures get a free native runner — no emulation),
+merges them into one list, and pushes to GHCR as
+`ghcr.io/nickrabit/streamio-offline:latest` (and under the commit SHA). It then
+checks that the amd64 image actually contains VAAPI drivers — otherwise the
+job fails. arm64 is not checked; QuickSync does not run there.
 
-Díky tomu je tenhle jeden obraz vhodný i pro **Mac s Apple Silicon**: `docker pull` nebo `docker compose up` si samy vyberou architekturu, která na stroji sedí, takže na M1/M2/M3 Macu se stahuje hotový arm64 obraz místo osmiminutového sestavování přes emulaci.
+The same image works on an **Apple Silicon Mac**: `docker pull` or
+`docker compose up` pick the architecture that matches the machine, so an
+M1/M2/M3 Mac downloads a ready arm64 image instead of building for eight
+minutes under emulation.
 
-NAS pak obraz jen stahuje. Použijte `compose.pull.yml` místo `compose.yml`:
+The NAS then only pulls. Use `compose.pull.yml` instead of `compose.yml`:
 
 ```bash
 docker compose -f compose.pull.yml pull
 docker compose -f compose.pull.yml up -d
 ```
 
-Pozor na jednu věc: Container Manager stahuje obraz jen tehdy, když ho ještě nemá. Projekt, který `:latest` už jednou stáhl, po zastavení a spuštění nastartuje tu starou verzi znovu. O nový obraz je proto potřeba říct výslovně — buď smazat ten místní v záložce **Image** a projekt spustit, nebo použít `scripts/nas-update.sh`, který stažení i restart udělá sám:
+One catch: Container Manager downloads an image only when it does not have it
+yet. A project that already pulled `:latest` will start the old one again
+after a stop/start. Ask for a new image explicitly — delete the local one
+under **Image** and start the project, or run `scripts/nas-update.sh`, which
+pulls and restarts:
 
 ```bash
 ./scripts/nas-update.sh /volume2/docker/streamio-offline
 ```
 
-Bez SSH ho pověsíte na **Řídicí panel → Plánovač úloh → Vytvořit → Uživatelem definovaný skript**, spouštěný jako `root`. Jde tak i aktualizovat pravidelně.
+Without SSH, hang it on **Control Panel → Task Scheduler → Create →
+User-defined script**, run as `root`. That also works on a schedule.
 
-Balíček v GHCR zdědí soukromí repozitáře, takže se k němu NAS musí přihlásit tokenem (Container Manager → Registry → Nastavení). Pokud vám nevadí, že obraz uvidí kdokoli, je jednodušší přepnout balíček v GitHubu na veřejný — repozitář může zůstat soukromý a přihlašování odpadne. Obraz nenese žádné údaje, jen aplikaci.
+The GHCR package inherits repository visibility, so a private repo means the
+NAS must log in with a token (Container Manager → Registry → Settings). If you
+do not mind anyone seeing the image, make the package public — the repository
+can stay private and the login goes away. The image holds the app, not your
+data.
 
-Na push se nestaví: commitů bývá hodně a obraz z každého z nich by byl zbytečný běh. Až se vývoj přesune na větve a do `main` se bude slévat hotová práce, dává smysl vrátit do workflow `on: push: branches: [main]`.
+Images are not built on every push: that would waste a run on every commit.
+Once work lands on `main` through pull requests, adding
+`on: push: branches: [main]` to the workflow is reasonable.
 
-Ruční spuštění navíc umí přiložit balík ke stažení, když se do GHCR pouštět nechcete.
+A manual run can also attach a downloadable amd64 tarball if you do not want
+to push to GHCR.
 
-### Vydání verzí
+### Releasing versions
 
-Značka `:latest` sama o sobě neřekne, co v obrazu je — k tomu slouží otisk commitu, ale ten si nikdo nepamatuje. Pro čitelnou historii verzí otagujte commit na `main`:
+`:latest` does not say what is in the image. The commit SHA does, but nobody
+remembers it. For a readable history, tag a commit on `main`:
 
 ```bash
 git tag v0.4.0
 git push origin v0.4.0
 ```
 
-Spustí se `Vydání verze`. To si zavolá `Sestavení obrazu`, takže se obraz sestaví a otestuje přímo z commitu, na který tag ukazuje — vydaná verze je pak zaručeně to, co se otestovalo. Ke značkám `:latest` a otisku commitu přibudou `:0.4.0` a `:0.4`. Až po úspěšném sestavení vznikne GitHub Release s automaticky vygenerovanými poznámkami ze zpráv commitů. Na NASu nebo Macu pak jde připnout konkrétní verzi místo `:latest`:
+That starts `Release`. It calls `Build image`, so the published version is
+built and tested from the tagged commit. Beside `:latest` and the commit SHA
+you get `:0.4.0` and `:0.4`. Only after a successful build does a GitHub
+Release appear, with notes generated from commit messages. Pin a version on
+the NAS or a Mac instead of `:latest`:
 
 ```yaml
 image: ghcr.io/nickrabit/streamio-offline:0.4.0
@@ -255,53 +370,85 @@ image: ghcr.io/nickrabit/streamio-offline:0.4.0
 
 ### Windows
 
-Obraz je stejný jako pro Linux — Docker Desktop na Windows pouští linuxové kontejnery přes WSL2, takže žádná zvláštní úprava image není potřeba. Dvě věci se ale musí přizpůsobit: v `compose.yml` zakomentujte blok `devices:` (`/dev/dri` na Windows neexistuje, kontejner by se odmítl spustit) a cesty v `.env` (`DATA_PATH`, `DOWNLOAD_PATH`) směřujte do WSL, ne na `/mnt/c/...` — čtení a zápis přes hranici souborových systémů je znatelně pomalejší, což je u stahování a generování náhledů poznat. Akcelerace přes QuickSync na Windows nefunguje, překódování tedy poběží na procesoru; na běžném PC to vadí méně než na Celeronu v NASu.
+The image is the Linux one — Docker Desktop on Windows runs Linux containers
+through WSL2, so the image itself needs no Windows variant. Two host-side
+changes: comment out the `devices:` block in `compose.yml` (`/dev/dri` does
+not exist on Windows and the container would refuse to start), and point
+`DATA_PATH` / `DOWNLOAD_PATH` in `.env` into WSL, not `/mnt/c/...`. Crossing
+the filesystem boundary is slow enough to notice on downloads and artwork.
+QuickSync does not work on Windows, so transcode runs on the CPU; a desktop
+PC minds that less than a Celeron in a NAS.
 
-## Diagnostika
+## Diagnostics
 
-Když něco nefunguje, začněte v **Nastavení → Diagnostika**. Nahoře je stav serveru
-(verze, doba běhu, FFmpeg a hardwarová akcelerace, běžící přehrávání, fronta, volné místo),
-pod ním **Poslední problémy**: stejná hlášení jsou seskupená dohromady i s počtem výskytů,
-takže je vidět, co se opakuje. Rozbalením skupiny se ukážou poslední výskyty i s podrobnostmi.
-Podrobný log je schovaný pod tlačítkem, dá se filtrovat podle úrovně, stáhnout i zkopírovat.
+When something fails, start at **Settings → Diagnostics**. The top is server
+status (version, uptime, FFmpeg and hardware acceleration, running playback,
+queue, free space). Below that, **Recent problems**: identical messages are
+grouped with a count, so repeats stand out. Expanding a group shows the last
+occurrences with detail. The full log is behind a button; it can be filtered
+by level, downloaded, or copied.
 
-Chyby přehrávače hlásí prohlížeč sám na server, takže v logu je i to, na čem přehrávání
-skutečně skončilo (typ chyby hls.js, kód video elementu, opakované zadrhávání) — ne jen
-hláška, kterou uživatel viděl na obrazovce.
+The player reports its own failures to the server, so the log includes what
+playback actually died on (hls.js error type, video-element code, repeated
+stalling) — not only the message shown on screen.
 
-Panel je ve výchozím stavu sbalený a v hlavičce ukazuje jen odznak „Bez chyb“, nebo počet
-hlášení. Po rozbalení jde filtrovat podle období (hodina, den, týden, vše) a podle textu ve
-zprávě; filtr platí zároveň pro seskupené problémy i pro podrobný log.
+The panel starts collapsed. The header shows a “No errors” badge, or a count.
+Once expanded, filter by period (hour, day, week, all) and by text in the
+message; the filter applies to grouped problems and to the detailed log.
 
-Log leží v `/data/app.log`, po překročení `LOG_MAX_BYTES` (výchozích 5 MB) se přejmenuje na
-`app.log.1`. Záznamy starší než `LOG_RETENTION_DAYS` (výchozích 7 dnů) server sám zahazuje —
-při startu a pak každých šest hodin; `LOG_RETENTION_DAYS=0` úklid vypne. Celý log jde smazat
-tlačítkem v Diagnostice. Stejné řádky jdou i na standardní výstup, takže je vidí
-`docker compose logs`. Adresy streamů se do něj zapisují jen jako protokol a hostitel,
-tokeny a hesla vůbec.
+The log lives in `/data/app.log`. Past `LOG_MAX_BYTES` (default 5 MB) it is
+renamed to `app.log.1`. Records older than `LOG_RETENTION_DAYS` (default 7)
+are dropped at start and then every six hours; `LOG_RETENTION_DAYS=0` turns
+cleanup off. The Diagnostics page can wipe the log. The same lines go to
+standard output, so `docker compose logs` sees them. Stream addresses are
+logged as scheme and host only; tokens and passwords are not logged at all.
 
-Podrobnosti o požadavcích a průběhu převodu přidá `LOG_LEVEL=DEBUG` v `.env`.
+`LOG_LEVEL=DEBUG` in `.env` adds request and conversion detail.
 
-## Kde leží data
+## Where data lives
 
-Server si vedle stažených filmů drží vlastní data: účet, seznam doplňků, náhledy knihovny, statistiky a frontu stahování. Sídlí v `/data` a cestu k nim určuje `DATA_PATH`, ve výchozím stavu složka `data` vedle `compose.yml`.
+Beside downloaded films, the server keeps its own data: the account, addon
+list, library artwork, stats, and the download queue. That lives in `/data`,
+and `DATA_PATH` points at it — by default a `data` folder next to
+`compose.yml`.
 
-Je to normální složka, ne skrytý svazek Dockeru — zálohujete ji zkopírováním a smazáním ji server vrátíte do stavu po instalaci (přijdete o účet a doplňky, stažené soubory zůstanou). Na Synology dává smysl ji dát do sdílené složky, ať je vidět ve File Stationu.
+It is an ordinary folder, not a hidden Docker volume. Copy it to back it up;
+delete it to return the server to a fresh install (you lose the account and
+addons, downloaded files stay). On Synology, put it in a shared folder so it
+shows up in File Station.
 
-Instalace ze starších verzí držely data v pojmenovaném svazku `stremio-offline-data`. Přenést je jde přes SSH jedním příkazem — název svazku napoví `docker volume ls`:
+Older installs kept data in a named volume `stremio-offline-data`. Move it
+over SSH with one command — `docker volume ls` shows the volume name:
 
 ```bash
 docker run --rm -v stremio-offline_stremio-offline-data:/from -v /volume1/docker/stremio-offline/data:/to alpine sh -c 'cp -a /from/. /to/'
 ```
 
-Bez SSH je jednodušší začít nanovo: doplňky přidáte znovu a stažené soubory zůstávají, protože leží mimo tuhle složku.
+Without SSH it is simpler to start over: addons are re-added, downloaded files
+stay because they sit outside this folder.
 
-## Bezpečnost
+## Security
 
-Server nespouští kód doplňků, pouze čte jejich JSON API. Ve výchozím stavu blokuje manifesty a streamy směřující do privátní sítě. Pro vlastní LAN doplňky lze vědomě nastavit `ALLOW_PRIVATE_ADDONS=1`.
+The server never runs addon code; it only reads their JSON APIs. By default it
+blocks manifests and streams aimed at a private network. For your own LAN
+addons, set `ALLOW_PRIVATE_ADDONS=1` or list hosts in `ALLOW_ADDON_HOSTS`.
 
-Přihlášení si zakládáte při prvním otevření, výchozí účet se nevytváří. Heslo se ukládá jen jako otisk (scrypt) a relace nese podepsanou známku; odhlášení všech zařízení vymění podpisové tajemství, takže dosud vydané známky rázem neplatí.
+You create the login on first open; no default account is created. The
+password is stored only as a scrypt hash and the session carries a signed
+ticket. Signing out of all devices rotates the signing secret, so previously
+issued tickets stop working at once.
 
-Zapomenuté heslo se dá obejít záložními údaji z prostředí: nastavte `ADMIN_USERNAME` a `ADMIN_PASSWORD`, přihlaste se jimi a heslo si v Nastavení změňte. Druhá možnost je smazat klíč `auth` ze souboru `state.json` v datovém svazku — server pak při dalším startu znovu nabídne založení účtu a doplňky ani knihovna se neztratí.
+A forgotten password can be bypassed with environment fallbacks: set
+`ADMIN_USERNAME` and `ADMIN_PASSWORD`, sign in with those, and change the
+password in Settings. The other option is to delete the `auth` key from
+`state.json` in the data folder — the server then offers account creation
+again, and addons and the library stay.
 
-Používejte pouze zdroje a účty, ke kterým máte oprávněný přístup.
+Use only sources and accounts you have the right to access.
+
+See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## License
+
+[MIT](LICENSE). Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+This project is not affiliated with Stremio.

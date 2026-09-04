@@ -32,5 +32,5 @@ docker image prune -f >/dev/null || true
 echo "==> Running version"
 sleep 5
 PORT=$(sed -n 's/^STREMIO_OFFLINE_PORT=//p' .env 2>/dev/null | head -1)
-curl -fsS "http://127.0.0.1:${PORT:-8090}/api/status" 2>/dev/null || echo "(server neodpovídá, mrkněte do logu)"
+curl -fsS "http://127.0.0.1:${PORT:-8090}/api/status" 2>/dev/null || echo "(server is not responding, check the log)"
 echo

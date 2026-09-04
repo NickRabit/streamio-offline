@@ -1,0 +1,52 @@
+# Contributing
+
+Thanks for looking at Stremio Offline. This is a small, NAS-first project. Short,
+focused changes are easier to review than large ones.
+
+## Ground rules
+
+- Open a pull request against `main`. Do not push to `main` directly.
+- Work on a dedicated branch named after the change (`feat/…`, `fix/…`, `docs/…`).
+- Write commit messages, branch names, pull request titles, and review comments
+  in English.
+- Keep comments in code to what the code cannot say on its own, also in English.
+- Use only sources and accounts you have the right to access when testing.
+
+## Development
+
+You need Node.js 22 or newer. Docker is required to run the app the way it is
+meant to run.
+
+```bash
+npm ci
+npm test
+npm run build
+```
+
+Local workspaces:
+
+```bash
+npm run dev:server
+npm run dev:web
+```
+
+The supported runtime is Docker:
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+docker compose ps
+curl -fsS http://localhost:8090/api/status
+```
+
+The health endpoint must return `{"status":"ok",…}`. Check recent logs with
+`docker compose logs --tail=50 stremio-offline`.
+
+## Pull requests
+
+Use the pull request template. Say why the change exists, what you changed, and
+how you verified it. Run `npm test` and, for anything that affects runtime
+behaviour, rebuild the local container and hit `/api/status`.
+
+Issues and pull requests are the right place for bugs, small features, and
+documentation. Larger product questions belong in [PLAN.md](PLAN.md).
