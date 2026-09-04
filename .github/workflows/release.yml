@@ -1,17 +1,17 @@
-name: Vydání verze
+name: Release
 
-# Otagujete commit a zbytek už jde sám: tahle úloha si zavolá "Sestavení obrazu",
-# takže se vydávaná verze sestaví a otestuje ze stejného commitu, na který tag
-# ukazuje -- není tedy co si splést. Ke značkám :latest a :<sha>, které přidává
-# samotné sestavení, přibudou ještě :<verze> a :<major.minor>.
+# Tag a commit and the rest is automatic: this job calls "Build image", so the
+# published version is built and tested from the same commit the tag points
+# at -- nothing to mix up. Beside :latest and :<sha> from the image build,
+# :<version> and :<major.minor> are added.
 #
-# Vydání: git tag v0.4.0 && git push origin v0.4.0
+# Release: git tag v0.4.0 && git push origin v0.4.0
 on:
   push:
     tags: ["v*.*.*"]
 
 jobs:
-  verze:
+  version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -23,20 +23,20 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "minor=${version%.*}" >> "$GITHUB_OUTPUT"
 
-  obraz:
-    needs: verze
+  image:
+    needs: version
     uses: ./.github/workflows/image.yml
     permissions:
       contents: read
       packages: write
       actions: read
     with:
-      znacky: "${{ needs.verze.outputs.version }} ${{ needs.verze.outputs.minor }}"
+      tags: "${{ needs.version.outputs.version }} ${{ needs.version.outputs.minor }}"
 
-  # Vydání na GitHubu vzniká až po úspěšném sestavení, aby v seznamu vydání
-  # nestála verze, jejíž obraz se nepovedlo postavit.
-  vydani:
-    needs: obraz
+  # The GitHub Release is created only after a successful build, so the
+  # releases list never shows a version whose image failed to build.
+  release:
+    needs: image
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Vydání na GitHubu s automatickými poznámkami
+      - name: Create GitHub Release with generated notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"

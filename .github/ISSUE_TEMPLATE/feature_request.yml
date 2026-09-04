@@ -1,0 +1,38 @@
+name: Feature request
+description: A gap in daily use, not a rewrite of the product.
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [PLAN.md](https://github.com/NickRabit/streamio-offline/blob/main/PLAN.md) first.
+        If the idea is already there, comment on an existing issue instead of opening a new one.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The friction
+      description: What is awkward or missing when you use the app on a NAS or at home.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like instead
+      description: A concrete behaviour, not a technology shopping list.
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where it shows up
+      options:
+        - Playback
+        - Library
+        - Downloads
+        - Catalog / search
+        - Settings / diagnostics
+        - Deployment / Docker / Synology
+        - Other
+    validations:
+      required: true

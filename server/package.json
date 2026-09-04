@@ -2,6 +2,7 @@
   "name": "@stremio-offline/server",
   "private": true,
   "version": "0.3.2",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "tsc",

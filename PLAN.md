@@ -75,7 +75,7 @@ Do not expose the app directly to the internet. HTTPS reverse proxy or a VPN rem
 
 - GHCR image already exists (`ghcr.io/nickrabit/streamio-offline`). Tag a `v0.x` when the current `main` feels like a snapshot worth pinning.
 - One-compose install path for people who will not read the Synology chapter.
-- Short English README (keep the Czech Synology runbook, or split it). No licence file yet.
+- English README, MIT license, and GitHub community files (contributing, security, code of conduct, issue and pull request templates).
 
 ### Tests
 
