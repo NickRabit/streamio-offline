@@ -4,7 +4,7 @@ import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Ga
 import { ApiError, api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
-import { HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart } from "./player-hls";
+import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planSeek, waitForSeekable } from "./player-hls";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
@@ -172,6 +172,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const seekInFlightRef = useRef(false);
   const pendingSeekRef = useRef<number | null>(null);
   const seekEpochRef = useRef(0);
+  const catchupRef = useRef(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
@@ -406,9 +407,23 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
     if (modeRef.current === "direct") { video.currentTime = bounded; return; }
+    const token = ++catchupRef.current;
     const relative = bounded - offsetRef.current;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0;
-    if (!seekInFlightRef.current && relative >= 0 && relative <= Math.max(0, end - 0.5)) { video.currentTime = relative; return; }
+    const plan = seekInFlightRef.current ? "restart" : planSeek(relative, end);
+    if (plan === "native") { video.currentTime = relative; return; }
+    if (plan === "wait") {
+      const epoch = seekEpochRef.current;
+      showBufferSoon();
+      const covered = await waitForSeekable(
+        () => video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0,
+        relative, AHEAD_CATCHUP_MS,
+        () => token !== catchupRef.current || epoch !== seekEpochRef.current,
+      );
+      clearBuffering();
+      if (token !== catchupRef.current || epoch !== seekEpochRef.current) return;
+      if (covered) { video.currentTime = relative; return; }
+    }
 
     pendingSeekRef.current = bounded;
     if (seekInFlightRef.current) return;
