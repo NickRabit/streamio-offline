@@ -412,7 +412,6 @@ export function App() {
     if (!grid || !hasMore) return;
     const onScroll = () => { if (grid.scrollTop + grid.clientHeight >= grid.scrollHeight - 400) void loadPage(false); };
     grid.addEventListener("scroll", onScroll, { passive: true });
-    onScroll();
     return () => grid.removeEventListener("scroll", onScroll);
   }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
