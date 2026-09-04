@@ -116,18 +116,25 @@ exist in `web/src/style.css`:
 | `mobile` | 390x844 (iPhone 13) | The <=700px layout: bottom nav, 3-column poster grid |
 | `mobile-landscape` | 844x390, touch | `max-width:980 and max-height:500 and orientation:landscape`, plus the `mobileLandscape` branch in `Player.tsx` |
 
+The journey specs stay on one viewport -- they are about behaviour. Only the
+specs under `e2e/tests/layout` run across the whole matrix.
+
 Three kinds of assertion, in increasing order of maintenance cost:
 
-**a) Layout invariants.** Deterministic, no stored baselines, no upkeep. These
-catch the class of bug that has actually been shipped:
+**a) Layout invariants** (`e2e/tests/layout/invariants.spec.ts`). Deterministic,
+no stored baselines, no upkeep. These catch the class of bug that has actually
+been shipped:
 
-- no horizontal overflow: `document.documentElement.scrollWidth <= clientWidth`
-- on touch projects, every visible interactive element has a tap target of at
-  least 40px
-- the bottom navigation is present only below 700px and the sidebar only above
-- player controls in landscape are inside the viewport and not overlapped
-- elements do not sit flush against the screen edge where a safe-area inset
-  should apply
+- nothing escapes the page sideways, in any of the six views. Content inside a
+  pane that scrolls horizontally on purpose -- the download table, a poster
+  strip -- is exempt; only content that escapes the page itself counts.
+- the navigation follows the 700px breakpoint: a full-height sidebar above it,
+  a bar pinned to the bottom below it
+- every navigation entry is inside the viewport without scrolling
+- on touch projects, controls meet the 24px minimum from WCAG 2.2 AA (2.5.8).
+  Anything roomier is a design choice and is deliberately not enforced, or the
+  test would be dictating the layout rather than guarding it.
+- no poster hangs past the edge of its grid
 
 **b) Screenshot baselines.** `toHaveScreenshot` on roughly five key screens per
 viewport. These only work if the baselines are generated in the *same*
@@ -136,8 +143,16 @@ run would otherwise fail. Baselines are therefore always produced inside the
 official `mcr.microsoft.com/playwright:v1.x-noble` image, both locally and in
 CI, via a dedicated script.
 
-**c) Accessibility.** `@axe-core/playwright` on the same matrix: contrast, roles,
-focus order.
+**c) Accessibility** (`e2e/tests/layout/accessibility.spec.ts`).
+`@axe-core/playwright` on the same matrix, WCAG 2.0 and 2.1 at A and AA. It
+decides what can be decided from the DOM; keyboard order and screen reader
+wording still need a person.
+
+Running this matrix for the first time found three real defects, which are fixed
+in the same change: the library toolbar was clipped below 700px so its last
+control could not be reached at all; the catalog filters lost their accessible
+names in landscape, where the CSS hides the label text; and the download queue
+scrolled sideways without being reachable from the keyboard.
 
 Chromium is enough to start. WebKit is worth adding for Safari-shaped bugs, but
 note that Playwright's WebKit is not iOS Safari -- it does not reproduce the
@@ -169,7 +184,7 @@ pull request branch, so updating them is not a local-environment chore.
 | --- | --- | --- |
 | 1 | `ci.yml` on pull requests, Vitest set up, unit tests for pure client logic | Done |
 | 2 | Playwright plus the fixture stack, first end-to-end journeys | Done |
-| 3 | Viewport matrix, layout invariants, accessibility checks | Planned |
+| 3 | Viewport matrix, layout invariants, accessibility checks | Done |
 | 4 | Screenshot baselines and the container workflow that updates them | Planned |
 
 Phase 3 comes before phase 4 on purpose. Layout invariants catch most real

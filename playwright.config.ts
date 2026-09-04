@@ -7,6 +7,16 @@ export const addonManifest = `http://127.0.0.1:${addonPort}/manifest.json`;
 
 const storageState = "e2e/.tmp/session.json";
 
+// Chosen to sit on either side of the breakpoints in web/src/style.css, which are
+// 700px, 980px, a 780px height rule, and a landscape rule bounded by 980x500.
+export const viewports = [
+  { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
+  { name: "desktop-short", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 760 } } },
+  { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true } },
+  { name: "mobile", use: { ...devices["iPhone 13"] } },
+  { name: "mobile-landscape", use: { ...devices["iPhone 13 landscape"] } },
+];
+
 export default defineConfig({
   testDir: "e2e/tests",
   // The fixture stack is a single server with a single state file, so the specs
@@ -20,11 +30,18 @@ export default defineConfig({
   projects: [
     { name: "setup", testMatch: /setup\.spec\.ts/ },
     {
+      // The journeys are about behaviour, not layout, so one viewport is enough.
       name: "chromium",
-      testIgnore: /setup\.spec\.ts/,
+      testIgnore: [/setup\.spec\.ts/, /layout\//],
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
+    ...viewports.map(({ name, use }) => ({
+      name,
+      testMatch: /layout\//,
+      dependencies: ["setup"],
+      use: { ...use, storageState },
+    })),
   ],
   webServer: [
     {

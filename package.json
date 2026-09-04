@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "Self-hosted web client for Stremio addons",
   "license": "MIT",
   "repository": {
@@ -12,7 +12,10 @@
     "url": "https://github.com/NickRabit/streamio-offline/issues"
   },
   "homepage": "https://github.com/NickRabit/streamio-offline#readme",
-  "workspaces": ["server", "web"],
+  "workspaces": [
+    "server",
+    "web"
+  ],
   "scripts": {
     "build": "npm run build -w web && npm run build -w server",
     "test": "npm run test -w server && npm run test -w web",
@@ -21,8 +24,11 @@
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web"
   },
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "devDependencies": {
+    "@axe-core/playwright": "4.11.2",
     "@playwright/test": "1.56.1"
   }
 }
