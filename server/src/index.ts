@@ -19,7 +19,7 @@ import { clearedCookie, createSession, pruneRevoked, envCredentials, hashPasswor
 import { randomBytes } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
-import { defaultDownloadSettings, normalizeDownloadSettings, safeName } from "./naming.js";
+import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
 import type { AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
@@ -278,6 +278,19 @@ app.get("/api/subtitle", asyncRoute(async (req, res) => {
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
 }));
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
+const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
+type DeviceDownloadTicket = {
+  expiresAt: number;
+  filename: string;
+  source: { kind: "local"; path: string } | { kind: "remote"; stream: StreamItem; title: string; media?: MediaInfo };
+};
+const deviceDownloadTickets = new Map<string, DeviceDownloadTicket>();
+const pruneDeviceDownloadTickets = () => {
+  const now = Date.now();
+  for (const [key, ticket] of deviceDownloadTickets) if (ticket.expiresAt <= now) deviceDownloadTickets.delete(key);
+  // Bound memory use on long-running servers; expired links can be recreated with another click.
+  while (deviceDownloadTickets.size > 500) deviceDownloadTickets.delete(deviceDownloadTickets.keys().next().value!);
+};
 const metaCache = new Map<string, { value: MetaItem | null; at: number }>();
 const cachedMeta = async (type: string, id: string) => {
   const key = `${type}:${id}`;
@@ -777,6 +790,76 @@ app.get("/api/library/file", asyncRoute(async (req, res) => {
   res.sendFile(target, { acceptRanges: true, dotfiles: "deny" }, (error) => {
     if (error && !res.headersSent) res.status(404).json({ error: "Soubor nebyl nalezen." });
   });
+}));
+
+/** Keep the external address out of the download link by exchanging it for a short-lived ticket. */
+app.post("/api/device-download", asyncRoute(async (req, res) => {
+  pruneDeviceDownloadTickets();
+  let ticket: DeviceDownloadTicket;
+  if (req.body.path !== undefined) {
+    const relative = String(req.body.path ?? "");
+    const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+    const info = target ? await stat(target).catch(() => undefined) : undefined;
+    if (!target || !info?.isFile()) throw new Error("Soubor v knihovně nebyl nalezen.");
+    ticket = {
+      expiresAt: Date.now() + DEVICE_TICKET_TTL,
+      filename: path.basename(relative),
+      source: { kind: "local", path: relative },
+    };
+  } else {
+    const stream = req.body.stream as StreamItem;
+    if (!stream?.url || stream.url.startsWith("file://")) throw new Error("Stáhnout do zařízení lze pouze přímý HTTP stream.");
+    await validateRemoteUrl(stream.url);
+    const title = String(req.body.title ?? "video");
+    const media = req.body.media as MediaInfo | undefined;
+    const addon = store.addons().find((item) => item.key === stream.addonKey);
+    const settings = addon?.downloadSettings ?? defaultDownloadSettings();
+    const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
+    ticket = {
+      expiresAt: Date.now() + DEVICE_TICKET_TTL,
+      filename: deviceFilename(stream, media, title, targetSettings),
+      source: { kind: "remote", stream, title, media },
+    };
+  }
+  const id = randomBytes(24).toString("base64url");
+  deviceDownloadTickets.set(id, ticket);
+  res.status(201).json({ url: `/api/device-download/${id}`, filename: ticket.filename });
+}));
+
+app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
+  pruneDeviceDownloadTickets();
+  const ticket = deviceDownloadTickets.get(String(req.params.id));
+  if (!ticket) return res.status(404).json({ error: "Odkaz ke stažení vypršel. Spusťte stažení znovu." });
+
+  if (ticket.source.kind === "local") {
+    const target = resolveInside(DOWNLOAD_DIR, ticket.source.path);
+    if (!target) return res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
+    countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
+    return void res.download(target, ticket.filename, { acceptRanges: true, dotfiles: "deny" }, (error) => {
+      if (error && !res.headersSent) res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
+    });
+  }
+
+  const { stream, title, media } = ticket.source;
+  // The client only requests the ticket URL; the server handles debrid headers and ranges from its own IP.
+  const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) };
+  if (req.headers.range) headers.range = req.headers.range;
+  const controller = new AbortController();
+  const headerTimeout = setTimeout(() => controller.abort(), 30_000);
+  res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+  let upstream: Response;
+  try { upstream = await safeFetch(stream.url!, { headers, signal: controller.signal }); }
+  finally { clearTimeout(headerTimeout); }
+  if (!upstream.ok || !upstream.body) throw new Error(`Zdroj odpověděl HTTP ${upstream.status}.`);
+
+  countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
+  res.status(upstream.status).attachment(ticket.filename);
+  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) {
+    const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
+  }
+  const { Readable } = await import("node:stream");
+  try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
+  catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
 }));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
 app.post("/api/downloads", asyncRoute(async (req, res) => {

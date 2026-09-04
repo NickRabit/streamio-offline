@@ -1,11 +1,11 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Check, Download, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
+import { AudioLines, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -51,7 +51,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onClose }: Props) {
+export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -77,6 +77,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const bufferTimerRef = useRef<number | undefined>(undefined);
   const [qualityHint, setQualityHint] = useState<number | null>(null);
   const [downloadState, setDownloadState] = useState<"idle" | "busy" | "done">("idle");
+  const [deviceDownloadBusy, setDeviceDownloadBusy] = useState(false);
   const [resumedFrom, setResumedFrom] = useState(0);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
@@ -445,6 +446,13 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     setDownloadState(await onDownload() ? "done" : "idle");
   };
 
+  const downloadToDevice = async () => {
+    if (deviceDownloadBusy) return;
+    setDeviceDownloadBusy(true);
+    try { await onDeviceDownload(); }
+    finally { setDeviceDownloadBusy(false); }
+  };
+
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
@@ -540,9 +548,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"} onClick={onToggleFavorite}>
         <Star/> <span>{favorite ? "V oblíbených" : "Oblíbené"}</span>
       </button>}
-      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title="Přidat do stahovací fronty" aria-label="Přidat do stahovací fronty">
-        {downloadState === "done" ? <><Check /> <span>Ve frontě</span></> : <><Download /> <span>{downloadState === "busy" ? "Přidávám…" : "Stáhnout"}</span></>}
+      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title="Uložit do knihovny na serveru" aria-label="Uložit do knihovny na serveru">
+        {downloadState === "done" ? <><Check /> <span>Ve frontě</span></> : <><HardDrive /> <span>{downloadState === "busy" ? "Přidávám…" : "Do knihovny"}</span></>}
       </button>}
+      <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title="Uložit soubor do tohoto zařízení" aria-label="Uložit soubor do tohoto zařízení">
+        <Download /> <span>{deviceDownloadBusy ? "Připravuji…" : "Do zařízení"}</span>
+      </button>
       <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"} aria-label={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}>{cssFullscreen ? <Minimize/> : <Maximize/>} <span>{cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}</span></button>
     </div>
   </div>;

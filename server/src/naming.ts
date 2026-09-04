@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings } from "./types.js";
+import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings, StreamItem } from "./types.js";
 
 export interface MediaInfo {
   /** IMDb id z katalogu. Díky němu nemusíme metadata hádat z názvu složky. */
@@ -80,3 +80,17 @@ export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, 
 
 export const joinTarget = (directory: string, base: string, extension: string, copy = 1) =>
   path.join(directory, `${base}${copy > 1 ? ` (${copy})` : ""}${extension}`);
+
+/** Derive extensions in one place for both library and device downloads. */
+export function streamExtension(stream: StreamItem): string {
+  const hinted = stream.behaviorHints?.filename;
+  const source = hinted ?? (stream.url ? new URL(stream.url).pathname : "");
+  return path.extname(source) || ".mp4";
+}
+
+/** Browsers cannot preserve server folders, but the basename must match a library download. */
+export function deviceFilename(stream: StreamItem, media: MediaInfo | undefined, fallbackTitle: string, settings: DownloadTargetSettings): string {
+  const extension = streamExtension(stream);
+  const { directory, base } = targetPath(media, fallbackTitle, extension, settings);
+  return path.basename(joinTarget(directory, base, extension));
+}
