@@ -43,7 +43,7 @@ Když se přehrávání opakovaně zadrhává, přehrávač nabídne snížení 
 
 ### Posun po časové ose
 
-Uvnitř už převedeného úseku se skáče okamžitě. Při skoku dál se převod restartuje od nové pozice pomocí `-ss`, což díky HTTP Range nestahuje nic před ní; skok na libovolné místo filmu trvá řádově sekundu. Titulky se o stejnou hodnotu automaticky posunou. V režimu přímého přehrání jde seek nativně přes prohlížeč. Klávesy: mezerník přehrát a pozastavit, šipky ±10 s, `f` celá obrazovka.
+Uvnitř už převedeného úseku se skáče okamžitě. Při skoku dál se převod restartuje od nové pozice pomocí `-ss`, což díky HTTP Range nestahuje nic před ní; skok na libovolné místo filmu trvá řádově sekundu. Titulky se o stejnou hodnotu automaticky posunou. V režimu přímého přehrání jde seek nativně přes prohlížeč. Klávesy: mezerník přehrát a pozastavit, šipky ±10 s, `f` celá obrazovka, `c` skrýt a zobrazit titulky.
 
 Protože se video při přebalení jen kopíruje, začíná přehrávání od nejbližšího klíčového snímku před požadovaným časem — odchylka bývá několik sekund. Stejně se chová i Emby nebo Jellyfin.
 
@@ -55,6 +55,8 @@ Přehrávač nabízí výběr zvukové stopy a titulků včetně vypnutí. Titul
 - **z titulkových doplňků** (například OpenSubtitles) — připojí se přímo v prohlížeči.
 
 Přepnutí stopy znamená nové mapování pro FFmpeg, takže se převod restartuje na aktuální pozici, stejně jako u posunu. Obrázkové titulky (PGS, VobSub) se nenabízejí — do WebVTT je převést nelze.
+
+Klik na ikonku titulků v ovládání (nebo klávesa `c`) proto stopu nepřepíná: jen přestane vykreslovat text. Přehrávání ani převod se nezastaví a opětovné zapnutí je okamžité, i uprostřed repliky. Volba **Vypnuto** v seznamu naopak stopu z převodu skutečně odebere, a proto ho restartuje.
 
 V **Nastavení** se volí preferovaný jazyk zvuku a titulků, ve výchozím stavu čeština se záložní angličtinou. Přehrávač podle toho vybere stopu sám při startu.
 
