@@ -421,3 +421,13 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .stats-plot{grid-template-rows:120px auto}
   .stats-page{gap:10px;padding-bottom:8px}
 }
+
+/* The library toolbar is a single flex row. Below the breakpoint its five
+   controls no longer fit, and the panel clipped the last one instead of
+   letting the row wrap, so it could not be reached at all. */
+@media(max-width:700px){
+  .browse-panel>.browse-bar{align-items:stretch}
+  .browse-tools{flex-wrap:wrap;width:100%}
+  .browse-tools .search-input{flex:1 1 140px;min-width:0}
+  .browse-tools>button{flex:0 0 auto}
+}
