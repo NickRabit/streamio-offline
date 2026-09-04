@@ -13,6 +13,7 @@ These used to be open notes. They are in `main` now.
 - Image workflow is manual (`workflow_dispatch`) plus version tags. It does not build on every commit. Building on merge to `main` can wait until the branch workflow settles.
 - Settings export/import, including installed addons and their save rules. Tokens in addon URLs mean the file is a secret.
 - Subtitle cue background no longer fights the player chrome when the timeline shows or hides.
+- Fullscreen keeps HTML subtitles visible on Windows Chrome/Brave (the video is no longer promoted over the cue layer).
 - Hide/show subtitles from the player icon or `c`/`t` without restarting FFmpeg.
 - Clicking the current sidebar section resets it (filters, path, scroll). Clicking it from another section restores the last filters and position.
 - Jump from a finished download job to the file in the library.
@@ -29,7 +30,6 @@ Debrid stays per addon. The app plays and downloads resolved HTTPS URLs. There i
 
 - iPhone landscape: the left menu sits under the notch. It needs a safe-area layout, not just smaller buttons.
 - Catalog actions **To library** / **To device** are clipped at the bottom of the sheet.
-- Subtitles disappear after entering fullscreen. They must survive the player mode change.
 - Download queue page is still broken on a phone. Treat it as its own layout pass.
 
 ### Stats
