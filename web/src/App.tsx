@@ -6,9 +6,11 @@ import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { Player } from "./Player";
 import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
+import { report } from "./diagnostics";
+import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BuildInfo, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
 
 /** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
  * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
@@ -524,7 +526,7 @@ export function App() {
           if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
         } catch (error) {
           // Jeden nedostupný doplněk nesmí zbytek shodit ani zahltit chybami.
-          if (!stale()) console.warn(`Zdroje z ${source.name} se nepodařilo načíst`, error);
+          if (!stale()) report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
         } finally { if (!stale()) setPendingSources((count) => count - 1); }
       }));
     } catch (e) { if (!stale()) { fail(e); setSourcesLoaded(true); } }
@@ -855,7 +857,6 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
   const [backupBusy, setBackupBusy] = useState(false);
-  const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
   const exportSettings = async () => {
     setBackupBusy(true);
     try {
@@ -909,11 +910,164 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
         <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
       <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků mohou obsahovat přístupové tokeny. Soubor zálohy proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
-      <section className="panel settings-section diagnostics-section"><SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Log pro hledání problémů se stahováním a sítí"/><p>Log neobsahuje URL streamů ani přístupové tokeny.</p><dl className="build-info"><div><dt>Verze</dt><dd>{build?.version ?? "—"}</dd></div><div><dt>Sestaveno</dt><dd>{build?.builtAt ? new Date(build.builtAt).toLocaleString("cs-CZ") : "neuvedeno"}</dd></div><div><dt>Commit</dt><dd>{build?.commit ? <code>{build.commit.slice(0, 7)}</code> : "neuveden"}</dd></div></dl><div className="log-actions"><a className="button" href="/api/logs" download="stremio-offline.log">Stáhnout log</a><button onClick={() => void copyLog()}>Kopírovat do schránky</button></div></section>
+      <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>
     </div>
   </section>;
 }
 
+
+const LOG_LEVELS = [["", "Vše"], ["INFO", "Info a výš"], ["WARN", "Varování a chyby"], ["ERROR", "Jen chyby"]] as const;
+const PERIODS = [[1, "Poslední hodina"], [24, "Posledních 24 hodin"], [168, "Posledních 7 dnů"], [0, "Vše"]] as const;
+const duration = (seconds: number) => seconds >= 86400 ? `${Math.floor(seconds / 86400)} d ${Math.floor((seconds % 86400) / 3600)} h`
+  : seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min` : `${Math.max(1, Math.round(seconds / 60))} min`;
+const since = (at: string) => {
+  const seconds = Math.max(0, (Date.now() - new Date(at).getTime()) / 1000);
+  return seconds < 90 ? "před chvílí" : `před ${duration(seconds)}`;
+};
+const clock = (at: string) => at ? new Date(at).toLocaleTimeString("cs-CZ") : "";
+
+function Fact({ term, children }: { term: string; children: React.ReactNode }) {
+  return <div className="fact"><dt>{term}</dt><dd>{children}</dd></div>;
+}
+
+/** Jedna skupina stejných hlášek. Rozbalí se do posledních výskytů i s kontextem,
+ * takže běžný pohled zůstane krátký a podrobnosti jsou po ruce. */
+function Issue({ group }: { group: LogGroup }) {
+  const [open, setOpen] = useState(false);
+  return <li className={`issue ${group.level.toLowerCase()}`}>
+    <button className="issue-head" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <span className={`level-chip ${group.level.toLowerCase()}`}>{group.level}</span>
+      <span className="issue-message">{group.message}</span>
+      <span className="issue-count" title={`${group.count}× od ${clock(group.first)}`}>{group.count}×</span>
+      <span className="issue-when">{since(group.last)}</span>
+      <ChevronDown className={open ? "rotated" : ""}/>
+    </button>
+    {open && <div className="issue-detail">
+      {group.samples.map((sample, index) => <div key={`${sample.at}:${index}`}>
+        <span>{clock(sample.at)}</span>
+        {sample.context ? <code>{sample.context}</code> : <code className="empty">bez dalších údajů</code>}
+      </div>)}
+    </div>}
+  </li>;
+}
+
+/** Diagnostika má nejdřív odpovědět "je něco rozbité?", teprve pak nabídnout syrový log.
+ * Ten běžného uživatele nezajímá, proto je celý panel i log schovaný, dokud si o ně neřekne. */
+function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | null; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+  const [open, setOpen] = useState(false);
+  const [info, setInfo] = useState<Diagnostics | null>(null);
+  const [issues, setIssues] = useState<LogGroup[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [showLog, setShowLog] = useState(false);
+  const [hours, setHours] = useState(24);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [level, setLevel] = useState("");
+  const [tail, setTail] = useState(200);
+  const [wrap, setWrap] = useState(false);
+  const [lines, setLines] = useState<LogLine[]>([]);
+
+  const loadOverview = async () => {
+    setBusy(true);
+    try {
+      const [diagnostics, text] = await Promise.all([api.diagnostics(), api.logs({ tail: 500, level: "WARN", hours, search: query, inline: true })]);
+      setInfo(diagnostics);
+      setIssues(groupLog(parseLog(text)));
+    } catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  const loadLog = async () => {
+    setBusy(true);
+    try { setLines(parseLog(await api.logs({ tail, level, hours, search: query, inline: true }))); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  // Psaní do hledání nemá po každém písmenu chodit na server.
+  useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 400); return () => clearTimeout(timer); }, [search]);
+  // Přehled se načte i zavřený, jinak by odznak v hlavičce tvrdil "bez chyb", aniž by se díval.
+  useEffect(() => { void loadOverview(); }, [hours, query]);
+  useEffect(() => { if (open && showLog) void loadLog(); }, [open, showLog, level, tail, hours, query]);
+
+  const refresh = async () => { await loadOverview(); if (showLog) await loadLog(); };
+  const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
+  const clearLog = async () => {
+    if (!confirm("Opravdu smazat celý log? Dosavadní záznamy se ztratí, nové se budou zapisovat dál.")) return;
+    try { await api.clearLogs(); onNotify("Log byl smazán."); setLines([]); await loadOverview(); }
+    catch (error) { onError(error); }
+  };
+
+  const vaapi = info?.playback.vaapi;
+  const sessions = info?.playback.sessions ?? [];
+  const failed = info?.downloads.failed ?? [];
+  const queue = Object.entries(info?.downloads.byStatus ?? {});
+  const reports = issues.reduce((sum, issue) => sum + issue.count, 0);
+  const worst = issues.some((issue) => issue.level === "ERROR") ? "error" : issues.length ? "warn" : "ok";
+
+  return <section className="panel settings-section diagnostics-section">
+    <button className="diagnostics-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Stav serveru a poslední problémy"/>
+      {!open && info && <span className={`state-chip ${worst}`}>{worst === "ok" ? "Bez chyb" : `${reports} hlášení`}</span>}
+      <ChevronDown className={open ? "rotated" : ""}/>
+    </button>
+
+    {open && <div className="diagnostics-body">
+      <dl className="diagnostics-facts">
+        <Fact term="Verze">{info?.version ?? build?.version ?? "—"}{build?.commit ? <small> · {build.commit.slice(0, 7)}</small> : null}</Fact>
+        <Fact term="Server běží">{info ? duration(info.uptimeSeconds) : "—"}</Fact>
+        <Fact term="Převod videa">{info?.playback.ffmpeg.version ? `FFmpeg ${info.playback.ffmpeg.version}` : "—"}<small>{vaapi?.device ? ` · GPU ${vaapi.device}` : " · softwarově"}</small></Fact>
+        <Fact term="Přehrávání">{sessions.length ? `${sessions.length} běžících relací` : "žádná relace"}</Fact>
+        <Fact term="Fronta stahování">{queue.length ? queue.map(([status, count]) => `${statusLabel(status as DownloadJob["status"])} ${count}`).join(", ") : "prázdná"}</Fact>
+        {(info?.storage ?? []).map((disk) => <Fact key={disk.path} term={`Volné místo ${disk.path}`}>{bytes(disk.freeBytes)}<small>{disk.totalBytes ? ` z ${bytes(disk.totalBytes)}` : ""}</small></Fact>)}
+      </dl>
+
+      {sessions.length > 0 && <ul className="diagnostics-list">{sessions.map((session) => <li key={session.id}>
+        <strong>{session.title ?? session.id}</strong>
+        <span>{session.mode}{session.hardware ? " · GPU" : ""} · {session.video ?? "?"}/{session.audio ?? "?"} · na {Math.round(session.offset)} s · nečinná {session.idleSeconds} s</span>
+      </li>)}</ul>}
+
+      {failed.length > 0 && <ul className="diagnostics-list">{failed.map((job) => <li key={job.id}>
+        <strong>{job.title}</strong><span>{job.error ?? "chyba bez popisu"}</span>
+      </li>)}</ul>}
+
+      <div className="diagnostics-filters">
+        <label><span>Období</span><select aria-label="Období" value={hours} onChange={(event) => setHours(Number(event.target.value))}>{PERIODS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
+        <label className="grow"><span>Hledat ve zprávách</span><input type="search" placeholder="např. ffmpeg, hls.js, addon" value={search} onChange={(event) => setSearch(event.target.value)}/></label>
+        <button disabled={busy} onClick={() => void refresh()}><RefreshCw/> Obnovit</button>
+      </div>
+
+      <div className="issues-head">
+        <h4>Poslední problémy</h4>
+        {issues.length > 0 && <span className={`state-chip ${worst}`}>{reports} hlášení</span>}
+      </div>
+      {issues.length ? <ul className="issues">{issues.slice(0, 12).map((issue) => <Issue key={issue.key} group={issue}/>)}</ul>
+        : <p className="issues-empty">Ve zvoleném období server nezaznamenal žádné varování ani chybu.</p>}
+
+      <div className="log-toggle">
+        <button onClick={() => setShowLog(!showLog)} aria-expanded={showLog}><ChevronDown className={showLog ? "rotated" : ""}/> {showLog ? "Skrýt podrobný log" : "Zobrazit podrobný log"}</button>
+        <a className="button" href="/api/logs" download="stremio-offline.log"><Download/> Stáhnout</a>
+        <button onClick={() => void copyLog()}><Copy/> Kopírovat</button>
+        <button className="danger" onClick={() => void clearLog()}><Trash2/> Smazat log</button>
+      </div>
+
+      {showLog && <div className="log-panel">
+        <div className="log-filters">
+          <label><span>Úroveň</span><select aria-label="Úroveň logu" value={level} onChange={(event) => setLevel(event.target.value)}>{LOG_LEVELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
+          <label><span>Řádků</span><select aria-label="Počet řádků logu" value={tail} onChange={(event) => setTail(Number(event.target.value))}>{[100, 200, 500, 1000].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="log-wrap"><input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)}/><span>Zalamovat řádky</span></label>
+        </div>
+        <div className={`log-viewer${wrap ? " wrap" : ""}`} aria-label="Záznam serveru">
+          {lines.length ? lines.map((line, index) => <div className={`log-line ${line.level.toLowerCase()}`} key={`${line.at}:${index}`}>
+            <span className="log-time">{clock(line.at)}</span>
+            <span className={`level-chip ${line.level.toLowerCase()}`}>{line.level || "—"}</span>
+            <span className="log-message">{line.message}</span>
+            {line.context && <span className="log-context">{line.context}</span>}
+          </div>) : <div className="log-line">{busy ? "Načítám…" : "Ve zvoleném období není žádný záznam."}</div>}
+        </div>
+        <p>Log neobsahuje adresy streamů ani přístupové tokeny.{info?.logRetentionDays ? ` Záznamy starší než ${info.logRetentionDays} dnů server maže sám.` : ""}</p>
+      </div>}
+    </div>}
+  </section>;
+}
 
 function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);

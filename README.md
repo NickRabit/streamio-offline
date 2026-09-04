@@ -162,7 +162,7 @@ docker compose -f compose.yml -f compose.synology.yml up -d --build
 
 GID si tam případně přepíšete v `.env` jako `RENDER_GID`; na NASu ho zjistíte příkazem `stat -c "%g" /dev/dri/renderD128`.
 
-Že je enkodér připravený, poznáte v logu podle `VAAPI je k dispozici`. Server při startu opravdu zakóduje zkušební snímek a zvlášť ověří hardwarové škálování a řízení datového toku. Omezené ovladače v Synology proto mohou správně hlásit `gpuScaling:false` nebo `bitrateControl:false`; nejde o chybu. Aplikace pak obraz dekóduje a zmenší na CPU, nahraje jej do GPU a hardwarově zakóduje v režimu konstantní kvality. Skutečný běh na GPU potvrzuje `hardware:true` u záznamu o spuštění, změně stopy nebo posunu.
+Že je enkodér připravený, poznáte v logu podle `VAAPI is available`. Server při startu opravdu zakóduje zkušební snímek a zvlášť ověří hardwarové škálování a řízení datového toku. Omezené ovladače v Synology proto mohou správně hlásit `gpuScaling:false` nebo `bitrateControl:false`; nejde o chybu. Aplikace pak obraz dekóduje a zmenší na CPU, nahraje jej do GPU a hardwarově zakóduje v režimu konstantní kvality. Skutečný běh na GPU potvrzuje `hardware:true` u záznamu o spuštění, změně stopy nebo posunu.
 
 Pro CQP lze v `.env` nastavit `VAAPI_QP=23`. Nižší číslo znamená vyšší kvalitu a větší datový tok; vyšší číslo šetří místo a síť. `FFMPEG_CRF` a `FFMPEG_PRESET` se používají jen při softwarovém fallbacku. Při hardwarovém převodu se zvuk převádí do AAC kvůli spolehlivému fMP4/HLS výstupu; při pouhém přebalení zůstává beze změny.
 
@@ -254,6 +254,31 @@ image: ghcr.io/nickrabit/streamio-offline:0.4.0
 ### Windows
 
 Obraz je stejný jako pro Linux — Docker Desktop na Windows pouští linuxové kontejnery přes WSL2, takže žádná zvláštní úprava image není potřeba. Dvě věci se ale musí přizpůsobit: v `compose.yml` zakomentujte blok `devices:` (`/dev/dri` na Windows neexistuje, kontejner by se odmítl spustit) a cesty v `.env` (`DATA_PATH`, `DOWNLOAD_PATH`) směřujte do WSL, ne na `/mnt/c/...` — čtení a zápis přes hranici souborových systémů je znatelně pomalejší, což je u stahování a generování náhledů poznat. Akcelerace přes QuickSync na Windows nefunguje, překódování tedy poběží na procesoru; na běžném PC to vadí méně než na Celeronu v NASu.
+
+## Diagnostika
+
+Když něco nefunguje, začněte v **Nastavení → Diagnostika**. Nahoře je stav serveru
+(verze, doba běhu, FFmpeg a hardwarová akcelerace, běžící přehrávání, fronta, volné místo),
+pod ním **Poslední problémy**: stejná hlášení jsou seskupená dohromady i s počtem výskytů,
+takže je vidět, co se opakuje. Rozbalením skupiny se ukážou poslední výskyty i s podrobnostmi.
+Podrobný log je schovaný pod tlačítkem, dá se filtrovat podle úrovně, stáhnout i zkopírovat.
+
+Chyby přehrávače hlásí prohlížeč sám na server, takže v logu je i to, na čem přehrávání
+skutečně skončilo (typ chyby hls.js, kód video elementu, opakované zadrhávání) — ne jen
+hláška, kterou uživatel viděl na obrazovce.
+
+Panel je ve výchozím stavu sbalený a v hlavičce ukazuje jen odznak „Bez chyb“, nebo počet
+hlášení. Po rozbalení jde filtrovat podle období (hodina, den, týden, vše) a podle textu ve
+zprávě; filtr platí zároveň pro seskupené problémy i pro podrobný log.
+
+Log leží v `/data/app.log`, po překročení `LOG_MAX_BYTES` (výchozích 5 MB) se přejmenuje na
+`app.log.1`. Záznamy starší než `LOG_RETENTION_DAYS` (výchozích 7 dnů) server sám zahazuje —
+při startu a pak každých šest hodin; `LOG_RETENTION_DAYS=0` úklid vypne. Celý log jde smazat
+tlačítkem v Diagnostice. Stejné řádky jdou i na standardní výstup, takže je vidí
+`docker compose logs`. Adresy streamů se do něj zapisují jen jako protokol a hostitel,
+tokeny a hesla vůbec.
+
+Podrobnosti o požadavcích a průběhu převodu přidá `LOG_LEVEL=DEBUG` v `.env`.
 
 ## Kde leží data
 

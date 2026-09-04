@@ -66,7 +66,7 @@ export class DownloadQueue {
     throw new Error("Nepodařilo se najít volné jméno souboru.");
   }
 
-  async pause(id: string) { const job = this.require(id); if (job.status === "completed") throw new Error("Dokončené stahování nelze pozastavit."); if (this.active.has(id)) this.pauseRequested.add(id); job.status = "paused"; job.speed = 0; job.updatedAt = new Date().toISOString(); this.active.get(id)?.abort(); log("INFO", "Stahování pozastaveno", { id, title: job.title, received: job.received }); await this.save(); for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25)); }
+  async pause(id: string) { const job = this.require(id); if (job.status === "completed") throw new Error("Dokončené stahování nelze pozastavit."); if (this.active.has(id)) this.pauseRequested.add(id); job.status = "paused"; job.speed = 0; job.updatedAt = new Date().toISOString(); this.active.get(id)?.abort(); log("INFO", "Download paused", { id, title: job.title, received: job.received }); await this.save(); for (let attempt = 0; attempt < 100 && this.active.has(id); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 25)); }
   async resume(id: string) { const job = this.require(id); if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new Error("Tuto položku nelze obnovit."); this.pauseRequested.delete(id); job.status = "queued"; job.error = undefined; job.updatedAt = new Date().toISOString(); await this.save(); this.pump(); }
   async retry(id: string) { const job = this.require(id); if (job.status !== "failed") throw new Error("Opakovat lze pouze chybné stahování."); job.retryCount = 0; if (job.source) { job.source.tried = []; if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; } } return this.resume(id); }
   async remove(id: string) { const index = this.jobs.findIndex((job) => job.id === id); if (index < 0) throw new Error("Položka nebyla nalezena."); const [job] = this.jobs.splice(index, 1); this.active.get(id)?.abort(); if (job.status !== "completed" && job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined); await this.save(); this.pump(); }
@@ -85,7 +85,7 @@ export class DownloadQueue {
       const tmp = `${this.stateFile}.tmp`;
       await writeFile(tmp, JSON.stringify(this.jobs, null, 2), { mode: 0o600 });
       await rename(tmp, this.stateFile);
-    }).catch((error) => { log("ERROR", "Stav fronty se nepodařilo uložit", { reason: error instanceof Error ? error.message : String(error) }); });
+    }).catch((error) => { log("ERROR", "The queue state could not be saved", { reason: error instanceof Error ? error.message : String(error) }); });
     return this.saveChain;
   }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
@@ -134,11 +134,11 @@ export class DownloadQueue {
     const { directory, base } = targetPath(job.media, job.title, extension, settings);
     job.target = await this.uniqueTarget(directory, base, extension);
     await this.save();
-    log("INFO", "Zdroj pro stahování vybrán", { id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1 });
+    log("INFO", "Download source selected", { id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1 });
   }
 
   private async download(job: DownloadJob) {
-    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.error = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Stahování zahájeno", { id: job.id, title: job.title, target: job.target || "(vybere se)", previousBytes: job.received }); await this.save();
+    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.error = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(vybere se)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
@@ -148,7 +148,7 @@ export class DownloadQueue {
       // do fronty; příští pump ji už zařadí do správného vědra a nesáhne po ní dřív, než se uvolní.
       if (this.busy(this.provider(job), job.id) >= Math.max(1, Math.min(8, this.perProvider()))) {
         job.status = "queued";
-        log("INFO", "Poskytovatel je vytížený, úloha počká", { id: job.id, title: job.title, provider: this.provider(job) });
+        log("INFO", "The provider is busy, the job will wait", { id: job.id, title: job.title, provider: this.provider(job) });
         return;
       }
       const stream = job.stream!;
@@ -159,33 +159,33 @@ export class DownloadQueue {
       const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) }; if (offset) headers.range = `bytes=${offset}-`;
       const headerTimer = setTimeout(() => controller.abort(), 30_000); let response: Response;
       try { response = await safeFetch(stream.url, { headers, signal: controller.signal }); } finally { clearTimeout(headerTimer); }
-      if (!response.ok || !response.body) throw new Error(`Zdroj odpověděl HTTP ${response.status}.`); log("INFO", "Zdroj připojen", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
+      if (!response.ok || !response.body) throw new Error(`Zdroj odpověděl HTTP ${response.status}.`); log("INFO", "Source connected", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
       const resumed = offset > 0 && response.status === 206; if (!resumed) offset = 0;
       const contentRange = response.headers.get("content-range"); const rangeTotal = contentRange?.match(/\/(\d+)$/)?.[1]; job.total = Number(rangeTotal) || (Number(response.headers.get("content-length")) || 0) + offset || undefined; job.received = offset;
       // Tři pokusy mají znamenat "třikrát po sobě to nešlo", ne "třikrát za celou dobu".
       // Jakmile se přenos po navázání pořádně rozjede, je předchozí výpadek vyřízený
       // a rozpočet se vrací; jinak by velký soubor umřel na pár škytnutí za hodinu.
       const recoveredAt = 50 * 1024 * 1024; let recovered = false;
-      let received = offset; let lastAt = Date.now(); let lastBytes = received; let lastLog = received; inactivity = setInterval(() => { if (Date.now() - lastAt > 90_000) { stalled = true; log("WARN", "Přenos se 90 s neposunul", { id: job.id, received }); controller.abort(); } }, 5_000);
-      const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => { received += chunk.byteLength; job.received = received; this.onProgress?.(job, chunk.byteLength); if (!recovered && received - offset >= recoveredAt) { recovered = true; job.retryCount = 0; } const now = Date.now(); if (now - lastAt > 800) { job.speed = (received - lastBytes) / ((now - lastAt) / 1000); lastAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon(); } if (received - lastLog >= 50 * 1024 * 1024) { log("INFO", "Průběh stahování", { id: job.id, received, total: job.total, speed: Math.round(job.speed) }); lastLog = received; } output.enqueue(chunk); } });
+      let received = offset; let lastAt = Date.now(); let lastBytes = received; let lastLog = received; inactivity = setInterval(() => { if (Date.now() - lastAt > 90_000) { stalled = true; log("WARN", "The transfer has not moved for 90 s", { id: job.id, received }); controller.abort(); } }, 5_000);
+      const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => { received += chunk.byteLength; job.received = received; this.onProgress?.(job, chunk.byteLength); if (!recovered && received - offset >= recoveredAt) { recovered = true; job.retryCount = 0; } const now = Date.now(); if (now - lastAt > 800) { job.speed = (received - lastBytes) / ((now - lastAt) / 1000); lastAt = now; lastBytes = received; job.updatedAt = new Date().toISOString(); this.saveSoon(); } if (received - lastLog >= 50 * 1024 * 1024) { log("INFO", "Download progress", { id: job.id, received, total: job.total, speed: Math.round(job.speed) }); lastLog = received; } output.enqueue(chunk); } });
       await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
-      clearInterval(inactivity); if (job.total && job.received !== job.total) throw new Error(`Stažená velikost nesouhlasí (${job.received} / ${job.total}).`); await rename(partial, target); job.status = "completed"; job.speed = 0; log("INFO", "Stahování dokončeno", { id: job.id, received: job.received, target: job.target });
+      clearInterval(inactivity); if (job.total && job.received !== job.total) throw new Error(`Stažená velikost nesouhlasí (${job.received} / ${job.total}).`); await rename(partial, target); job.status = "completed"; job.speed = 0; log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
       try { await this.onCompleted?.(job); }
-      catch (error) { log("WARN", "Knihovnu po dokončení nešlo obnovit", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+      catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
     } catch (error) {
       job.speed = 0; const message = stalled ? "Přenos bez dat déle než 90 s." : (error instanceof Error ? error.message : String(error));
       if (this.pauseRequested.has(job.id)) job.status = "paused";
-      else if (/terminated|aborted|ECONNRESET|socket|fetch failed|stalled|bez dat/i.test(message) && (job.retryCount ?? 0) < 3) { job.retryCount = (job.retryCount ?? 0) + 1; job.status = "queued"; job.error = `Přerušené spojení, opakuji (${job.retryCount}/3)…`; retryScheduled = true; log("WARN", "Přenos přerušen, bude opakován", { id: job.id, reason: message, retry: job.retryCount }); setTimeout(() => this.pump(), 1500 * job.retryCount); }
+      else if (/terminated|aborted|ECONNRESET|socket|fetch failed|stalled|bez dat/i.test(message) && (job.retryCount ?? 0) < 3) { job.retryCount = (job.retryCount ?? 0) + 1; job.status = "queued"; job.error = `Přerušené spojení, opakuji (${job.retryCount}/3)…`; retryScheduled = true; log("WARN", "The transfer broke off, it will be retried", { id: job.id, reason: message, retry: job.retryCount }); setTimeout(() => this.pump(), 1500 * job.retryCount); }
       else if (job.source && job.stream?.url) {
         // Líná úloha zkusí další zdroj v pořadí; adresa toho selhaného se už nikdy nepoužije.
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
         job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.retryCount = 0;
         job.status = "queued"; job.error = `Zdroj selhal (${message}), zkusím další…`;
-        retryScheduled = true; log("WARN", "Zdroj selhal, zkusím další v pořadí", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
+        retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         setTimeout(() => this.pump(), 2000);
       }
-      else { job.status = "failed"; job.error = message; log("ERROR", "Stahování selhalo", { id: job.id, reason: message, received: job.received, total: job.total }); }
+      else { job.status = "failed"; job.error = message; log("ERROR", "Download failed", { id: job.id, reason: message, received: job.received, total: job.total }); }
     }
     finally { if (inactivity) clearInterval(inactivity); this.pauseRequested.delete(job.id); job.updatedAt = new Date().toISOString(); this.active.delete(job.id); await this.save(); if (!retryScheduled) this.pump(); }
   }

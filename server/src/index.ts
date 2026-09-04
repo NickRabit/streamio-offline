@@ -1,6 +1,6 @@
 import express from "express";
 import path from "node:path";
-import { access, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
@@ -11,12 +11,12 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
-import { initLogger, log, readLog } from "./logger.js";
+import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
@@ -27,7 +27,7 @@ import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
-await initLogger(); log("INFO", "Server startuje", { ...build });
+await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
 const stats = new StatsLog();
 
@@ -84,7 +84,7 @@ await playback.load();
 // admin/admin ještě stojí, o něj přijdou a projdou stejným založením.
 if (store.auth()?.isDefault) {
   await store.update((state) => { state.auth = undefined; });
-  log("WARN", "Výchozí přihlášení admin/admin zrušeno, při dalším otevření si založte vlastní účet");
+  log("WARN", "The default admin/admin sign-in was removed, create your own account on the next visit");
 }
 /** Bez uloženého účtu i bez záložních údajů z prostředí nejde dělat vůbec nic. */
 const needsSetup = () => !store.auth() && !envCredentials();
@@ -103,6 +103,19 @@ const currentSession = (req: express.Request) => {
 const currentUser = (req: express.Request) => currentSession(req)?.username;
 
 app.use(express.json({ limit: "256kb" }));
+
+// Každý požadavek dostane krátkou značku. Chyba nahlášená z prohlížeče a její příčina
+// na serveru se pak dají spojit, aniž by se v logu hledalo podle času.
+declare global { namespace Express { interface Request { id?: string } } }
+app.use("/api", (req, res, next) => {
+  const id = randomUUID().slice(0, 8);
+  req.id = id;
+  res.setHeader("x-request-id", id);
+  const startedAt = Date.now();
+  // Segmenty přehrávání chodí po stovkách, proto jen v ladicím režimu.
+  res.on("finish", () => log("DEBUG", "API request", { req: id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - startedAt }));
+  next();
+});
 /** Změří, kolik dat odpověď opravdu odešle, a hlásí to statistikám. Počítá se až
  * u zápisu do odpovědi, takže co si klient objednal a pak přehrávání zavřel,
  * se do součtu nedostane. */
@@ -151,7 +164,7 @@ app.post("/api/auth/setup", asyncRoute(async (req, res) => {
   const nextSecret = randomBytes(32).toString("hex");
   await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  log("INFO", "Založen účet při prvním spuštění", { username });
+  log("INFO", "Account created on first run", { username });
   res.status(201).json({ username });
 }));
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
@@ -162,10 +175,10 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
   const fromEnv = envCredentials();
   const bySettings = Boolean(stored) && username === stored!.username && await verifyPassword(password, stored!.passwordHash);
   const byEnv = Boolean(fromEnv && username === fromEnv.username && password === fromEnv.password);
-  if (!bySettings && !byEnv) { log("WARN", "Neúspěšné přihlášení", { username }); return res.status(401).json({ error: "Nesprávné jméno nebo heslo." }); }
+  if (!bySettings && !byEnv) { log("WARN", "Failed sign-in", { username }); return res.status(401).json({ error: "Nesprávné jméno nebo heslo." }); }
   const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
   res.setHeader("set-cookie", sessionCookie(createSession(secret(), username, expiresAt), remember, isSecure(req)));
-  log("INFO", "Přihlášení", { username, remember, zaloznimiUdaji: byEnv && !bySettings });
+  log("INFO", "Sign-in", { username, remember, viaEnvCredentials: byEnv && !bySettings });
   res.json({ username });
 }));
 app.post("/api/auth/logout", asyncRoute(async (req, res) => {
@@ -176,12 +189,12 @@ app.post("/api/auth/logout", asyncRoute(async (req, res) => {
     // Nové tajemství zneplatní všechny dosud vydané známky naráz.
     const nextSecret = randomBytes(32).toString("hex");
     await store.update((state) => { if (state.auth) state.auth = { ...state.auth, secret: nextSecret, revoked: {} }; });
-    log("INFO", "Odhlášena všechna zařízení", { username: info.username });
+    log("INFO", "Signed out on all devices", { username: info.username });
   } else {
     await store.update((state) => {
       if (state.auth) state.auth = { ...state.auth, revoked: { ...pruneRevoked(state.auth.revoked), [info.sid]: info.expiresAt } };
     });
-    log("INFO", "Odhlášení", { username: info.username });
+    log("INFO", "Sign-out", { username: info.username });
   }
   res.status(204).end();
 }));
@@ -198,7 +211,7 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   const nextSecret = randomBytes(32).toString("hex");
   await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  log("INFO", "Změněny přihlašovací údaje", { username });
+  log("INFO", "Credentials changed", { username });
   res.json({ username });
 }));
 
@@ -250,7 +263,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
     addon.role = role;
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
   });
-  if (reloaded) log("INFO", "Doplněk překonfigurován", { name: reloaded.manifest.name, role });
+  if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role });
   res.json(publicAddon(store.addons().find((a) => a.key === req.params.key)!));
 }));
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
@@ -353,14 +366,14 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
       if (path.basename(target) !== POSTER_OUTPUT) {
         await rename(path.join(path.dirname(target), POSTER_OUTPUT), target);
       }
-      log("INFO", "Plakát uložen z metadat", { key: entry.key });
+      log("INFO", "Poster saved from metadata", { key: entry.key });
       return;
     }
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
     if (await saveFrame(path.join(DOWNLOAD_DIR, source.path), target, framePosition(info?.duration))) {
-      log("INFO", "Náhled vyroben z videa", { key: entry.key });
+      log("INFO", "Thumbnail generated from the video", { key: entry.key });
     }
   });
 }
@@ -406,7 +419,7 @@ function scheduleFileArtwork(relative: string) {
     if (known) {
       const meta = await cachedMeta(known.type, known.id);
       if (meta?.poster && await savePosterAs(target, meta.poster)) {
-        log("INFO", "Plakát doplněn z metadat", { path: relative });
+        log("INFO", "Poster filled in from metadata", { path: relative });
         return;
       }
     }
@@ -489,7 +502,7 @@ async function sweepArtwork() {
     await rm(file, { force: true });
     removed += 1;
   }
-  if (removed) log("INFO", "Osiřelé náhledy smazány", { removed });
+  if (removed) log("INFO", "Orphaned thumbnails deleted", { removed });
 }
 
 // Oblíbené jsou jen příznak u cesty. Nic se nikam nepřesouvá.
@@ -560,7 +573,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
 }));
 app.delete("/api/progress", asyncRoute(async (_req, res) => {
   await store.update((state) => { state.progress = {}; });
-  log("INFO", "Historie sledování smazána");
+  log("INFO", "Watch history cleared");
   res.status(204).end();
 }));
 app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
@@ -658,7 +671,7 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
     state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([key]) => !orphans.has(key)));
   });
   libraryCache = undefined;
-  log("INFO", "Smazáno z knihovny", { path: relative, adresar: info.isDirectory(), zapomenutéTituly: [...orphans] });
+  log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans] });
   res.status(204).end();
 }));
 
@@ -690,7 +703,7 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
     }));
   });
   libraryCache = undefined;
-  log("INFO", "Přejmenováno v knihovně", { z: relative, na: nextRelative });
+  log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
   res.json({ path: nextRelative });
 }));
 
@@ -730,7 +743,7 @@ const saveCatalogPoster = (key: string, url?: string) => {
       ? (asFolder ? path.join(DOWNLOAD_DIR, key, POSTER_OUTPUT) : path.join(DOWNLOAD_DIR, path.dirname(key), episodeArtName(path.basename(key))))
       : dataArtworkFile(asFolder ? `dir:${key}` : key);
     await mkdir(path.dirname(target), { recursive: true });
-    if (await savePosterAs(target, url)) log("INFO", "Plakát z katalogu uložen", { key });
+    if (await savePosterAs(target, url)) log("INFO", "Poster from the catalog saved", { key });
   });
 };
 
@@ -896,7 +909,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const job = await queue.addPending(jobTitle, { type, videoId }, media);
     if (job) added += 1; else skipped += 1;
   }
-  log("INFO", "Hromadné přidání do fronty", { title, added, skipped });
+  log("INFO", "Bulk addition to the queue", { title, added, skipped });
   res.status(201).json({ added, skipped });
 }));
 app.post("/api/downloads/:id/pause", asyncRoute(async (req, res) => { await queue.pause(String(req.params.id)); res.status(204).end(); }));
@@ -907,7 +920,70 @@ app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.re
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(store.settings()));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
-app.get("/api/logs", asyncRoute(async (_req, res) => { res.type("text/plain; charset=utf-8").setHeader("content-disposition", "attachment; filename=stremio-offline.log").send(await readLog()); }));
+app.get("/api/logs", asyncRoute(async (req, res) => {
+  const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
+  const hours = Math.max(0, Math.min(24 * 365, Number(req.query.hours) || 0));
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  const text = await readLog({ tail: tail || undefined, level: parseLevel(req.query.level), hours: hours || undefined, search: search || undefined });
+  res.type("text/plain; charset=utf-8");
+  // Prohlížení v rozhraní chce text v okně, stažení chce soubor.
+  if (req.query.inline !== "1") res.setHeader("content-disposition", "attachment; filename=stremio-offline.log");
+  res.send(text);
+}));
+app.delete("/api/logs", asyncRoute(async (req, res) => {
+  await clearLog();
+  log("INFO", "Log cleared from the interface", { user: currentUser(req) });
+  res.status(204).end();
+}));
+
+/** Prohlížeč je jediné místo, kde je vidět, jak přehrávání skutečně dopadlo. Bez tohohle
+ * kanálu končí chyby hls.js a video elementu v konzoli, ke které se uživatel nedostane. */
+const CLIENT_LOG_PER_MINUTE = 30;
+const clientReports = new Map<string, { count: number; resetAt: number }>();
+app.post("/api/client-log", (req, res) => {
+  const now = Date.now();
+  const who = currentUser(req) ?? req.ip ?? "anonymous";
+  const bucket = clientReports.get(who);
+  if (!bucket || bucket.resetAt <= now) clientReports.set(who, { count: 1, resetAt: now + 60_000 });
+  // Zacyklený přehrávač umí hlásit chybu stokrát za vteřinu; přebytek zahodíme potichu.
+  else if (bucket.count >= CLIENT_LOG_PER_MINUTE) return void res.status(204).end();
+  else bucket.count += 1;
+  if (clientReports.size > 200) for (const [key, value] of clientReports) if (value.resetAt <= now) clientReports.delete(key);
+
+  const level = parseLevel(req.body?.level) ?? "WARN";
+  const message = String(req.body?.message ?? "").slice(0, 200) || "client report";
+  const context = req.body?.context && typeof req.body.context === "object" && !Array.isArray(req.body.context)
+    ? req.body.context as Record<string, unknown> : {};
+  log(level, `[web] ${message}`, { ...context, req: req.id, user: currentUser(req), ua: String(req.headers["user-agent"] ?? "").slice(0, 160) });
+  res.status(204).end();
+});
+
+const freeSpace = async (target: string) => {
+  try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
+  catch { return { path: target }; }
+};
+/** Stav serveru pro hledání problémů. Nepatří do /api/status, ten je bez přihlášení. */
+app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
+  const jobs = queue.list();
+  const byStatus: Record<string, number> = {};
+  for (const job of jobs) byStatus[job.status] = (byStatus[job.status] ?? 0) + 1;
+  res.json({
+    ...build,
+    node: process.version,
+    uptimeSeconds: Math.round(process.uptime()),
+    memoryMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
+    logLevel: currentLevel(),
+    logRetentionDays: Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? 7) || 0),
+    playback: playback.diagnostics(),
+    downloads: {
+      total: jobs.length, byStatus,
+      failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error })),
+    },
+    addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
+    storage: [await freeSpace(process.env.DATA_DIR ?? "/data"), await freeSpace(DOWNLOAD_DIR)],
+  });
+}));
+
 app.get("/api/settings/export", (_req, res) => {
   res.setHeader("content-disposition", `attachment; filename=stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`);
   res.json(createSettingsBackup(store.settings(), store.addons()));
@@ -940,7 +1016,7 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
   });
   streamCache.clear();
   queue.changed();
-  log("INFO", "Importována záloha nastavení", { addons: loaded.length, version: backup.version });
+  log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version });
   res.json({ settings: store.settings(), addons: store.addons().map(publicAddon) });
 }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
@@ -997,7 +1073,11 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(awai
 }))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
-  const directory = playback.directory(String(req.params.id), String(req.params.generation)); if (!directory) return res.status(404).end(); const file = String(req.params.file);
+  const directory = playback.directory(String(req.params.id), String(req.params.generation));
+  // Po restartu převodu si klient ještě chvíli říká o starou generaci; jako 404 je to v pořádku,
+  // ale opakované 404 na živou relaci znamenají, že se přehrávání rozpadlo.
+  if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
+  const file = String(req.params.file);
   // Bez lomítek a teček nemůže jméno utéct z adresáře relace.
   if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
   if (file === "master.m3u8") {
@@ -1038,7 +1118,16 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
   const headerTimeout = setTimeout(() => controller.abort(), 30_000);
   let upstream: Response;
   try { upstream = await safeFetch(raw, { headers, signal: controller.signal }); }
+  catch (error) {
+    // Bez tohohle řádku vypadá umřelý zdroj v prohlížeči jen jako zaseklý přehrávač.
+    log("WARN", "The source did not respond", {
+      req: req.id, url: raw, range: req.headers.range,
+      reason: controller.signal.aborted ? "no response within 30 s" : (error instanceof Error ? error.message : String(error)),
+    });
+    throw error;
+  }
   finally { clearTimeout(headerTimeout); }
+  if (upstream.status >= 400) log("WARN", "The source refused the request", { req: req.id, url: raw, status: upstream.status, range: req.headers.range });
   const contentType = upstream.headers.get("content-type") ?? "";
   if (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8")) {
     const headerToken = typeof req.query.headers === "string" ? req.query.headers : undefined;
@@ -1063,7 +1152,11 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
   try { await pipeline(Readable.fromWeb(upstream.body as never), res); }
   catch (error) {
     // Zavření přehrávače nebo seek běžně ukončí předchozí Range požadavek.
-    if (!res.destroyed && !res.writableEnded) throw error;
+    if (!res.destroyed && !res.writableEnded) {
+      log("WARN", "The transfer from the source broke off", { req: req.id, url: raw, range: req.headers.range, reason: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
+    log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
   }
 }));
 
@@ -1081,10 +1174,20 @@ function shiftVtt(text: string, offset: number) {
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
 app.use(express.static(webRoot)); app.get("/{*path}", (_req, res) => res.sendFile(path.join(webRoot, "index.html")));
-app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => { console.error(error); res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); });
+app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  // Výchozích 400 se drží záměrně: rozhraní na jiný kód než 401 nereaguje jinak
+  // a měnit to teď by byla změna chování, ne diagnostiky.
+  const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
+  const message = error instanceof Error ? error.message : String(error);
+  log("ERROR", "Request failed", {
+    req: req.id, method: req.method, path: req.path, status,
+    user: currentUser(req), reason: message,
+    stack: error instanceof Error ? error.stack : undefined,
+  });
+  res.status(status).json({ error: message });
+});
 process.on("unhandledRejection", (reason) => {
-  log("ERROR", "Neošetřené odmítnutí slibu", { reason: reason instanceof Error ? `${reason.message}` : String(reason) });
-  console.error("Neošetřené odmítnutí:", reason);
+  log("ERROR", "Unhandled promise rejection", { reason: reason instanceof Error ? reason.stack ?? reason.message : String(reason) });
 });
 // A source that closes its connection in an unusual way can trip an assertion deep inside
 // Node's own HTTP client (undici), asynchronously, after our download loop's try/catch has
@@ -1093,7 +1196,13 @@ process.on("unhandledRejection", (reason) => {
 // playback session, the web UI itself, until Docker restarts the container. A single flaky
 // source shouldn't cost everyone else their evening.
 process.on("uncaughtException", (error) => {
-  log("ERROR", "Neošetřená výjimka, server pokračuje dál", { reason: error instanceof Error ? error.stack ?? error.message : String(error) });
-  console.error("Neošetřená výjimka:", error);
+  log("ERROR", "Unhandled exception, the server keeps running", { reason: error instanceof Error ? error.stack ?? error.message : String(error) });
 });
-app.listen(Number(process.env.PORT ?? 8080), "0.0.0.0", () => console.log("Stremio Offline běží na portu 8080"));
+const port = Number(process.env.PORT ?? 8080);
+app.listen(port, "0.0.0.0", () => log("INFO", "Stremio Offline is listening", { port }));
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    log("INFO", "Shutting down", { signal });
+    void flushLog().finally(() => process.exit(0));
+  });
+}
