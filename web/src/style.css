@@ -314,7 +314,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
   main.view-catalog .poster-grid{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:9px}
   main.view-catalog .detail-panel{display:none}
-  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;border:0;border-radius:0;background:var(--bg);box-shadow:none}
+  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;overflow-x:clip;overscroll-behavior:none;overscroll-behavior-x:none;touch-action:pan-y;border:0;border-radius:0;background:var(--bg);box-shadow:none}
   main.view-catalog .detail-panel.series-sources-layout.mobile-open{grid-template-columns:84px minmax(0,1fr)}
   .mobile-detail-head{grid-column:1/-1;position:static;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin:0 -8px;padding:3px 8px;border-bottom:1px solid var(--line);background:#0b0e13f2}
   .mobile-detail-head:after{content:"";width:68px}
@@ -333,17 +333,17 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   .detail-primary .gallery-open span{display:none}
   .series-sources-layout .gallery-open{position:static;width:100%;padding:0;border:0;background:transparent;box-shadow:none}
   .series-sources-layout .gallery-open img{width:100%;height:auto;aspect-ratio:2/3}
-  .detail-workflow{display:flex;grid-column:2;grid-row:2;min-width:0;min-height:0;flex-direction:column;overflow:hidden}
+  .detail-workflow{display:flex;grid-column:2;grid-row:2;min-width:0;min-height:0;flex-direction:column;overflow:hidden;overscroll-behavior:none}
   .detail-workflow .episodes{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;margin:0;overflow:hidden}
-  .detail-workflow .episode-list{flex:1 1 auto;max-height:none}
-  .detail-workflow .sources{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;margin:0;overflow:hidden}
+  .detail-workflow .episode-list{flex:1 1 auto;max-height:none;overflow-x:hidden;overflow-y:auto;overscroll-behavior:none;touch-action:pan-y}
+  .detail-workflow .sources{display:flex;min-width:0;min-height:0;flex:1 1 auto;flex-direction:column;margin:0;overflow:hidden;overscroll-behavior:none}
   .detail-workflow .sources>.subhead{margin-bottom:4px}
   .detail-workflow .stream-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:4px}
   .detail-workflow .stream-filters label{display:grid;gap:0}
   .detail-workflow .stream-filters label>span{display:none}
   .detail-workflow .stream-filters select{width:100%;max-width:none;min-height:30px;padding:4px 6px}
-  .detail-workflow .stream-list{flex:1 1 auto;min-height:60px;max-height:none;gap:4px}
-  .detail-workflow .stream-list button{min-height:38px;padding:6px 8px}
+  .detail-workflow .stream-list{flex:1 1 auto;min-width:0;min-height:60px;max-height:none;gap:4px;overflow-x:clip;overflow-y:auto;overscroll-behavior:none;overscroll-behavior-x:none;touch-action:pan-y}
+  .detail-workflow .stream-list button{min-width:0;min-height:38px;padding:6px 8px}
   .detail-workflow .source-footer{position:static;flex:0 0 auto;margin:6px 0 0;padding:6px 0 0;border-radius:0;background:transparent;backdrop-filter:none}
   .detail-workflow .source-footer .source-info{display:none}
   .detail-workflow .source-footer .actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:6px}

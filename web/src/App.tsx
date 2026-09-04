@@ -202,6 +202,28 @@ export function App() {
       for (const event of ["wheel", "touchstart", "keydown"]) window.removeEventListener(event, stop);
     };
   }, [view]);
+  useEffect(() => {
+    const panel = detailRef.current;
+    if (!panel || !selected) return;
+    let startX = 0;
+    let startY = 0;
+    const onStart = (event: TouchEvent) => {
+      startX = event.touches[0]?.clientX ?? 0;
+      startY = event.touches[0]?.clientY ?? 0;
+    };
+    const onMove = (event: TouchEvent) => {
+      if (!window.matchMedia("(orientation: landscape)").matches) return;
+      const dx = (event.touches[0]?.clientX ?? 0) - startX;
+      const dy = (event.touches[0]?.clientY ?? 0) - startY;
+      if (Math.abs(dx) > Math.abs(dy)) event.preventDefault();
+    };
+    panel.addEventListener("touchstart", onStart, { passive: true });
+    panel.addEventListener("touchmove", onMove, { passive: false });
+    return () => {
+      panel.removeEventListener("touchstart", onStart);
+      panel.removeEventListener("touchmove", onMove);
+    };
+  }, [selected]);
 
   const resetCatalog = () => {
     const firstCatalog = catalogs[0];
