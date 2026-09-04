@@ -49,7 +49,7 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   for (const entry of results) {
     const reason = privateReason(entry.address);
     if (reason) {
-      log("WARN", "Blokována adresa mimo veřejnou síť", { host, ip: entry.address, reason });
+      log("WARN", "Blocked an address outside the public network", { host, ip: entry.address, reason });
       throw new Error(`${host} ukazuje na ${entry.address} (${reason}). Pokud je to váš vlastní doplněk, povolte ho pomocí ALLOW_ADDON_HOSTS=${host}, nebo celou LAN pomocí ALLOW_PRIVATE_ADDONS=1.`);
     }
   }

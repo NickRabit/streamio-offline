@@ -78,7 +78,7 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
     await rename(temp, target);
     return true;
   } catch (error) {
-    log("WARN", "Náhled se nepodařilo vyrobit", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
+    log("WARN", "The thumbnail could not be generated", { file: path.basename(videoPath), reason: error instanceof Error ? error.message.slice(0, 120) : String(error) });
     return false;
   }
 }
@@ -99,7 +99,7 @@ export class ArtworkQueue {
     this.pending.add(key);
     this.chain = this.chain
       .then(task)
-      .catch((error) => log("WARN", "Úloha náhledu selhala", { key, reason: String(error).slice(0, 120) }))
+      .catch((error) => log("WARN", "The artwork job failed", { key, reason: String(error).slice(0, 120) }))
       .finally(() => { this.pending.delete(key); });
     return this.chain;
   }

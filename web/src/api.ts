@@ -1,4 +1,4 @@
-import type { BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, SettingsBackup, Stream, Subtitle } from "./types";
+import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, SettingsBackup, Stream, Subtitle } from "./types";
 
 /** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
 export class ApiError extends Error {
@@ -59,7 +59,10 @@ export const api = {
   importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[] }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
   inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
-  logs: () => fetch("/api/logs").then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
+  logs: (options: { tail?: number; level?: string; inline?: boolean } = {}) =>
+    fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, inline: options.inline ? 1 : undefined })}`)
+      .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
+  diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }) }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),

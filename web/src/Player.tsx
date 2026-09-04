@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { AudioLines, Check, Download, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
+import { hostOf, report } from "./diagnostics";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onClose: () => void }
@@ -189,13 +190,31 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
       // Odepsaná instance ještě chvíli dobíhá; její chyby už nejsou naše.
-      hls.on(Hls.Events.ERROR, (_event, data) => { if (hlsRef.current === hls && data.fatal) setError(`Přehrávání selhalo: ${data.details}`); });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (hlsRef.current !== hls) return;
+        report(data.fatal ? "ERROR" : "WARN", `hls.js: ${data.details}`, {
+          ...context(), type: data.type, fatal: data.fatal,
+          httpStatus: data.response?.code, responseText: typeof data.response?.text === "string" ? data.response.text.slice(0, 120) : undefined,
+          fragment: hostOf(data.frag?.url), url: hostOf(data.url),
+        });
+        if (data.fatal) setError(`Přehrávání selhalo: ${data.details} (${data.type})`);
+      });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
-    else setError("Tento prohlížeč nepodporuje HLS přehrávání.");
+    else {
+      report("ERROR", "The browser supports neither MSE nor native HLS", { ...context(), userAgent: navigator.userAgent });
+      setError("Tento prohlížeč nepodporuje HLS přehrávání.");
+    }
   };
 
   const showTime = (value: number) => { timeRef.current = value; setTime(value); };
+
+  /** Společný popis relace: bez něj je hlášení o chybě jen holé "nepřehrálo se". */
+  const context = () => ({
+    session: sessionRef.current ?? undefined, mode: modeRef.current, position: Math.round(timeRef.current),
+    offset: Math.round(offsetRef.current), title,
+    stream: hostOf(stream?.url ?? undefined) ?? (stream?.url?.startsWith("file://") ? "library" : undefined),
+  });
 
   const applySession = (next: PlaybackSession, autoplay = true) => {
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
@@ -220,6 +239,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     })().then(({ created, from }) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
+      report("DEBUG", `Playback session started in ${created.mode} mode`, {
+        ...context(), mode: created.mode, hardware: created.hardware, acceleration: created.acceleration,
+        video: created.video, audio: created.audio, resumedFrom: Math.round(from), capabilities: capabilities(),
+      });
       // Server nemusí pro direct play spouštět FFmpeg, takže počáteční čas nastaví
       // přímo video element. U remuxu/transcode už je posun zahrnutý v URL relace.
       if (from > 0 && created.mode === "direct") {
@@ -230,7 +253,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (created.subtitleTrack === null) {
         setAddonSubtitle(addonSubtitles.find((item) => (item.lang ?? "").toLowerCase().startsWith(subtitleLanguage)) ?? null);
       }
-    }).catch((value) => setError(value instanceof Error ? value.message : String(value))).finally(() => { if (!disposed) setBuffering(false); });
+    }).catch((value) => {
+      const message = value instanceof Error ? value.message : String(value);
+      report("ERROR", `Playback did not start: ${message}`, { ...context(), phase: "start", capabilities: capabilities() });
+      setError(message);
+    }).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
@@ -282,7 +309,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         }
       }
     }
-    catch (value) { if (epoch === seekEpochRef.current) setError(value instanceof Error ? value.message : String(value)); }
+    catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      report("ERROR", `Seek failed: ${message}`, { ...context(), phase: "seek", target: Math.round(bounded) });
+      if (epoch === seekEpochRef.current) setError(message);
+    }
     finally {
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
     }
@@ -303,7 +334,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         else videoRef.current?.addEventListener("loadedmetadata", moveDirect, { once: true });
       }
     }
-    catch (value) { setError(value instanceof Error ? value.message : String(value)); }
+    catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      report("ERROR", `Track switch failed: ${message}`, { ...context(), phase: "track", changes });
+      setError(message);
+    }
     finally { setBuffering(false); }
   };
 
@@ -335,6 +370,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     // nestíhá -- pak by rada uškodila víc, než pomohla. Ptáme se proto serveru,
     // jestli akceleraci má; příznak hardware to neřekne, ten je při přebalení
     // vždy nepravdivý, protože se v něm VAAPI nepoužívá.
+    report("WARN", "Playback keeps stalling", {
+      ...context(), stalls: stallsRef.current.length, quality: session?.quality ?? null,
+      hardware: session?.hardware, acceleration: session?.acceleration,
+    });
     if (!session?.acceleration) return;
     const target = lowerQuality(session?.quality ?? null);
     if (target !== null) setQualityHint(target);
@@ -483,7 +522,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
-        onError={() => setError("Prohlížeč nedokázal přehrát tento stream.")}>
+        onError={() => {
+          const media = videoRef.current?.error;
+          report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
+            ...context(), code: media?.code, detail: media?.message,
+            networkState: videoRef.current?.networkState, readyState: videoRef.current?.readyState,
+          });
+          setError("Prohlížeč nedokázal přehrát tento stream.");
+        }}>
         {addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}

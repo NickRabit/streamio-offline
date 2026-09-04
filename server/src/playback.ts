@@ -102,6 +102,7 @@ export class PlaybackManager {
   private vaapiFailures = 0;
   /** -readrate_initial_burst existuje až od FFmpeg 6; starší verzi by volba shodila. */
   private initialBurst = false;
+  private ffmpegVersion?: string;
 
   constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.root = path.join(dataDir, "playback"); }
 
@@ -110,15 +111,16 @@ export class PlaybackManager {
     await mkdir(this.root, { recursive: true });
     try {
       const { stdout } = await promisify(execFile)("ffmpeg", ["-version"], { timeout: 10_000 });
+      this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
       const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
       this.initialBurst = major >= 6;
-      if (!this.initialBurst) log("WARN", "FFmpeg je starší než 6, start a posun budou brzděné omezenou rychlostí čtení", { major });
-    } catch { log("WARN", "Verzi FFmpeg se nepodařilo zjistit"); }
+      if (!this.initialBurst) log("WARN", "FFmpeg is older than 6, start and seek will be slowed by the read rate limit", { major });
+    } catch { log("WARN", "FFmpeg version could not be determined"); }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
     setInterval(() => {
       for (const session of [...this.sessions.values()]) {
-        if (Date.now() - session.lastAccess > IDLE_MS) { log("INFO", "Nečinná relace ukončena", { id: session.id }); void this.stop(session.id); }
+        if (Date.now() - session.lastAccess > IDLE_MS) { log("INFO", "Idle session closed", { id: session.id, mode: session.mode, idleMinutes: Math.round((Date.now() - session.lastAccess) / 60_000) }); void this.stop(session.id); }
       }
     }, 60_000).unref();
   }
@@ -129,7 +131,7 @@ export class PlaybackManager {
     const cached = this.inspected.get(stream.url);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
     const info = await probe(this.localUrl(this.proxyPath(stream)));
-    log(info ? "INFO" : "WARN", info ? "Zdroj rozebrán" : "Zdroj se nepodařilo rozebrat", {
+    log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
       video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
       audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
       subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
@@ -162,25 +164,36 @@ export class PlaybackManager {
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
 
     // Přímé přehrání dává smysl jen u výchozích stop a originální kvality; jinak musí zasáhnout FFmpeg.
-    if (audioTrack === 0 && subtitleTrack === null && quality === null && this.canDirectPlay(stream, info, capabilities)) {
-      log("INFO", "Přehrávání přímo ze zdroje", { id, ...summary });
+    const defaultTracks = audioTrack === 0 && subtitleTrack === null && quality === null;
+    const direct = this.directPlay(stream, info, capabilities);
+    if (defaultTracks && direct.ok) {
+      log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
       return this.describe(session, source);
     }
 
-    session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
+    const plan = this.plan(session);
+    session.mode = plan.copyVideo ? "remux" : "transcode";
+    const reason = defaultTracks ? direct.reason : "a non-default track or quality was requested";
     try {
       const limit = info?.duration ? Math.max(0, info.duration - 2) : Number.POSITIVE_INFINITY;
       const startTime = Math.max(0, Math.min(options.startTime ?? 0, limit));
       const url = await this.spawnAt(session, startTime);
-      log("INFO", "Převod spuštěn", { id, mode: session.mode, hardware: session.hardware, audioTrack, subtitleTrack, ...summary });
+      log("INFO", "Conversion started", {
+        id, mode: session.mode, reason, hardware: session.hardware,
+        copyVideo: plan.copyVideo, copyAudio: plan.copyAudio,
+        audioTrack, subtitleTrack, quality, startTime: Math.round(startTime), ...summary,
+      });
       return this.describe(session, url);
-    } catch (error) { await this.stop(id); throw error; }
+    } catch (error) {
+      log("ERROR", "Playback could not be started", { id, mode: session.mode, reason, error });
+      await this.stop(id); throw error;
+    }
   }
 
   /** Posun mimo už vyrobenou část: FFmpeg se restartuje od nové pozice, klient si posune časovou osu. */
   async seek(id: string, time: number) {
     const session = this.require(id);
-    return session.operations.run(() => this.restart(session, time, "Posun v přehrávání"));
+    return session.operations.run(() => this.restart(session, time, "Playback seek"));
   }
 
   /** Přepnutí stopy nebo kvality znamená nové mapování či filtry, tedy restart od aktuální pozice. */
@@ -196,10 +209,10 @@ export class PlaybackManager {
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
         session.pendingKill = this.kill(session);
         session.mode = "direct"; session.offset = 0;
-        log("INFO", "Návrat k přímému přehrávání", { id });
+        log("INFO", "Back to direct play", { id });
         return this.describe(session, this.proxyPath(session.stream));
       }
-      return this.restart(session, changes.time ?? session.offset, "Přepnuta stopa");
+      return this.restart(session, changes.time ?? session.offset, "Track or quality switched");
     });
   }
 
@@ -215,7 +228,7 @@ export class PlaybackManager {
     try { url = await this.spawnAt(session, target); }
     catch (error) {
       this.assertActive(session);
-      log("WARN", "Restart převodu selhal, zkouším ještě jednou", { id, offset: Math.round(target), reason: error instanceof Error ? error.message : String(error) });
+      log("WARN", "Conversion restart failed, trying once more", { id, offset: Math.round(target), reason: error instanceof Error ? error.message : String(error) });
       await sleep(1000);
       this.assertActive(session);
       url = await this.spawnAt(session, target);
@@ -229,12 +242,28 @@ export class PlaybackManager {
   async stop(id: string) {
     const session = this.sessions.get(id);
     if (!session) return;
+    log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });
     session.stopped = true;
     this.sessions.delete(id);
     await this.kill(session);
     await session.operations.wait();
     await this.kill(session);
     await this.purge(path.join(this.root, id));
+  }
+
+  /** Přehled pro diagnostiku: co server umí a co právě běží. */
+  diagnostics() {
+    return {
+      ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst },
+      vaapi: { device: this.vaapiDevice, scaling: this.vaapiScaling, bitrate: this.vaapiBitrate, failures: this.vaapiFailures },
+      sessions: [...this.sessions.values()].map((session) => ({
+        id: session.id, mode: session.mode, hardware: session.hardware, generation: session.generation,
+        title: sourceTitle(session.stream) || undefined,
+        video: session.info?.video?.codec, audio: session.info?.audio?.codec,
+        audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
+        offset: Math.round(session.offset), idleSeconds: Math.round((Date.now() - session.lastAccess) / 1000),
+      })),
+    };
   }
 
   directory(id: string, generation: string) {
@@ -295,21 +324,33 @@ export class PlaybackManager {
     return path.extname(name).toLowerCase();
   }
 
-  /** Nejlevnější cesta: soubor, který prohlížeč zvládne sám. Seek pak jede nativně přes HTTP Range. */
-  private canDirectPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities) {
-    if (stream.behaviorHints?.notWebReady || !info?.video) return false;
+  /** Nejlevnější cesta: soubor, který prohlížeč zvládne sám. Seek pak jede nativně přes HTTP Range.
+   * Zamítnutí nese i důvod: "proč se to převádí" je první otázka u každého problému
+   * s přehráváním a bez ní ji z logu nikdo nevyčte. */
+  private directPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities): { ok: boolean; reason: string } {
+    if (stream.behaviorHints?.notWebReady) return { ok: false, reason: "addon marks the source as not web ready" };
+    if (!info?.video) return { ok: false, reason: "source has no probed video stream" };
     const extension = this.extension(stream);
     const video = info.video.codec;
     const audio = info.audio?.codec;
     if (DIRECT_MP4.has(extension)) {
-      const videoOk = video === "h264" || (video === "hevc" && hevcPlayable(info.video, caps));
-      return videoOk && (!audio || audio === "aac" || audio === "mp3");
+      if (!(video === "h264" || (video === "hevc" && hevcPlayable(info.video, caps)))) {
+        return { ok: false, reason: `client cannot play video codec ${video || "unknown"}${info.video.profile ? ` (${info.video.profile})` : ""}` };
+      }
+      if (audio && audio !== "aac" && audio !== "mp3") return { ok: false, reason: `audio codec ${audio} is not playable in ${extension}` };
+      return { ok: true, reason: "container and codecs are playable as they are" };
     }
     if (extension === ".webm") {
-      const videoOk = video === "vp8" || video === "vp9" || (video === "av1" && caps.av1 === true);
-      return videoOk && (!audio || audio === "opus" || audio === "vorbis");
+      if (!(video === "vp8" || video === "vp9" || (video === "av1" && caps.av1 === true))) {
+        return { ok: false, reason: `client cannot play video codec ${video || "unknown"} in webm` };
+      }
+      if (audio && audio !== "opus" && audio !== "vorbis") return { ok: false, reason: `audio codec ${audio} is not playable in webm` };
+      return { ok: true, reason: "container and codecs are playable as they are" };
     }
-    return false;
+    return { ok: false, reason: `container ${extension || "unknown"} is not directly playable` };
+  }
+  private canDirectPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities) {
+    return this.directPlay(stream, info, caps).ok;
   }
 
   /** Že zařízení existuje a jde otevřít ještě neznamená, že se přes něj dá kódovat:
@@ -323,7 +364,7 @@ export class PlaybackManager {
       // otherwise finding the right RENDER_GID means a trip to the container terminal.
       let owner: number | undefined;
       try { owner = (await stat(device)).gid; } catch { /* device may be gone entirely */ }
-      log("WARN", "K VAAPI_DEVICE nemáme přístup, převod poběží softwarově. Nastavte v .env RENDER_GID na hodnotu deviceGroup", {
+      log("WARN", "VAAPI_DEVICE is not accessible, conversion will run in software. Set RENDER_GID in .env to the deviceGroup value below", {
         device,
         deviceGroup: owner,
         ourGroups: process.getgroups?.() ?? [],
@@ -339,13 +380,13 @@ export class PlaybackManager {
       // let playback fail later with "the requested VAProfile is not supported".
       this.vaapiScaling = await this.probeVaapi(device, "format=nv12,hwupload,scale_vaapi=w=128:h=72:format=nv12");
       this.vaapiBitrate = await this.probeVaapi(device, "format=nv12,hwupload", ["-b:v", "1M", "-maxrate", "1M"]);
-      log("INFO", "VAAPI je k dispozici", { device, gpuScaling: this.vaapiScaling, bitrateControl: this.vaapiBitrate });
-      if (!this.vaapiScaling) log("INFO", "GPU neumí škálovat, zmenšení obrazu poběží na procesoru", { device });
-      if (!this.vaapiBitrate) log("INFO", "GPU neumí cílový datový tok, kóduje se na konstantní kvalitu", { device });
+      log("INFO", "VAAPI is available", { device, gpuScaling: this.vaapiScaling, bitrateControl: this.vaapiBitrate });
+      if (!this.vaapiScaling) log("INFO", "The GPU cannot scale, downscaling will run on the processor", { device });
+      if (!this.vaapiBitrate) log("INFO", "The GPU cannot target a bitrate, encoding at constant quality instead", { device });
     } catch (error) {
       const output = (error as { stderr?: string }).stderr ?? String(error);
-      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "neznámá chyba";
-      log("WARN", "VAAPI nefunguje, převod poběží softwarově. Zkuste v .env nastavit LIBVA_DRIVER_NAME=iHD nebo i965; podrobnosti vypíše vainfo v terminálu kontejneru", { device, reason });
+      const reason = output.split("\n").map((line) => line.trim()).filter(Boolean)[0] ?? "unknown error";
+      log("WARN", "VAAPI does not work, conversion will run in software. Try setting LIBVA_DRIVER_NAME=iHD or i965 in .env; vainfo in the container terminal has the details", { device, reason });
     }
   }
 
@@ -396,13 +437,13 @@ export class PlaybackManager {
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
       if (hardware) {
-        log("WARN", "VAAPI selhalo, zkouším softwarový převod", { id: session.id, reason: session.error });
+        log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
         // A driver that refuses twice will refuse every time, and each attempt costs the
         // viewer about twenty seconds before playback starts. Stop offering it.
         this.vaapiFailures += 1;
         if (this.vaapiFailures >= 2) {
           this.vaapiDevice = undefined;
-          log("WARN", "VAAPI opakovaně selhalo, do restartu se používat nebude", { failures: this.vaapiFailures });
+          log("WARN", "VAAPI failed repeatedly, it will not be used again until restart", { failures: this.vaapiFailures });
         }
       }
     }
@@ -411,6 +452,11 @@ export class PlaybackManager {
 
   private async run(session: Session, offset: number, directory: string, hardware: boolean) {
     const args = this.args(session, offset, directory, hardware);
+    const startedAt = Date.now();
+    log("DEBUG", "FFmpeg starting", {
+      id: session.id, generation: session.generation, mode: session.mode, hardware,
+      offset: Math.round(offset), args: args.join(" "),
+    });
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
     session.process = child; session.hardware = hardware; session.error = undefined;
     let stderr = ""; let finished = false; let exitCode: number | null = null;
@@ -431,11 +477,15 @@ export class PlaybackManager {
       try {
         const playlist = await readFile(ready, "utf8");
         const segments = (playlist.match(/#EXTINF/g) ?? []).length;
-        if (segments >= 2 || playlist.includes("#EXT-X-ENDLIST")) return url;
+        const playable = () => {
+          log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
+          return url;
+        };
+        if (segments >= 2 || playlist.includes("#EXT-X-ENDLIST")) return playable();
         if (segments >= 1) {
-          if (finished) return url;
+          if (finished) return playable();
           firstSegmentAt ??= Date.now();
-          if (Date.now() - firstSegmentAt > 4000) return url;
+          if (Date.now() - firstSegmentAt > 4000) return playable();
         }
       } catch { /* playlist ještě neexistuje */ }
       if (finished) break;
@@ -443,11 +493,11 @@ export class PlaybackManager {
     }
     if (!finished) { child.kill("SIGKILL"); session.error ||= "Převod se nerozeběhl do 40 sekund."; }
     session.error ||= describeFailure(stderr, exitCode);
-    log("ERROR", "Převod se nepodařilo spustit", {
+    log("ERROR", "The conversion could not be started", {
       id: session.id, offset: Math.round(offset), mode: session.mode, hardware, exitCode,
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack,
       reason: session.error,
-      args: args.map((value) => value.startsWith("http") ? "<zdroj>" : value).join(" "),
+      args: args.join(" "), waitedMs: Date.now() - startedAt,
       stderr: redact(stderr).slice(-1500),
     });
     return undefined;
@@ -570,6 +620,6 @@ export class PlaybackManager {
       try { await rm(directory, { recursive: true, force: true }); return; }
       catch { await sleep(200); }
     }
-    log("WARN", "Adresář relace se nepodařilo uklidit", { directory });
+    log("WARN", "The session directory could not be cleaned up", { directory });
   }
 }

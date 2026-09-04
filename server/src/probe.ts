@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { detectLanguage, normalizeLanguage } from "./language.js";
+import { log } from "./logger.js";
 
 const run = promisify(execFile);
 
@@ -43,13 +44,14 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
 export async function probe(input: string): Promise<MediaInfo | undefined> {
   // Výchozí limity čtou ze vzdáleného zdroje jen pár megabajtů a u běžných souborů stačí.
   // Hluboká sonda (až 100 MB) přijde na řadu, jen když rychlé kolo něco podstatného nenajde.
-  const fast = await inspect(input, [], 20_000);
+  const fast = await inspect(input, [], 20_000, "fast");
   if (fast?.video && fast.duration && fast.audioTracks.length) return fast;
-  const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000);
+  log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast ? { video: fast.video?.codec, duration: fast.duration, audioTracks: fast.audioTracks.length } : null });
+  const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000, "deep");
   return deep ?? fast;
 }
 
-async function inspect(input: string, limits: string[], timeout: number): Promise<MediaInfo | undefined> {
+async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<MediaInfo | undefined> {
   try {
     const { stdout } = await run("ffprobe", [
       "-v", "error", "-print_format", "json", ...limits,
@@ -70,7 +72,14 @@ async function inspect(input: string, limits: string[], timeout: number): Promis
       audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
       audioTracks, subtitleTracks,
     };
-  } catch {
+  } catch (error) {
+    // Bez tohohle záznamu se nepovedená sonda projeví až o dvě vrstvy dál jako
+    // "zdroj se nepodařilo rozebrat", bez jediné stopy po tom, co ffprobe řeklo.
+    const failure = error as { stderr?: string; killed?: boolean; code?: number };
+    log("WARN", "ffprobe did not read the source", {
+      stage, timeout, timedOut: Boolean(failure.killed), exitCode: failure.code,
+      reason: (failure.stderr ?? String(error)).split("\n").map((line) => line.trim()).filter(Boolean).slice(-2).join(" | ").slice(0, 300),
+    });
     return undefined;
   }
 }

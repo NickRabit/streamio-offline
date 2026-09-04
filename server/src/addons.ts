@@ -2,6 +2,9 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { safeFetch, validateRemoteUrl } from "./security.js";
 import { defaultDownloadSettings } from "./naming.js";
+import { log } from "./logger.js";
+
+const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const TIMEOUT_MS = 12_000;
 const STREAM_TIMEOUT_MS = Number(process.env.STREAM_ADDON_TIMEOUT_MS ?? 60_000);
@@ -109,7 +112,7 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
     const { addon, definition } = targets[index];
     const key = `${addon.key}:${definition.type}:${definition.id}`;
     if (result.status === "rejected") {
-      console.warn(`Hledání v ${addon.manifest.name} selhalo: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      log("WARN", "Addon request failed", { operation: "search", addon: addon.manifest.name, catalog: definition.id, query, reason: reasonOf(result.reason) });
       nextOffsets[key] = -1;
       return;
     }
@@ -153,7 +156,7 @@ export async function streams(addons: AddonRecord[], type: string, id: string, a
     return (response.streams ?? []).map((stream) => ({ ...stream, addonKey: addon.key, addonName: addon.manifest.name }));
   }));
   results.forEach((result, index) => {
-    if (result.status === "rejected") console.warn(`Zdrojový doplněk ${candidates[index].manifest.name} selhal: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "streams", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
   });
   return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
@@ -165,7 +168,7 @@ export async function subtitles(addons: AddonRecord[], type: string, id: string)
     return (response.subtitles ?? []).map((subtitle) => ({ ...subtitle, addonName: addon.manifest.name }));
   }));
   results.forEach((result, index) => {
-    if (result.status === "rejected") console.warn(`Titulkový doplněk ${candidates[index].manifest.name} selhal: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+    if (result.status === "rejected") log("WARN", "Addon request failed", { operation: "subtitles", addon: candidates[index].manifest.name, type, id, reason: reasonOf(result.reason) });
   });
   return results.flatMap((result) => result.status === "fulfilled" ? result.value : []);
 }
