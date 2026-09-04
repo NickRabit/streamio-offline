@@ -129,3 +129,35 @@ test("seek s kopírovaným AC3 zvukem jej převede do AAC pro fMP4 init segment"
   const audio = seeked.indexOf("-c:a");
   assert.deepEqual(seeked.slice(audio, audio + 6), ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]);
 });
+
+test("dobíhající požadavek na předchozí generaci ještě chvíli dostane její adresář", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    id: "s1", mode: "remux", generation: 3, directory: "/tmp/test-playback/s1/3",
+    lastAccess: 0, claimed: false,
+    retired: { generation: 2, directory: "/tmp/test-playback/s1/2", until: Date.now() + 5_000 },
+  };
+  manager.sessions.set("s1", session);
+
+  assert.equal(manager.directory("s1", "3"), "/tmp/test-playback/s1/3");
+  assert.equal(manager.directory("s1", "2"), "/tmp/test-playback/s1/2");
+  assert.equal(session.claimed, true);
+  assert.equal(manager.directory("s1", "1"), undefined);
+
+  session.retired.until = Date.now() - 1;
+  assert.equal(manager.directory("s1", "2"), undefined);
+});
+
+test("relaci, kterou si žádný klient nepřevzal, zavře úklid dřív než nečinnou", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const stopped: string[] = [];
+  manager.stop = async (id: string) => { stopped.push(id); manager.sessions.delete(id); };
+  const base = { mode: "transcode", operations: new SerialOperations(), stopped: false };
+  manager.sessions.set("neprevzata", { ...base, id: "neprevzata", claimed: false, lastAccess: Date.now() - 60_000 });
+  manager.sessions.set("hraje", { ...base, id: "hraje", claimed: true, lastAccess: Date.now() - 60_000 });
+  manager.sessions.set("primo", { ...base, id: "primo", mode: "direct", claimed: false, lastAccess: Date.now() - 60_000 });
+
+  manager.reap();
+
+  assert.deepEqual(stopped, ["neprevzata"]);
+});

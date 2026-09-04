@@ -27,6 +27,10 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
   }
   return response.status === 204 ? undefined as T : response.json();
 }
+/** Restart převodu si počká na první segmenty a jednou to zkusí znovu. */
+const PLAYBACK_RESTART_MS = 120_000;
+const PLAYBACK_START_MS = 180_000;
+
 const q = (values: Record<string, string | number | undefined>) => new URLSearchParams(Object.entries(values).filter(([, v]) => v !== undefined).map(([k, v]) => [k, String(v)])).toString();
 
 export const api = {
@@ -66,9 +70,11 @@ export const api = {
       .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
   clearLogs: () => request<void>("/api/logs", { method: "DELETE" }),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
-  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }) }),
-  setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),
-  seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }) }),
+  // Start čeká na sondu zdroje (až 20 s rychlá a 45 s hloubková) a pak na první segmenty
+  // FFmpeg (až 40 s). Kratší lhůta relaci nezruší, jen ji nechá běžet bez diváka.
+  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }), timeoutMs: PLAYBACK_START_MS }),
+  setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
+  seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),

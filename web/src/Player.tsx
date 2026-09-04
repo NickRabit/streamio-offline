@@ -1,7 +1,7 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Volume2, X } from "lucide-react";
-import { api, subtitleUrl } from "./api";
+import { ApiError, api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -313,6 +313,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       const hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 90, maxBufferHole: 1 });
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
+      // Jakmile něco doopravdy hraje, je předchozí zotavení uzavřená věc.
+      let recoveries = 0;
+      hls.on(Hls.Events.FRAG_BUFFERED, () => { recoveries = 0; });
       // Odepsaná instance ještě chvíli dobíhá; její chyby už nejsou naše.
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (hlsRef.current !== hls) return;
@@ -321,7 +324,16 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
           httpStatus: data.response?.code, responseText: typeof data.response?.text === "string" ? data.response.text.slice(0, 120) : undefined,
           fragment: hostOf(data.frag?.url), url: hostOf(data.url),
         });
-        if (data.fatal) setError(`Přehrávání selhalo: ${data.details} (${data.type})`);
+        if (!data.fatal) return;
+        // Fatální bývá i chvilkové zaškobrtnutí kolem restartu převodu -- požadavek odeslaný
+        // těsně před ním dopadne na uklizenou generaci. Načtení znovu to spraví; teprve
+        // když ani to nepomůže, má smysl přehrávání vzdát.
+        if (recoveries < 2) {
+          recoveries += 1;
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
+        }
+        setError(`Přehrávání selhalo: ${data.details} (${data.type})`);
       });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
@@ -450,7 +462,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const at = timeRef.current;
     setBuffering(true); setError(""); detach();
     try {
-      const next = await api.setTrack(id, { ...changes, time: at });
+      // Když spojení selže cestou, server přepnutí stejně provede a stav se rozejde;
+      // druhý pokus vrátí to, v čem relace opravdu je.
+      const next = await api.setTrack(id, { ...changes, time: at })
+        .catch((error) => { if (error instanceof ApiError) throw error; return api.setTrack(id, { ...changes, time: at }); });
       applySession(next);
       // Návrat na originál může skončit přímým přehráváním od nuly; pozici si posuneme sami.
       if (next.mode === "direct" && at > 0) {

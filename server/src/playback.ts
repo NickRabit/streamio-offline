@@ -64,6 +64,10 @@ interface Session {
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
+  /** Než ji klient poprvé načte, je relace jen slib; nepřevzatou po chvíli zavřeme. */
+  claimed: boolean;
+  /** Generace, ze které ještě chvíli po restartu obsluhujeme dobíhající požadavky. */
+  retired?: { generation: number; directory: string; until: number };
 }
 
 /** Main a Main 10 jsou pro prohlížeč dva různé kodeky. Desetibitový stream se nesmí kopírovat
@@ -81,12 +85,23 @@ const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", m
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
 const IDLE_MS = 5 * 60_000;
+// Když start doběhne až po tom, co to klient vzdal, zůstane relace i s FFmpeg viset na
+// pět minut a celou dobu čte ze zdroje. Nikým nepřevzatá relace nemá na co čekat.
+const UNCLAIMED_MS = 45_000;
+// Požadavky odeslané těsně před restartem převodu dorazí až na novou generaci. 404 na
+// playlist bere hls.js jako fatální chybu, takže starou generaci ještě chvíli držíme.
+const RETIRED_MS = 15_000;
 
 /** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
 const NOISE = /you should use tag|deprecated|Last message repeated|^\s*$/i;
 const describeFailure = (stderr: string, code: number | null) => {
   const lines = redact(stderr).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !NOISE.test(line));
+  // "Server returned 400 Bad Request" je odpověď naší proxy na zdroj, který mlčí nebo odmítl
+  // spojení. Beze slova o zdroji to vypadá jako chyba převodu, kterou nemá smysl hledat u nás.
+  if (lines.some((line) => /Error opening input/i.test(line)) && lines.some((line) => /Server returned \d{3}/i.test(line))) {
+    return "Zdroj se nepodařilo otevřít, neodpověděl nebo spojení odmítl.";
+  }
   return lines.length ? lines.slice(-2).join(" ") : `FFmpeg skončil s kódem ${code}.`;
 };
 
@@ -118,11 +133,23 @@ export class PlaybackManager {
     } catch { log("WARN", "FFmpeg version could not be determined"); }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
-    setInterval(() => {
-      for (const session of [...this.sessions.values()]) {
-        if (Date.now() - session.lastAccess > IDLE_MS) { log("INFO", "Idle session closed", { id: session.id, mode: session.mode, idleMinutes: Math.round((Date.now() - session.lastAccess) / 60_000) }); void this.stop(session.id); }
+    setInterval(() => this.reap(), 30_000).unref();
+  }
+
+  /** Relace, o kterou se nikdo nehlásí, drží FFmpeg i čtení ze zdroje. Nepřevzatá relace
+   *  je start, který klient nestihl přijmout, a nemá na co čekat celý nečinný limit. */
+  private reap() {
+    for (const session of [...this.sessions.values()]) {
+      const idle = Date.now() - session.lastAccess;
+      if (!session.claimed && session.mode !== "direct" && idle > UNCLAIMED_MS) {
+        log("INFO", "Unclaimed session closed", { id: session.id, mode: session.mode, seconds: Math.round(idle / 1000) });
+        void this.stop(session.id); continue;
       }
-    }, 60_000).unref();
+      if (idle > IDLE_MS) {
+        log("INFO", "Idle session closed", { id: session.id, mode: session.mode, idleMinutes: Math.round(idle / 60_000) });
+        void this.stop(session.id);
+      }
+    }
   }
 
   /** Zjistí stopy zdroje bez spuštění přehrávání; výsledek chvíli držíme, ať se zdroj neotravuje. */
@@ -158,7 +185,7 @@ export class PlaybackManager {
     const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, quality, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false,
+      audioTrack, subtitleTrack, quality, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
     };
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
@@ -185,7 +212,7 @@ export class PlaybackManager {
       });
       return this.describe(session, url);
     } catch (error) {
-      log("ERROR", "Playback could not be started", { id, mode: session.mode, reason, error });
+      log("ERROR", "Playback could not be started", { id, mode: session.mode, plan: reason, error });
       await this.stop(id); throw error;
     }
   }
@@ -268,9 +295,15 @@ export class PlaybackManager {
 
   directory(id: string, generation: string) {
     const session = this.sessions.get(id);
-    if (!session || String(session.generation) !== generation) return undefined;
+    if (!session) return undefined;
+    const retired = session.retired;
+    const directory = String(session.generation) === generation ? session.directory
+      : retired && String(retired.generation) === generation && retired.until > Date.now() ? retired.directory
+      : undefined;
+    if (!directory) return undefined;
+    session.claimed = true;
     session.lastAccess = Date.now();
-    return session.directory;
+    return directory;
   }
 
   private require(id: string) {
@@ -427,7 +460,15 @@ export class PlaybackManager {
     session.directory = directory;
     session.lastAccess = Date.now();
     // Uklidit se dá až po skutečném konci starého procesu, jinak si sahají do stejného adresáře.
-    if (previous) void (session.pendingKill ?? Promise.resolve()).then(() => this.purge(previous));
+    if (previous) {
+      const retired = { generation: session.generation - 1, directory: previous, until: Date.now() + RETIRED_MS };
+      session.retired = retired;
+      void (session.pendingKill ?? Promise.resolve()).then(async () => {
+        await sleep(Math.max(0, retired.until - Date.now()));
+        if (session.retired === retired) session.retired = undefined;
+        await this.purge(previous);
+      });
+    }
 
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
