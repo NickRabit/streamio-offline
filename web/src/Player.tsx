@@ -4,6 +4,7 @@ import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Ga
 import { ApiError, api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
+import { HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart } from "./player-hls";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
@@ -297,7 +298,6 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     applySubtitleVisibilityRef.current?.();
   }, [subtitlesHidden]);
 
-  /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
   const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
 
   const attach = (url: string, mode: PlaybackMode, autoplay = true) => {
@@ -310,29 +310,20 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       // prohlížeč sám okamžitě, místo restartu FFmpeg na serveru.
       // maxBufferHole přemostí drobné mezery na hranicích segmentů (kopie videa řeže jen
       // na klíčových snímcích), místo aby na nich přehrávání zamrzlo.
-      // EVENT playlists have no live edge. The default live sync waits for extra
-      // segments and shows bufferStalledError right after start or a seek.
-      const hls = new Hls({
-        maxBufferLength: 60, maxMaxBufferLength: 120, backBufferLength: 90, maxBufferHole: 1,
-        liveDurationInfinity: true, liveSyncDurationCount: 1, maxLiveSyncPlaybackRate: 1, testBandwidth: false,
-      });
+      const hls = new Hls({ ...HLS_PLAYER_CONFIG });
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
-      // Jakmile něco doopravdy hraje, je předchozí zotavení uzavřená věc.
       let recoveries = 0;
       hls.on(Hls.Events.FRAG_BUFFERED, () => { recoveries = 0; });
-      // Odepsaná instance ještě chvíli dobíhá; její chyby už nejsou naše.
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (hlsRef.current !== hls) return;
+        if (ignoreHlsErrorDuringRestart(seekInFlightRef.current)) return;
         report(data.fatal ? "ERROR" : "WARN", `hls.js: ${data.details}`, {
           ...context(), type: data.type, fatal: data.fatal,
           httpStatus: data.response?.code, responseText: typeof data.response?.text === "string" ? data.response.text.slice(0, 120) : undefined,
           fragment: hostOf(data.frag?.url), url: hostOf(data.url),
         });
         if (!data.fatal) return;
-        // Fatální bývá i chvilkové zaškobrtnutí kolem restartu převodu -- požadavek odeslaný
-        // těsně před ním dopadne na uklizenou generaci. Načtení znovu to spraví; teprve
-        // když ani to nepomůže, má smysl přehrávání vzdát.
         if (recoveries < 2) {
           recoveries += 1;
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
@@ -424,7 +415,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     let id = sessionRef.current; if (!id) return;
     const epoch = seekEpochRef.current;
     const autoplay = !video.paused;
-    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError(""); detach();
+    // Keep the last frame. The previous HLS generation stays served for a few
+    // seconds, so destroying it here only produced a black screen and bufferStalledError.
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
+    video.pause();
     try {
       while (pendingSeekRef.current !== null && epoch === seekEpochRef.current) {
         const requested = pendingSeekRef.current; pendingSeekRef.current = null;
@@ -465,7 +459,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const changeTrack = async (changes: { audio?: number; subtitle?: number | null; quality?: number | null }) => {
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
-    setBuffering(true); setError(""); detach();
+    const video = videoRef.current;
+    seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
+    video?.pause();
     try {
       // Když spojení selže cestou, server přepnutí stejně provede a stav se rozejde;
       // druhý pokus vrátí to, v čem relace opravdu je.
@@ -484,7 +480,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       report("ERROR", `Track switch failed: ${message}`, { ...context(), phase: "track", changes });
       setError(message);
     }
-    finally { setBuffering(false); }
+    finally { seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
   };
 
   const changeQuality = (value: number | null) => {
