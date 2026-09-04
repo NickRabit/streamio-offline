@@ -620,9 +620,17 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
 
   const closePlayer = () => {
+    videoRef.current?.pause();
+    const active = document.activeElement;
+    if (active instanceof HTMLElement) active.blur();
     setCssFullscreen(false);
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    const fullscreen = document.fullscreenElement;
     onClose();
+    // Nejdřív sundáme overlay, teprve potom fullscreen. Jinak Safari při křížku
+    // nahoře vysune záložky ještě přes video.
+    if (fullscreen) window.setTimeout(() => {
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+    }, 80);
   };
 
   useEffect(() => {
@@ -700,6 +708,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
+      <button className="icon-button player-close-control" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
       <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
       <button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
       <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
