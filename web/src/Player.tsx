@@ -133,6 +133,14 @@ const MODE_LABEL: Record<PlaybackMode, string> = {
   transcode: "PŘEKÓDOVÁNO",
 };
 
+/** Overlay fullscreen keeps the HTML cue layer. Native cues are only for the
+ *  video element's own fullscreen (iOS), where those siblings are not shown. */
+const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | null) => {
+  if (document.fullscreenElement === overlay) return false;
+  const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
+  return document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen);
+};
+
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
 const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
 
@@ -202,12 +210,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const isLocal = Boolean(stream?.url?.startsWith("file://"));
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
-  // Některé prohlížeče vykreslí nativní WebVTT titulky v běžném režimu až pod
-  // viditelnou plochou videa. Aktivní cue proto zrcadlíme do vlastní vrstvy.
-  // Pouhé zprůhlednění ::cue nestačí: prohlížeč může ponechat jeho černé pozadí
-  // a při změně velikosti videa ho přepočítat jindy než vlastní text. Aktivní
-  // stopy proto mimo nativní fullscreen přepneme do režimu hidden. Cue události
-  // dál fungují, ale prohlížeč už žádný vlastní box nekreslí.
+  // Some browsers paint native WebVTT below the visible video box. Active cues
+  // are mirrored into an HTML layer, and tracks stay in hidden mode so the
+  // browser does not draw its own cue box. Overlay fullscreen must keep that
+  // layer: Chromium on Windows otherwise promotes the video to a
+  // DirectComposition plane and both the HTML overlay and native cues vanish.
   useEffect(() => {
     if (!open) return;
     const video = videoRef.current;
@@ -216,6 +223,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const mirrored = new Set<TextTrack>();
     let useNativeRenderer = false;
     let syncingModes = false;
+    let fullscreenSync = 0;
 
     const showActiveCues = () => {
       if (subtitlesHiddenRef.current) { setSubtitleText(""); return; }
@@ -235,9 +243,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       syncingModes = true;
       for (const track of Array.from(video.textTracks)) {
         if (track.mode === "showing") mirrored.add(track);
-        else if (track.mode === "disabled") mirrored.delete(track);
-        // Hidden subtitles stay in hidden mode: the browser draws nothing, but cue events
-        // keep arriving, so switching them back on shows text even mid-line.
+        // The picker never uses disabled: it unmounts the track or starts a new
+        // session. Chromium may still flip an active track to disabled while
+        // entering fullscreen, so a mirrored track is restored, not dropped.
         if (mirrored.has(track)) track.mode = useNativeRenderer && !subtitlesHiddenRef.current ? "showing" : "hidden";
       }
       syncingModes = false;
@@ -253,11 +261,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       showActiveCues();
     };
     const updateFullscreenMode = () => {
-      const webkitVideo = video as HTMLVideoElement & { webkitDisplayingFullscreen?: boolean };
-      useNativeRenderer = document.fullscreenElement === video || Boolean(webkitVideo.webkitDisplayingFullscreen);
+      useNativeRenderer = nativeVideoFullscreen(video, overlayRef.current);
       setNativeSubtitles(useNativeRenderer);
-      syncTrackModes();
-      showActiveCues();
+      bindTracks();
+      cancelAnimationFrame(fullscreenSync);
+      fullscreenSync = requestAnimationFrame(() => bindTracks());
     };
 
     bindTracks();
@@ -269,6 +277,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     video.addEventListener("webkitbeginfullscreen", updateFullscreenMode);
     video.addEventListener("webkitendfullscreen", updateFullscreenMode);
     return () => {
+      cancelAnimationFrame(fullscreenSync);
       applySubtitleVisibilityRef.current = null;
       video.textTracks.removeEventListener("addtrack", bindTracks);
       video.textTracks.removeEventListener("change", bindTracks);
