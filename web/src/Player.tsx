@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Subtitles, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Volume2, X } from "lucide-react";
 import { api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
@@ -37,6 +37,9 @@ const MODE_LABEL: Record<PlaybackMode, string> = {
   remux: "PŘEBALENO · VIDEO BEZ PŘEKÓDOVÁNÍ",
   transcode: "PŘEKÓDOVÁNO",
 };
+
+/** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
+const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
 
 /** Cílové kvality překódování; hodnoty musí odpovídat QUALITY_BITRATE na serveru. */
 const QUALITIES = [1080, 720, 480];
@@ -82,6 +85,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [resumedFrom, setResumedFrom] = useState(0);
   const [subtitleText, setSubtitleText] = useState("");
   const [nativeSubtitles, setNativeSubtitles] = useState(false);
+  // Hiding subtitles must not touch the session: switching the track on the server
+  // restarts FFmpeg and waits for new segments. Only the rendering changes here, so the
+  // track keeps running and comes back instantly.
+  const [subtitlesHidden, setSubtitlesHidden] = useState(false);
+  const subtitlesHiddenRef = useRef(false);
+  const applySubtitleVisibilityRef = useRef<(() => void) | null>(null);
   const [mobileLandscape, setMobileLandscape] = useState(false);
   const [cssFullscreen, setCssFullscreen] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -114,6 +123,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     let syncingModes = false;
 
     const showActiveCues = () => {
+      if (subtitlesHiddenRef.current) { setSubtitleText(""); return; }
       const lines = Array.from(video.textTracks)
         .filter((track) => mirrored.has(track) && track.activeCues)
         .flatMap((track) => Array.from(track.activeCues ?? []))
@@ -131,7 +141,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       for (const track of Array.from(video.textTracks)) {
         if (track.mode === "showing") mirrored.add(track);
         else if (track.mode === "disabled") mirrored.delete(track);
-        if (mirrored.has(track)) track.mode = useNativeRenderer ? "showing" : "hidden";
+        // Hidden subtitles stay in hidden mode: the browser draws nothing, but cue events
+        // keep arriving, so switching them back on shows text even mid-line.
+        if (mirrored.has(track)) track.mode = useNativeRenderer && !subtitlesHiddenRef.current ? "showing" : "hidden";
       }
       syncingModes = false;
     };
@@ -154,6 +166,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     };
 
     bindTracks();
+    applySubtitleVisibilityRef.current = () => { syncTrackModes(); showActiveCues(); };
     video.textTracks.addEventListener("addtrack", bindTracks);
     video.textTracks.addEventListener("change", bindTracks);
     video.addEventListener("loadedmetadata", bindTracks);
@@ -161,6 +174,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     video.addEventListener("webkitbeginfullscreen", updateFullscreenMode);
     video.addEventListener("webkitendfullscreen", updateFullscreenMode);
     return () => {
+      applySubtitleVisibilityRef.current = null;
       video.textTracks.removeEventListener("addtrack", bindTracks);
       video.textTracks.removeEventListener("change", bindTracks);
       video.removeEventListener("loadedmetadata", bindTracks);
@@ -173,6 +187,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       setNativeSubtitles(false);
     };
   }, [open, session?.id, addonSubtitle?.url]);
+
+  useEffect(() => {
+    subtitlesHiddenRef.current = subtitlesHidden;
+    applySubtitleVisibilityRef.current?.();
+  }, [subtitlesHidden]);
 
   /** Restart převodu smaže starou generaci, takže odpojení musí předběhnout požadavek na server. */
   const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
@@ -231,6 +250,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
+    setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
     (async () => {
       const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
@@ -381,6 +401,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
 
   const chooseSubtitle = async (value: string) => {
+    // Touching the picker is an explicit instruction, so it always ends the quick hide:
+    // the chosen track shows up right away and turning subtitles off clears the crossed icon.
+    setSubtitlesHidden(false);
     if (value.startsWith("embedded:")) { setAddonSubtitle(null); await changeTrack({ subtitle: Number(value.slice(9)) }); return; }
     if (session?.subtitleTrack !== null && session !== null) await changeTrack({ subtitle: null });
     setAddonSubtitle(value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null);
@@ -498,9 +521,17 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (event.target instanceof HTMLSelectElement) return;
       if (event.target instanceof HTMLInputElement && event.target.type !== "range") return;
       revealControls();
+      // A mouse click leaves focus on the button. The browser draws no ring for it, but the
+      // first shortcut switches it to keyboard modality and lights the ring on a control that
+      // has nothing to do with that shortcut, so the player drops focus first.
+      if (SHORTCUT_KEYS.has(event.key)) {
+        const active = document.activeElement;
+        if (active instanceof HTMLElement && active !== document.body && overlayRef.current?.contains(active)) active.blur();
+      }
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
+      else if (event.key === "c" || event.key === "t") { event.preventDefault(); setSubtitlesHidden((value) => !value); }
       else if (event.key === "f") void toggleFullscreen();
       else if (event.key === "Escape" && !document.fullscreenElement) onClose();
     };
@@ -581,14 +612,19 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         </select>
       </label>}
 
-      {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0) && <label className="track-picker" title="Titulky">
-        <Subtitles />
+      {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0) && <div className="track-picker">
+        <button className={`picker-toggle${subtitlesHidden ? " off" : ""}`} disabled={subtitleValue === "off"}
+          onClick={() => setSubtitlesHidden(!subtitlesHidden)}
+          title={subtitleValue === "off" ? "Titulky" : subtitlesHidden ? "Zobrazit titulky (C)" : "Skrýt titulky (C)"}
+          aria-pressed={!subtitlesHidden} aria-label={subtitlesHidden ? "Zobrazit titulky" : "Skrýt titulky"}>
+          {subtitlesHidden ? <CaptionsOff /> : <Captions />}
+        </button>
         <select aria-label="Titulky" value={subtitleValue} onChange={(event) => void chooseSubtitle(event.target.value)}>
           <option value="off">Vypnuto</option>
           {session?.subtitleTracks.map((track) => <option key={`e${track.index}`} value={`embedded:${track.index}`}>Vestavěné · {trackLabel(track)}</option>)}
           {addonSubtitles.map((item, index) => <option key={`a${index}`} value={`addon:${index}`}>Doplněk · {label(item.lang)}{item.addonName ? ` · ${item.addonName}` : ""}</option>)}
         </select>
-      </label>}
+      </div>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"} onClick={onToggleFavorite}>

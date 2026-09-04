@@ -309,3 +309,16 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 
 /* Dlouhý seznam katalogových zdrojů nesmí zvětšit výšku celého řádku dlaždic. */
 .poster-card small{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* The subtitle icon doubles as the visibility toggle, so it must not look like a button. */
+.player-controls .track-picker .picker-toggle{min-width:0;min-height:0;padding:4px;border:0;border-radius:6px;background:transparent;color:inherit}
+.player-controls .track-picker .picker-toggle:hover:not(:disabled){color:var(--text);background:#ffffff12}
+.player-controls .track-picker .picker-toggle.off{color:#6d7885}
+.player-controls .track-picker .picker-toggle:disabled{opacity:1;cursor:default}
+@media(max-width:700px){.player-controls .track-picker .picker-toggle{min-width:30px;min-height:30px}}
+
+/* Inputs have had their own focus styling from the start; buttons were left with the
+   browser's blue ring, which does not fit the dark interface. Tab navigation still has to
+   be visible, so the ring is replaced rather than removed. */
+button:focus{outline:none}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
