@@ -10,45 +10,62 @@ interface Props { open: boolean; title: string; stream: Stream | null; subtitles
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
-/** Native range thumbs are the only draggable part on iOS. Mapping the finger
- *  to the track lets a press-and-drag start anywhere, including the unplayed side. */
+/** Native range thumbs are the only draggable part on iOS. A press anywhere on
+ *  the track grabs the current position; the finger then nudges it by how far
+ *  it moves, instead of jumping to the press point. A tap still seeks there. */
+const TAP_PX = 10;
+
 const timeAtClientX = (clientX: number, track: HTMLElement, max: number) => {
   const rect = track.getBoundingClientRect();
   if (rect.width <= 0 || max <= 0) return 0;
   return Math.min(max, Math.max(0, ((clientX - rect.left) / rect.width) * max));
 };
 
+const timeFromDelta = (clientX: number, track: HTMLElement, startX: number, startValue: number, max: number) => {
+  const width = track.getBoundingClientRect().width;
+  if (width <= 0 || max <= 0) return startValue;
+  return Math.min(max, Math.max(0, startValue + ((clientX - startX) / width) * max));
+};
+
 function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
-  value: number; max: number; onScrub: (value: number) => void; onSeek: (value: number) => void; onReveal: () => void;
+  value: number; max: number; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
-  const dragRef = useRef<number | null>(null);
+  const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
   const maxRef = useRef(max);
+  const valueRef = useRef(value);
   const onScrubRef = useRef(onScrub);
   const onSeekRef = useRef(onSeek);
   const onRevealRef = useRef(onReveal);
   maxRef.current = max;
+  valueRef.current = value;
   onScrubRef.current = onScrub;
   onSeekRef.current = onSeek;
   onRevealRef.current = onReveal;
 
   useEffect(() => {
     const onMove = (event: PointerEvent) => {
-      if (dragRef.current !== event.pointerId) return;
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
       const track = trackRef.current;
       if (!track) return;
       event.preventDefault();
       onRevealRef.current();
-      onScrubRef.current(timeAtClientX(event.clientX, track, maxRef.current));
+      if (!drag.moved && Math.abs(event.clientX - drag.startX) < TAP_PX) return;
+      drag.moved = true;
+      onScrubRef.current(timeFromDelta(event.clientX, track, drag.startX, drag.startValue, maxRef.current));
     };
     const onUp = (event: PointerEvent) => {
-      if (dragRef.current !== event.pointerId) return;
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
       const track = trackRef.current;
       dragRef.current = null;
       setDragging(false);
-      if (!track) return;
-      onSeekRef.current(timeAtClientX(event.clientX, track, maxRef.current));
+      if (!track) { onScrubRef.current(null); return; }
+      if (event.type === "pointercancel") { onScrubRef.current(null); return; }
+      if (drag.moved) onSeekRef.current(timeFromDelta(event.clientX, track, drag.startX, drag.startValue, maxRef.current));
+      else onSeekRef.current(timeAtClientX(event.clientX, track, maxRef.current));
     };
     window.addEventListener("pointermove", onMove, { passive: false });
     window.addEventListener("pointerup", onUp);
@@ -75,10 +92,10 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
       if (event.button !== 0) return;
       event.preventDefault();
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
-      dragRef.current = event.pointerId;
+      dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: valueRef.current, moved: false };
       setDragging(true);
       onReveal();
-      onScrub(timeAtClientX(event.clientX, event.currentTarget, max));
+      onScrub(valueRef.current);
     }}>
     <div className="timeline-rail" aria-hidden="true">
       <i className="timeline-fill" style={{ width: `${percent}%` }} />

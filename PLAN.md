@@ -19,7 +19,7 @@ These used to be open notes. They are in `main` now.
 - Mobile item / stream / play / download flow (catalog detail, landscape, control sizing).
 - Save to the current device from the stream picker, the player, and the library, always through the server proxy.
 - Diagnostics panel: levels, rotation, retention, redaction, client playback errors, grouped issues.
-- Mobile player scrubber: drag from anywhere on the bar, including the unplayed part.
+- Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
 
 Debrid stays per addon. The app plays and downloads resolved HTTPS URLs. There is no built-in Real-Debrid client and there should not be one unless a stream arrives as a raw `infoHash`.
 
