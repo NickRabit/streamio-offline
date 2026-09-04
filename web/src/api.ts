@@ -59,9 +59,10 @@ export const api = {
   importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[] }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
   inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
-  logs: (options: { tail?: number; level?: string; inline?: boolean } = {}) =>
-    fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, inline: options.inline ? 1 : undefined })}`)
+  logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) =>
+    fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, hours: options.hours || undefined, q: options.search || undefined, inline: options.inline ? 1 : undefined })}`)
       .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
+  clearLogs: () => request<void>("/api/logs", { method: "DELETE" }),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }) }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes) }),

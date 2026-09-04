@@ -260,9 +260,16 @@ Chyby přehrávače hlásí prohlížeč sám na server, takže v logu je i to, 
 skutečně skončilo (typ chyby hls.js, kód video elementu, opakované zadrhávání) — ne jen
 hláška, kterou uživatel viděl na obrazovce.
 
+Panel je ve výchozím stavu sbalený a v hlavičce ukazuje jen odznak „Bez chyb“, nebo počet
+hlášení. Po rozbalení jde filtrovat podle období (hodina, den, týden, vše) a podle textu ve
+zprávě; filtr platí zároveň pro seskupené problémy i pro podrobný log.
+
 Log leží v `/data/app.log`, po překročení `LOG_MAX_BYTES` (výchozích 5 MB) se přejmenuje na
-`app.log.1`. Stejné řádky jdou i na standardní výstup, takže je vidí `docker compose logs`.
-Adresy streamů se do něj zapisují jen jako protokol a hostitel, tokeny a hesla vůbec.
+`app.log.1`. Záznamy starší než `LOG_RETENTION_DAYS` (výchozích 7 dnů) server sám zahazuje —
+při startu a pak každých šest hodin; `LOG_RETENTION_DAYS=0` úklid vypne. Celý log jde smazat
+tlačítkem v Diagnostice. Stejné řádky jdou i na standardní výstup, takže je vidí
+`docker compose logs`. Adresy streamů se do něj zapisují jen jako protokol a hostitel,
+tokeny a hesla vůbec.
 
 Podrobnosti o požadavcích a průběhu převodu přidá `LOG_LEVEL=DEBUG` v `.env`.
 

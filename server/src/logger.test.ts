@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { flushLog, initLogger, log, readLog } from "./logger.js";
+import { clearLog, flushLog, initLogger, log, pruneLog, readLog } from "./logger.js";
 
 const withLogger = async (env: Record<string, string | undefined>, body: (directory: string) => Promise<void>) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-logger-"));
@@ -85,6 +85,54 @@ test("readLog filters by level and returns only the requested tail", async () =>
     const tail = await readLog({ tail: 1 });
     assert.match(tail, /fourth/);
     assert.equal(tail.includes("third"), false);
+  });
+});
+
+test("readLog narrows down by time window and by text", async () => {
+  await withLogger({}, async (directory) => {
+    const old = new Date(Date.now() - 48 * 3600_000).toISOString();
+    log("WARN", "fresh entry", { addon: "Cinemeta" });
+    await flushLog();
+    const file = path.join(directory, "app.log");
+    await writeFile(file, `${old} WARN stale entry {"addon":"Torrentio"}\n${await readFile(file, "utf8")}`);
+    const recent = await readLog({ hours: 24 });
+    assert.match(recent, /fresh entry/);
+    assert.equal(recent.includes("stale entry"), false);
+    const found = await readLog({ search: "torrentio" });
+    assert.match(found, /stale entry/);
+    assert.equal(found.includes("fresh entry"), false);
+    assert.equal(await readLog({ search: "nothing matches this" }), "");
+  });
+});
+
+test("entries older than the retention window are pruned away", async () => {
+  await withLogger({}, async (directory) => {
+    const file = path.join(directory, "app.log");
+    const old = new Date(Date.now() - 9 * 24 * 3600_000).toISOString();
+    log("INFO", "recent entry");
+    await flushLog();
+    await writeFile(file, `${old} INFO ancient entry\n${await readFile(file, "utf8")}`);
+    assert.equal(await pruneLog(7), 1);
+    const text = await readFile(file, "utf8");
+    assert.equal(text.includes("ancient entry"), false);
+    assert.match(text, /recent entry/);
+    // Zápis po úklidu musí navázat, ne přepsat, co zbylo.
+    log("INFO", "after prune");
+    await flushLog();
+    assert.match(await readFile(file, "utf8"), /recent entry[\s\S]*after prune/);
+  });
+});
+
+test("clearing removes the log and the rotated generation", async () => {
+  await withLogger({ LOG_MAX_BYTES: "65536" }, async (directory) => {
+    for (let index = 0; index < 200; index += 1) log("INFO", `entry ${index}`, { filler: "x".repeat(400) });
+    await flushLog();
+    await clearLog();
+    assert.equal(await readFile(path.join(directory, "app.log"), "utf8"), "");
+    assert.equal(await readFile(path.join(directory, "app.log.1"), "utf8").then(() => true, () => false), false);
+    log("INFO", "after clearing");
+    await flushLog();
+    assert.match(await readFile(path.join(directory, "app.log"), "utf8"), /after clearing/);
   });
 });
 

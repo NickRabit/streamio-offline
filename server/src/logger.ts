@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile, rename, stat } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
@@ -6,6 +6,8 @@ const ORDER: Record<LogLevel, number> = { DEBUG: 10, INFO: 20, WARN: 30, ERROR: 
 const LEVELS = Object.keys(ORDER) as LogLevel[];
 
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
+const DEFAULT_RETENTION_DAYS = 7;
+const MAINTENANCE_MS = 6 * 60 * 60 * 1000;
 
 let chain = Promise.resolve();
 let filename = path.join(process.env.DATA_DIR ?? "/data", "app.log");
@@ -13,6 +15,7 @@ let written = 0;
 let threshold = ORDER.INFO;
 let maxBytes = DEFAULT_MAX_BYTES;
 let mirror = true;
+let retentionDays = DEFAULT_RETENTION_DAYS;
 
 export function parseLevel(value: unknown): LogLevel | undefined {
   const name = String(value ?? "").trim().toUpperCase();
@@ -25,6 +28,9 @@ export async function initLogger(dataDir = process.env.DATA_DIR ?? "/data") {
   threshold = ORDER[parseLevel(process.env.LOG_LEVEL) ?? "INFO"];
   maxBytes = Math.max(64 * 1024, Number(process.env.LOG_MAX_BYTES) || DEFAULT_MAX_BYTES);
   mirror = process.env.LOG_STDOUT !== "0";
+  // Nula úklid vypne, jinak se starší záznamy zahazují. Bez toho log jen roste
+  // a k ničemu už není: nikdo nedohledá chybu z minulého týdne mezi milionem řádků.
+  retentionDays = Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? DEFAULT_RETENTION_DAYS) || 0);
   await mkdir(dataDir, { recursive: true });
   written = await stat(filename).then((info) => info.size, () => 0);
 }
@@ -90,8 +96,49 @@ export function log(level: LogLevel, message: string, context?: Record<string, u
 export const flushLog = () => chain;
 
 const levelOf = (line: string): LogLevel | undefined => parseLevel(line.split(" ")[1]);
+const timeOf = (line: string) => { const value = Date.parse(line.slice(0, 24)); return Number.isNaN(value) ? undefined : value; };
 
-export async function readLog(options: { tail?: number; level?: LogLevel } = {}) {
+/** Smaže celý záznam včetně otočené generace. */
+export async function clearLog() {
+  chain = chain.then(async () => {
+    await writeFile(filename, "", { mode: 0o600 });
+    await rm(`${filename}.1`, { force: true });
+    written = 0;
+  }).catch(() => undefined);
+  await chain;
+}
+
+/** Zahodí záznamy starší než retenční lhůta. Řádek bez rozpoznaného času si necháváme,
+ * ať se kvůli neznámému formátu neztratí něco podstatného. */
+export async function pruneLog(days = retentionDays) {
+  if (!days) return 0;
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  let removed = 0;
+  chain = chain.then(async () => {
+    await rm(`${filename}.1`, { force: true }).catch(() => undefined);
+    const text = await readFile(filename, "utf8").catch(() => "");
+    if (!text) return;
+    const lines = text.split("\n").filter(Boolean);
+    const kept = lines.filter((line) => { const at = timeOf(line); return at === undefined || at >= cutoff; });
+    removed = lines.length - kept.length;
+    if (!removed) return;
+    const next = kept.length ? `${kept.join("\n")}\n` : "";
+    await writeFile(filename, next, { mode: 0o600 });
+    written = Buffer.byteLength(next);
+  }).catch(() => undefined);
+  await chain;
+  if (removed) log("INFO", "Old log entries removed", { removed, keptDays: days });
+  return removed;
+}
+
+/** Úklid běží při startu a pak jednou za šest hodin; častěji nemá co dělat. */
+export function startLogMaintenance() {
+  if (!retentionDays) return;
+  void pruneLog();
+  setInterval(() => void pruneLog(), MAINTENANCE_MS).unref();
+}
+
+export async function readLog(options: { tail?: number; level?: LogLevel; hours?: number; search?: string } = {}) {
   const previous = await readFile(`${filename}.1`, "utf8").catch(() => "");
   const current = await readFile(filename, "utf8").catch(() => "");
   let lines = `${previous}${current}`.split("\n").filter(Boolean);
@@ -100,6 +147,18 @@ export async function readLog(options: { tail?: number; level?: LogLevel } = {})
     // A line without a recognised level is kept: better an extra line than a lost one.
     lines = lines.filter((line) => { const level = levelOf(line); return !level || ORDER[level] >= minimum; });
   }
+  if (options.hours) {
+    const from = Date.now() - options.hours * 60 * 60 * 1000;
+    lines = lines.filter((line) => { const at = timeOf(line); return at === undefined || at >= from; });
+  }
+  if (options.search) {
+    const needle = options.search.toLowerCase();
+    lines = lines.filter((line) => line.toLowerCase().includes(needle));
+  }
   if (options.tail && lines.length > options.tail) lines = lines.slice(-options.tail);
-  return lines.length ? `${lines.join("\n")}\n` : "The log has no entries yet.\n";
+  if (lines.length) return `${lines.join("\n")}\n`;
+  // Prázdný výsledek filtru není totéž co prázdný log; hláška by se v rozhraní
+  // tvářila jako další záznam.
+  const filtered = Boolean(options.level || options.hours || options.search);
+  return filtered ? "" : "The log has no entries yet.\n";
 }

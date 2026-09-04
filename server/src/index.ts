@@ -11,7 +11,7 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
 import { Store } from "./store.js";
-import { currentLevel, flushLog, initLogger, log, parseLevel, readLog } from "./logger.js";
+import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
@@ -27,7 +27,7 @@ import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
-await initLogger(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
+await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
 const stats = new StatsLog();
 
@@ -839,12 +839,20 @@ app.get("/api/settings", (_req, res) => res.json(store.settings()));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 app.get("/api/logs", asyncRoute(async (req, res) => {
   const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
-  const text = await readLog({ tail: tail || undefined, level: parseLevel(req.query.level) });
+  const hours = Math.max(0, Math.min(24 * 365, Number(req.query.hours) || 0));
+  const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
+  const text = await readLog({ tail: tail || undefined, level: parseLevel(req.query.level), hours: hours || undefined, search: search || undefined });
   res.type("text/plain; charset=utf-8");
   // Prohlížení v rozhraní chce text v okně, stažení chce soubor.
   if (req.query.inline !== "1") res.setHeader("content-disposition", "attachment; filename=stremio-offline.log");
   res.send(text);
 }));
+app.delete("/api/logs", asyncRoute(async (req, res) => {
+  await clearLog();
+  log("INFO", "Log cleared from the interface", { user: currentUser(req) });
+  res.status(204).end();
+}));
+
 /** Prohlížeč je jediné místo, kde je vidět, jak přehrávání skutečně dopadlo. Bez tohohle
  * kanálu končí chyby hls.js a video elementu v konzoli, ke které se uživatel nedostane. */
 const CLIENT_LOG_PER_MINUTE = 30;
@@ -882,6 +890,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     uptimeSeconds: Math.round(process.uptime()),
     memoryMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
     logLevel: currentLevel(),
+    logRetentionDays: Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? 7) || 0),
     playback: playback.diagnostics(),
     downloads: {
       total: jobs.length, byStatus,

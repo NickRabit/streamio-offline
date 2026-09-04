@@ -843,6 +843,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
 
 
 const LOG_LEVELS = [["", "Vše"], ["INFO", "Info a výš"], ["WARN", "Varování a chyby"], ["ERROR", "Jen chyby"]] as const;
+const PERIODS = [[1, "Poslední hodina"], [24, "Posledních 24 hodin"], [168, "Posledních 7 dnů"], [0, "Vše"]] as const;
 const duration = (seconds: number) => seconds >= 86400 ? `${Math.floor(seconds / 86400)} d ${Math.floor((seconds % 86400) / 3600)} h`
   : seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min` : `${Math.max(1, Math.round(seconds / 60))} min`;
 const since = (at: string) => {
@@ -877,12 +878,16 @@ function Issue({ group }: { group: LogGroup }) {
 }
 
 /** Diagnostika má nejdřív odpovědět "je něco rozbité?", teprve pak nabídnout syrový log.
- * Ten běžného uživatele nezajímá, proto je schovaný, dokud si o něj neřekne. */
+ * Ten běžného uživatele nezajímá, proto je celý panel i log schovaný, dokud si o ně neřekne. */
 function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | null; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+  const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<Diagnostics | null>(null);
   const [issues, setIssues] = useState<LogGroup[]>([]);
   const [busy, setBusy] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [hours, setHours] = useState(24);
+  const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
   const [level, setLevel] = useState("");
   const [tail, setTail] = useState(200);
   const [wrap, setWrap] = useState(false);
@@ -891,7 +896,7 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   const loadOverview = async () => {
     setBusy(true);
     try {
-      const [diagnostics, text] = await Promise.all([api.diagnostics(), api.logs({ tail: 500, level: "WARN", inline: true })]);
+      const [diagnostics, text] = await Promise.all([api.diagnostics(), api.logs({ tail: 500, level: "WARN", hours, search: query, inline: true })]);
       setInfo(diagnostics);
       setIssues(groupLog(parseLog(text)));
     } catch (error) { onError(error); }
@@ -899,27 +904,39 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   };
   const loadLog = async () => {
     setBusy(true);
-    try { setLines(parseLog(await api.logs({ tail, level, inline: true }))); }
+    try { setLines(parseLog(await api.logs({ tail, level, hours, search: query, inline: true }))); }
     catch (error) { onError(error); }
     finally { setBusy(false); }
   };
-  useEffect(() => { void loadOverview(); }, []);
-  useEffect(() => { if (showLog) void loadLog(); }, [showLog, level, tail]);
+  // Psaní do hledání nemá po každém písmenu chodit na server.
+  useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 400); return () => clearTimeout(timer); }, [search]);
+  // Přehled se načte i zavřený, jinak by odznak v hlavičce tvrdil "bez chyb", aniž by se díval.
+  useEffect(() => { void loadOverview(); }, [hours, query]);
+  useEffect(() => { if (open && showLog) void loadLog(); }, [open, showLog, level, tail, hours, query]);
+
+  const refresh = async () => { await loadOverview(); if (showLog) await loadLog(); };
   const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
+  const clearLog = async () => {
+    if (!confirm("Opravdu smazat celý log? Dosavadní záznamy se ztratí, nové se budou zapisovat dál.")) return;
+    try { await api.clearLogs(); onNotify("Log byl smazán."); setLines([]); await loadOverview(); }
+    catch (error) { onError(error); }
+  };
 
   const vaapi = info?.playback.vaapi;
   const sessions = info?.playback.sessions ?? [];
   const failed = info?.downloads.failed ?? [];
   const queue = Object.entries(info?.downloads.byStatus ?? {});
+  const reports = issues.reduce((sum, issue) => sum + issue.count, 0);
   const worst = issues.some((issue) => issue.level === "ERROR") ? "error" : issues.length ? "warn" : "ok";
 
   return <section className="panel settings-section diagnostics-section">
-    <SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Stav serveru a poslední problémy"/>
-    <div className="log-actions">
-      <button disabled={busy} onClick={() => void loadOverview()}><RefreshCw/> Obnovit</button>
-    </div>
+    <button className="diagnostics-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+      <SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Stav serveru a poslední problémy"/>
+      {!open && info && <span className={`state-chip ${worst}`}>{worst === "ok" ? "Bez chyb" : `${reports} hlášení`}</span>}
+      <ChevronDown className={open ? "rotated" : ""}/>
+    </button>
 
-    <div className="diagnostics-body">
+    {open && <div className="diagnostics-body">
       <dl className="diagnostics-facts">
         <Fact term="Verze">{info?.version ?? build?.version ?? "—"}{build?.commit ? <small> · {build.commit.slice(0, 7)}</small> : null}</Fact>
         <Fact term="Server běží">{info ? duration(info.uptimeSeconds) : "—"}</Fact>
@@ -938,17 +955,24 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
         <strong>{job.title}</strong><span>{job.error ?? "chyba bez popisu"}</span>
       </li>)}</ul>}
 
+      <div className="diagnostics-filters">
+        <label><span>Období</span><select aria-label="Období" value={hours} onChange={(event) => setHours(Number(event.target.value))}>{PERIODS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
+        <label className="grow"><span>Hledat ve zprávách</span><input type="search" placeholder="např. ffmpeg, hls.js, addon" value={search} onChange={(event) => setSearch(event.target.value)}/></label>
+        <button disabled={busy} onClick={() => void refresh()}><RefreshCw/> Obnovit</button>
+      </div>
+
       <div className="issues-head">
         <h4>Poslední problémy</h4>
-        <span className={`state-chip ${worst}`}>{worst === "ok" ? "Bez chyb" : `${issues.reduce((sum, issue) => sum + issue.count, 0)} hlášení`}</span>
+        {issues.length > 0 && <span className={`state-chip ${worst}`}>{reports} hlášení</span>}
       </div>
       {issues.length ? <ul className="issues">{issues.slice(0, 12).map((issue) => <Issue key={issue.key} group={issue}/>)}</ul>
-        : <p className="issues-empty">Za posledních 500 řádků logu server nezaznamenal žádné varování ani chybu.</p>}
+        : <p className="issues-empty">Ve zvoleném období server nezaznamenal žádné varování ani chybu.</p>}
 
       <div className="log-toggle">
         <button onClick={() => setShowLog(!showLog)} aria-expanded={showLog}><ChevronDown className={showLog ? "rotated" : ""}/> {showLog ? "Skrýt podrobný log" : "Zobrazit podrobný log"}</button>
         <a className="button" href="/api/logs" download="stremio-offline.log"><Download/> Stáhnout</a>
         <button onClick={() => void copyLog()}><Copy/> Kopírovat</button>
+        <button className="danger" onClick={() => void clearLog()}><Trash2/> Smazat log</button>
       </div>
 
       {showLog && <div className="log-panel">
@@ -956,7 +980,6 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
           <label><span>Úroveň</span><select aria-label="Úroveň logu" value={level} onChange={(event) => setLevel(event.target.value)}>{LOG_LEVELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
           <label><span>Řádků</span><select aria-label="Počet řádků logu" value={tail} onChange={(event) => setTail(Number(event.target.value))}>{[100, 200, 500, 1000].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
           <label className="log-wrap"><input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)}/><span>Zalamovat řádky</span></label>
-          <button disabled={busy} onClick={() => void loadLog()}><RefreshCw/> Načíst znovu</button>
         </div>
         <div className={`log-viewer${wrap ? " wrap" : ""}`} aria-label="Záznam serveru">
           {lines.length ? lines.map((line, index) => <div className={`log-line ${line.level.toLowerCase()}`} key={`${line.at}:${index}`}>
@@ -964,11 +987,11 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
             <span className={`level-chip ${line.level.toLowerCase()}`}>{line.level || "—"}</span>
             <span className="log-message">{line.message}</span>
             {line.context && <span className="log-context">{line.context}</span>}
-          </div>) : <div className="log-line">{busy ? "Načítám…" : "Log je prázdný."}</div>}
+          </div>) : <div className="log-line">{busy ? "Načítám…" : "Ve zvoleném období není žádný záznam."}</div>}
         </div>
-        <p>Log neobsahuje adresy streamů ani přístupové tokeny.</p>
+        <p>Log neobsahuje adresy streamů ani přístupové tokeny.{info?.logRetentionDays ? ` Záznamy starší než ${info.logRetentionDays} dnů server maže sám.` : ""}</p>
       </div>}
-    </div>
+    </div>}
   </section>;
 }
 

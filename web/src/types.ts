@@ -33,7 +33,7 @@ export interface DiagnosticsSession {
 }
 export interface Diagnostics {
   version: string; builtAt?: string; commit?: string; node: string;
-  uptimeSeconds: number; memoryMb: number; logLevel: string;
+  uptimeSeconds: number; memoryMb: number; logLevel: string; logRetentionDays: number;
   playback: {
     ffmpeg: { version?: string; initialBurst: boolean };
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
