@@ -1,34 +1,34 @@
-name: Sestavení obrazu
+name: Build image
 
-# Sestavení pro amd64 trvá na NASu dlouho a Container Manager navíc staví
-# klasickým builderem, kde se snadno ztratí ovladače VAAPI. Obraz proto vzniká tady
-# a NAS ho jen stáhne. arm64 se přidává kvůli Macům s Apple Silicon -- Docker si
-# na nich pak obraz stáhne sám místo osmiminutového sestavování přes emulaci.
+# Building amd64 on the NAS is slow, and Container Manager uses the classic
+# builder, where an empty ARG TARGETARCH silently drops VAAPI drivers. The
+# image is built here and the NAS only pulls it. arm64 is included for Apple
+# Silicon Macs -- Docker then pulls a ready image instead of emulating for
+# eight minutes.
 #
-# Na push se nestaví -- commitů děláme hodně a obraz z každého z nich by byl
-# zbytečný běh. Sestavení spouští buď člověk (Actions -> Sestavení obrazu -> Run
-# workflow), nebo "Vydání verze", které si tuhle úlohu zavolá přes workflow_call.
-# Až se vývoj přesune na větve a do main se bude slévat hotová práce, dává smysl
-# vrátit sem "on: push: branches: [main]".
+# Images are not built on push -- that would waste a run on every commit.
+# A person starts this workflow (Actions -> Build image -> Run workflow), or
+# "Release" calls it through workflow_call. Once work lands on main through
+# pull requests, adding "on: push: branches: [main]" is reasonable.
 on:
   workflow_dispatch:
     inputs:
-      balik:
-        description: "Přiložit i balík ke stažení pro amd64 (docker save, ~250 MB)"
+      bundle:
+        description: "Also attach an amd64 download tarball (docker save, ~250 MB)"
         type: boolean
         default: false
   workflow_call:
     inputs:
-      znacky:
-        description: "Značky navíc k :latest a :<sha>, oddělené mezerou"
+      tags:
+        description: "Extra tags besides :latest and :<sha>, space-separated"
         type: string
         default: ""
-      balik:
+      bundle:
         type: boolean
         default: false
 
 jobs:
-  testy:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,12 +41,12 @@ jobs:
       - run: npx tsc --noEmit -p web
       - run: npm test
 
-  # Každá architektura se staví na svém stroji (repozitář je veřejný, takže má
-  # zdarma k dispozici i nativní arm64 runner) a odešle se do GHCR jen jako otisk --
-  # bez značky. Značku (latest, otisk commitu) dostane až spojený seznam v úloze
-  # "spojit", jinak by druhá architektura tu první přepsala.
-  obraz:
-    needs: testy
+  # Each architecture builds on its own machine (the repository is public, so
+  # a native arm64 runner is free) and is pushed to GHCR as a digest only --
+  # no tag. Tags (latest, commit SHA) are applied to the combined list in the
+  # "manifest" job; otherwise the second architecture would overwrite the first.
+  image:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
@@ -61,9 +61,9 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      # GHCR přijímá jen malá písmena, kdežto github.repository nese jméno vlastníka
-      # tak, jak je zapsané na GitHubu. Název proto odvozujeme převodem, ne ručně.
-      - name: Určit název obrazu, čas sestavení a bezpečné jméno platformy
+      # GHCR accepts only lowercase, while github.repository keeps the owner
+      # casing from GitHub. Derive the name by converting, not by hard-coding.
+      - name: Set image name, build time, and a filesystem-safe platform slug
         run: |
           echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
           echo "BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
@@ -76,7 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sestavit a odeslat otisk
+      - name: Build and push digest
         id: build
         uses: docker/build-push-action@v6
         with:
@@ -89,7 +89,7 @@ jobs:
           cache-from: type=gha,scope=${{ env.PLATFORM_SLUG }}
           cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_SLUG }}
 
-      - name: Uložit otisk k pozdějšímu spojení
+      - name: Store digest for the manifest job
         run: |
           mkdir -p /tmp/digests
           digest="${{ steps.build.outputs.digest }}"
@@ -101,10 +101,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Otisky obou architektur se spojí do jednoho seznamu, který teprve dostane
-  # skutečné značky. Docker pak z něj sám vybere tu, co sedí na klienta.
-  spojit:
-    needs: obraz
+  # Digests from both architectures are combined into one list, which then
+  # receives the real tags. Docker picks the variant that matches the client.
+  manifest:
+    needs: image
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -130,57 +130,60 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
 
-      # Značky navíc chodí zvenčí (z "Vydání verze"), takže se do příkazu dostávají
-      # přes proměnnou prostředí, ne dosazením do textu skriptu.
-      - name: Vytvořit a odeslat seznam
+      # Extra tags arrive from outside (from "Release"), so they enter the
+      # command through an environment variable, not by interpolating into
+      # the script text.
+      - name: Create and push the image index
         working-directory: /tmp/digests
         env:
-          ZNACKY: ${{ inputs.znacky }}
+          TAGS: ${{ inputs.tags }}
         run: |
-          navic=""
-          for znacka in $ZNACKY; do navic="$navic -t $IMAGE:$znacka"; done
+          extra=""
+          for tag in $TAGS; do extra="$extra -t $IMAGE:$tag"; done
           docker buildx imagetools create \
             -t "$IMAGE:latest" \
             -t "$IMAGE:${{ github.sha }}" \
-            $navic \
+            $extra \
             $(printf "$IMAGE@sha256:%s " *)
       - run: docker buildx imagetools inspect "$IMAGE:${{ github.sha }}"
 
-  # Ovladače chyběly v obraze kvůli prázdnému ARG TARGETARCH; ať to nikdo znovu
-  # nepřehlédne, hotový amd64 obraz se rovnou zkontroluje. arm64 se nekontroluje --
-  # ovladače tam Dockerfile schválně nedává, na tom stroji QuickSync nejede.
-  overit:
-    needs: spojit
+  # Drivers went missing because ARG TARGETARCH was empty; to catch that
+  # again, the finished amd64 image is checked immediately. arm64 is not
+  # checked -- the Dockerfile deliberately skips drivers there, QuickSync
+  # does not run on that machine.
+  verify:
+    needs: manifest
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     steps:
-      # Ověřovací job běží na jiném stroji než sestavení, takže si musí přihlášení
-      # zopakovat -- přihlašovací údaje z dřívějšího "docker login" se s ním nesdílejí.
+      # The verify job runs on a different machine than the build, so login
+      # has to be repeated -- credentials from the earlier "docker login"
+      # are not shared with it.
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Zkontrolovat ovladače VAAPI v amd64 obraze
+      - name: Check VAAPI drivers in the amd64 image
         run: |
-          IMAGE="${{ needs.spojit.outputs.image }}"
+          IMAGE="${{ needs.manifest.outputs.image }}"
           docker pull --platform linux/amd64 "$IMAGE:${{ github.sha }}"
           drivers=$(docker run --rm --platform linux/amd64 "$IMAGE:${{ github.sha }}" sh -lc 'ls /usr/lib/x86_64-linux-gnu/dri/ | grep drv_video | tr "\n" " "')
-          echo "Nalezené ovladače: $drivers"
+          echo "Drivers found: $drivers"
           case "$drivers" in
             *iHD_drv_video.so*) ;;
-            *) echo "::error::V amd64 obraze chybí ovladače VAAPI, QuickSync by na NASu nejel."; exit 1 ;;
+            *) echo "::error::VAAPI drivers are missing from the amd64 image, QuickSync would not run on a NAS."; exit 1 ;;
           esac
 
-      - name: Zabalit amd64 ke stažení
-        if: inputs.balik
+      - name: Pack amd64 for download
+        if: inputs.bundle
         run: |
           mkdir -p dist
-          docker save "${{ needs.spojit.outputs.image }}:${{ github.sha }}" | gzip -1 > dist/stremio-offline-amd64.tar.gz
+          docker save "${{ needs.manifest.outputs.image }}:${{ github.sha }}" | gzip -1 > dist/stremio-offline-amd64.tar.gz
       - uses: actions/upload-artifact@v4
-        if: inputs.balik
+        if: inputs.bundle
         with:
           name: stremio-offline-amd64
           path: dist/stremio-offline-amd64.tar.gz

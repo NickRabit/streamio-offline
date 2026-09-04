@@ -9,20 +9,20 @@ services:
       - "${STREMIO_OFFLINE_PORT:-8090}:8080"
     environment:
       TZ: "${TZ:-Europe/Prague}"
-      # Pod kým běžet. Na Synology nastavte podle vlastníka složky se stahováním.
+      # Who to run as. On Synology, set these to the download-folder owner.
       PUID: "${PUID:-1000}"
       PGID: "${PGID:-1000}"
       FIX_PERMISSIONS: "${FIX_PERMISSIONS:-0}"
       DATA_DIR: /data
       DOWNLOAD_DIR: /downloads
-      # Kolik toho zapisovat do logu: DEBUG přidá požadavky a průběh přehrávání.
+      # How much to log: DEBUG adds requests and playback progress.
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       LOG_MAX_BYTES: "${LOG_MAX_BYTES:-5242880}"
       LOG_RETENTION_DAYS: "${LOG_RETENTION_DAYS:-7}"
       ALLOW_PRIVATE_ADDONS: "${ALLOW_PRIVATE_ADDONS:-0}"
       ALLOW_ADDON_HOSTS: "${ALLOW_ADDON_HOSTS:-}"
-      # Ochrana dotazů na doplňky: strop souběžných dotazů na jeden server a odstávka
-      # po opakovaných selháních. ADDON_GUARD=0 vypne obojí.
+      # Guarding addon requests: a cap on concurrent requests per host and a pause
+      # after repeated failures. ADDON_GUARD=0 turns both off.
       ADDON_GUARD: "${ADDON_GUARD:-1}"
       ADDON_MAX_CONCURRENT: "${ADDON_MAX_CONCURRENT:-8}"
       ADDON_MIN_INTERVAL_MS: "${ADDON_MIN_INTERVAL_MS:-0}"
@@ -35,28 +35,30 @@ services:
       FFMPEG_READRATE: "${FFMPEG_READRATE:-1.5}"
       FFMPEG_READRATE_REMUX: "${FFMPEG_READRATE_REMUX:-3}"
       VAAPI_DEVICE: "${VAAPI_DEVICE:-}"
-      # Skupina vlastnící render node. Bez ní by proces po přepnutí na PUID/PGID
-      # na /dev/dri nedosáhl; zjistíte ji v terminálu kontejneru: ls -n /dev/dri
+      # Group that owns the render node. Without it, after switching to
+      # PUID/PGID the process cannot open /dev/dri; in the container
+      # terminal: ls -n /dev/dri
       RENDER_GID: "${RENDER_GID:-}"
-      # Některé sestavy si ovladač nevyberou samy; iHD je pro novější Intel, i965 pro starší.
+      # Some setups do not pick a driver on their own; iHD for newer Intel,
+      # i965 for older.
       LIBVA_DRIVER_NAME: "${LIBVA_DRIVER_NAME:-}"
-    # Hardwarový převod na Synology s Intel iGPU (QuickSync).
+    # Hardware conversion on Synology with an Intel iGPU (QuickSync).
     #
-    # Z příkazové řádky stačí přidat override:
+    # From the command line, add the override:
     #   docker compose -f compose.yml -f compose.synology.yml up -d --build
     #
-    # Container Manager v DSM ale umí jen JEDEN compose soubor, takže tam místo
-    # override odkomentujte tyhle dva řádky a v .env nastavte obojí:
+    # DSM Container Manager accepts only ONE compose file, so there, instead
+    # of the override, uncomment these two lines and set both in .env:
     #   VAAPI_DEVICE=/dev/dri/renderD128
-    #   RENDER_GID=937          (podle ls -n /dev/dri, viz výše)
+    #   RENDER_GID=937          (from ls -n /dev/dri, see above)
     #
     # devices:
     #   - /dev/dri:/dev/dri
-    # Softwarový převod si vezme všechna jádra a DSM pak nereaguje. Na slabším NAS
-    # odkomentujte a nechte jedno jádro systému (např. 3 ze 4).
+    # Software transcode takes every core and DSM then stops responding. On a
+    # weaker NAS, uncomment and leave one core for the system (e.g. 3 of 4).
     #
     # cpus: "3.0"
-    # Restart politika má smysl jen když je poznat, že server žije.
+    # Restart policy is only useful when it is clear that the server is alive.
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -64,7 +66,8 @@ services:
       retries: 3
       start_period: 20s
     volumes:
-      # Data serveru (účet, doplňky, náhledy, statistiky) leží v normální složce,
-      # ne ve skrytém svazku Dockeru -- jde je zálohovat i prohlédnout jako cokoli jiného.
+      # Server data (account, addons, artwork, stats) live in an ordinary
+      # folder, not a hidden Docker volume -- back it up or inspect it like
+      # anything else.
       - "${DATA_PATH:-./data}:/data"
       - "${DOWNLOAD_PATH:-./downloads}:/downloads"
