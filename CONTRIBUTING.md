@@ -30,9 +30,19 @@ npm run dev:server
 npm run dev:web
 ```
 
-`npm test` runs both suites: the server suite (`node:test`) and the client unit
-suite (Vitest). `npm run test:watch -w web` watches the client one. See
-[TESTING.md](TESTING.md) for what belongs in which layer.
+`npm test` runs both unit suites: the server one (`node:test`) and the client
+one (Vitest). `npm run test:watch -w web` watches the client one.
+
+End-to-end tests drive the built app in a browser against a fake addon:
+
+```bash
+npm run test:e2e:docker
+```
+
+That builds first and runs inside the same image CI uses, so it needs nothing
+but Docker. With a browser installed locally (`npx playwright install
+chromium`), `npm run test:e2e` is the faster loop. See [TESTING.md](TESTING.md)
+for what belongs in which layer.
 
 The supported runtime is Docker:
 

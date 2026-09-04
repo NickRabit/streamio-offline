@@ -65,19 +65,42 @@ being changed for another reason, and unit test it as it comes out.
 ### L2 -- end-to-end journeys
 
 Runner: **Playwright**, driving the built web bundle served by the real server.
+Config in `playwright.config.ts`, specs in `e2e/tests`, fixtures in
+`e2e/fixtures`.
 
-Fixture stack:
+The fixture stack is two servers, both started by Playwright itself:
 
-- Server started with `STREMIO_OFFLINE_DATA` pointing at a per-run temporary
-  directory, so no test touches real data.
-- A fake Stremio addon served locally (the `.test-addon/` fixture is the
-  starting point), so no test reaches the public internet.
-- A small local MP4 for playback tests. Real streams are slow and flaky, and
-  the player only needs *a* playable source to exercise its own logic.
+- `e2e/fixtures/addon-server.mjs` is a Stremio addon that answers from memory --
+  one movie, one series with three episodes, and two sources per title that
+  differ in size and language so ordering and filtering have something real to
+  work on. It also serves a 4 kB MP4, so a queued download is a genuine
+  transfer rather than a mock.
+- `e2e/fixtures/app-server.mjs` starts the built server on a throwaway
+  directory under `e2e/.tmp`, wiped at the start of every run. The state file is
+  seeded with `defaultsInstalled: true`, which is what stops the server fetching
+  Cinemeta and OpenSubtitles on first boot; `ALLOW_PRIVATE_ADDONS=1` is what
+  lets the SSRF guard accept an addon on loopback. It also lays the built server
+  and web bundles out the way the image does, because the server resolves its
+  web root as `../../web` -- in a plain checkout that path is the unbuilt
+  workspace.
 
-Journeys worth covering: login, adding an addon, browsing a catalog, opening a
-title detail, picking a source, queueing a download, the library view, settings,
-and diagnostics.
+Because there is one server with one state file, the specs run serially
+(`workers: 1`) rather than fighting over it.
+
+The `setup` project runs first and is a real journey, not scaffolding: a fresh
+server has no account, so it creates one and installs the fake addon through the
+UI. The session it leaves behind is reused by every other spec through
+`storageState`.
+
+Covered today: first-run account creation, adding an addon, sign-in and its
+refusal, the open and closed API endpoints, browsing a catalog, search with and
+without a match, a movie detail, a series episode list, source ordering and
+language filtering, queueing a download through to a finished job, a setting
+that survives a reload, and diagnostics.
+
+The Playwright image has no ffmpeg, so the server logs a warning when it cannot
+inspect the sample file. That is expected and does not affect the tests --
+transcoding itself belongs to the server suite, not here.
 
 ### L3 -- responsive, visual, accessibility
 
@@ -145,7 +168,7 @@ pull request branch, so updating them is not a local-environment chore.
 | Phase | Content | Status |
 | --- | --- | --- |
 | 1 | `ci.yml` on pull requests, Vitest set up, unit tests for pure client logic | Done |
-| 2 | Playwright plus the fixture stack, first end-to-end journeys | Planned |
+| 2 | Playwright plus the fixture stack, first end-to-end journeys | Done |
 | 3 | Viewport matrix, layout invariants, accessibility checks | Planned |
 | 4 | Screenshot baselines and the container workflow that updates them | Planned |
 
@@ -157,8 +180,16 @@ screens.
 ## Commands
 
 ```
-npm test              # every workspace suite
-npm test -w server    # server only
-npm test -w web       # client unit tests
+npm test                 # server and client unit suites
+npm test -w server       # server only
+npm test -w web          # client unit tests
 npm run test:watch -w web
+
+npm run test:e2e         # Playwright, using a locally installed browser
+npm run test:e2e:docker  # the same run inside the image CI uses
 ```
+
+`npm run test:e2e` needs the browser on the machine
+(`npx playwright install chromium`). `npm run test:e2e:docker` needs nothing but
+Docker, builds first, and matches CI exactly -- use it when a result has to be
+comparable, and always once screenshot baselines exist.

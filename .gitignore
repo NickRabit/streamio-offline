@@ -7,3 +7,6 @@ downloads/
 .DS_Store
 .test-addon/
 *.tsbuildinfo
+e2e/.tmp/
+test-results/
+playwright-report/
