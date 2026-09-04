@@ -149,7 +149,7 @@ export function App() {
   const [skip, setSkip] = useState(0); const [cursor, setCursor] = useState(""); const [hasMore, setHasMore] = useState(false); const [loadingMore, setLoadingMore] = useState(false); const [sourceCount, setSourceCount] = useState(0);
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
-  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
   // Vlastní seznamy se tváří jako katalog, jen nepocházejí od doplňku.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
@@ -533,6 +533,7 @@ export function App() {
   };
   const openMeta = async (item: Meta) => {
     setSelected(item); setSelectedVideo(null); setEpisodesOpen(true); setSeason(null); setStreams([]); setSelectedStream(null); setSubtitles([]); setSourcesLoaded(false); setGalleryIndex(null);
+    requestAnimationFrame(() => detailRef.current?.scrollTo({ top: 0 }));
     const type = item.type || currentCatalog?.type || "movie";
     let detail = item;
     try { detail = { ...item, ...await api.meta(type, item.id) }; setSelected(detail); } catch { /* catalog item is still useful */ }
@@ -631,7 +632,7 @@ export function App() {
                   <label><span>Typ</span><select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">Vše</option><option value="movie">Filmy</option><option value="series">Seriály</option></select></label>
                 </>
               : <>
-                  <label><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
+                  <label className="catalog-filter"><span>Procházet katalog</span><select className="catalog-select" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
                     <option value={VIRTUAL.watchlist}>★ Můj seznam ({watchlist.length})</option>
                     <option value={VIRTUAL.resume}>▸ Pokračovat ve sledování ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
                     {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
@@ -669,7 +670,7 @@ export function App() {
               title={submittedQuery ? "Nic se nenašlo" : searchRequired ? "Zadejte hledaný název" : "Katalog je prázdný"}
               text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
             {busy && <div className="loading">Načítám…</div>}
-          </section><section className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
+          </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""}`}>{selected ? <>
             <div className="mobile-detail-head"><button onClick={closeMeta}><ChevronLeft/> Výsledky</button><strong>{selected.name}</strong></div>
             <div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
               <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
