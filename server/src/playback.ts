@@ -108,6 +108,7 @@ const describeFailure = (stderr: string, code: number | null) => {
 export class PlaybackManager {
   private sessions = new Map<string, Session>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
+  private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
   private readonly root: string;
   private vaapiDevice?: string;
   /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
@@ -157,15 +158,31 @@ export class PlaybackManager {
     if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
     const cached = this.inspected.get(stream.url);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
-    const info = await probe(this.localUrl(this.proxyPath(stream)));
-    log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
-      video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
-      audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
-      subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
-    });
-    if (this.inspected.size > 200) this.inspected.clear();
-    this.inspected.set(stream.url, { info, at: Date.now() });
-    return info;
+    const inflight = this.inspecting.get(stream.url);
+    if (inflight) return inflight;
+    const pending = this.loadInspection(stream);
+    this.inspecting.set(stream.url, pending);
+    return pending;
+  }
+
+  private async loadInspection(stream: StreamItem) {
+    try {
+      const info = await this.probeSource(stream);
+      log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
+        video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
+        audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+        subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
+      });
+      if (this.inspected.size > 200) this.inspected.clear();
+      this.inspected.set(stream.url!, { info, at: Date.now() });
+      return info;
+    } finally {
+      this.inspecting.delete(stream.url!);
+    }
+  }
+
+  private probeSource(stream: StreamItem) {
+    return probe(this.localUrl(this.proxyPath(stream)));
   }
 
   async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
