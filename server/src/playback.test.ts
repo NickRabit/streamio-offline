@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackManager, SerialOperations } from "./playback.js";
+import { PlaybackManager, SerialOperations, hlsCanStart } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -191,4 +191,54 @@ test("inspect of different URLs is not coalesced", async () => {
     manager.inspect({ url: "https://cdn.example/b.mkv" }),
   ]);
   assert.deepEqual(seen.sort(), ["https://cdn.example/a.mkv", "https://cdn.example/b.mkv"]);
+});
+
+const playCaps = {
+  h264: true, hevc: true, hevc10: true, vp8: true, vp9: true, av1: true,
+  aac: true, mp3: true, opus: true, vorbis: true,
+};
+
+test("hlsCanStart accepts one segment or a finished playlist", () => {
+  assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-VERSION:7\n"), false);
+  assert.equal(hlsCanStart("#EXTM3U\n#EXTINF:2.000,\nseg-0-000000.m4s\n"), true);
+  assert.equal(hlsCanStart("#EXTM3U\n#EXTINF:2.000,\na.m4s\n#EXTINF:2.000,\nb.m4s\n"), true);
+  assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-ENDLIST\n"), true);
+});
+
+test("direct play follows the probed container, not a misleading filename", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const mp4 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a", behaviorHints: { filename: "Movie.mkv" } }, mp4, playCaps).ok, true);
+  const mkv = { container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv", behaviorHints: { filename: "Movie.mkv" } }, mkv, playCaps).ok, false);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4", behaviorHints: { filename: "Movie.mp4" } }, mkv, playCaps).ok, false);
+});
+
+test("direct play still uses the extension when ffprobe omitted the format name", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const info = { container: "", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4", behaviorHints: { filename: "Movie.mp4" } }, info, playCaps).ok, true);
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv", behaviorHints: { filename: "Movie.mkv" } }, info, playCaps).ok, false);
+});
+
+test("webm codecs inside matroska,webm play directly; h264 in that container does not", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const webm = { container: "matroska,webm", video: { codec: "vp9" }, audio: { codec: "opus" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mkv" }, webm, playCaps).ok, true);
+  const mkv = { container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.webm" }, mkv, playCaps).ok, false);
+});
+
+test("incompatible codecs, HLS and notWebReady still force a conversion", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const mp4 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4", behaviorHints: { notWebReady: true } }, mp4, playCaps).ok, false);
+  const ac3 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "h264" }, audio: { codec: "ac3" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4" }, ac3, playCaps).ok, false);
+  const hevc10 = { container: "mov,mp4,m4a,3gp,3g2,mj2", video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.mp4" }, hevc10, { ...playCaps, hevc10: false }).ok, false);
+  const hls = { container: "hls,applehttp", video: { codec: "h264" }, audio: { codec: "aac" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.m3u8" }, hls, playCaps).ok, false);
+  const avi = { container: "avi", video: { codec: "mpeg4" }, audio: { codec: "mp3" } };
+  assert.equal(manager.directPlay({ url: "https://cdn.example/a.avi" }, avi, playCaps).ok, false);
 });
