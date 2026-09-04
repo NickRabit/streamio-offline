@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planSeek, waitForSeekable } from "./player-hls";
+import { HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 
 describe("HLS_PLAYER_CONFIG", () => {
   it("keeps the forward buffer short enough that an 8x remux burst should not fill MSE", () => {
@@ -49,5 +49,16 @@ describe("waitForSeekable", () => {
   it("stops when a newer seek supersedes the wait", async () => {
     const ok = await waitForSeekable(() => 2, 10, 1000, () => true, Date.now, async () => undefined);
     expect(ok).toBe(false);
+  });
+});
+
+describe("canRecoverDecode", () => {
+  it("allows two restarts in a minute, then stops", () => {
+    const t = 1_000_000;
+    expect(canRecoverDecode([], t)).toBe(true);
+    const once = recordDecodeRecover([], t);
+    const twice = recordDecodeRecover(once, t + 1000);
+    expect(canRecoverDecode(twice, t + 2000)).toBe(false);
+    expect(canRecoverDecode(twice, t + 61_000)).toBe(true);
   });
 });

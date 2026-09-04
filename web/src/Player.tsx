@@ -4,7 +4,7 @@ import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Ga
 import { ApiError, api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
-import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planSeek, waitForSeekable } from "./player-hls";
+import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
@@ -173,6 +173,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const pendingSeekRef = useRef<number | null>(null);
   const seekEpochRef = useRef(0);
   const catchupRef = useRef(0);
+  const decodeRecoversRef = useRef<number[]>([]);
+  const recoverFromDecodeRef = useRef<(reason: string) => void>(() => undefined);
+  const [sidecarReady, setSidecarReady] = useState(false);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
@@ -330,6 +333,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) { hls.startLoad(); return; }
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) { hls.recoverMediaError(); return; }
         }
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+          recoverFromDecodeRef.current(data.details);
+          return;
+        }
         setError(`Přehrávání selhalo: ${data.details} (${data.type})`);
       });
       hls.loadSource(url); hls.attachMedia(video);
@@ -363,6 +370,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
+    decodeRecoversRef.current = []; setSidecarReady(false);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
     (async () => {
@@ -384,7 +392,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         if (video.readyState >= 1) move(); else video.addEventListener("loadedmetadata", move, { once: true });
       }
       // Vestavěné titulky si vybral server; když žádné nesedí, zkusíme preferovaný jazyk z doplňků.
-      if (created.subtitleTrack === null) {
+      if (created.subtitleTrack === null && !created.sidecarUrl) {
         setAddonSubtitle(addonSubtitles.find((item) => (item.lang ?? "").toLowerCase().startsWith(subtitleLanguage)) ?? null);
       }
     }).catch((value) => {
@@ -401,8 +409,24 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     };
   }, [open, stream, progressKey]);
 
+  useEffect(() => {
+    const url = session?.sidecarUrl;
+    if (!url) { setSidecarReady(false); return; }
+    let stop = false;
+    setSidecarReady(false);
+    void (async () => {
+      for (let attempt = 0; attempt < 40 && !stop; attempt += 1) {
+        const response = await fetch(url).catch(() => undefined);
+        if (stop) return;
+        if (response?.ok) { setSidecarReady(true); return; }
+        await new Promise((resolve) => setTimeout(resolve, 250));
+      }
+    })();
+    return () => { stop = true; };
+  }, [session?.sidecarUrl]);
+
   /** Uvnitř vyrobené části skočíme okamžitě, jinak necháme převod začít znovu od nové pozice. */
-  const seekTo = async (target: number) => {
+  const seekTo = async (target: number, forceRestart = false) => {
     const video = videoRef.current; if (!video) return;
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
@@ -410,7 +434,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const token = ++catchupRef.current;
     const relative = bounded - offsetRef.current;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0;
-    const plan = seekInFlightRef.current ? "restart" : planSeek(relative, end);
+    const plan = forceRestart || seekInFlightRef.current ? "restart" : planSeek(relative, end);
     if (plan === "native") { video.currentTime = relative; return; }
     if (plan === "wait") {
       const epoch = seekEpochRef.current;
@@ -468,6 +492,20 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     finally {
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
     }
+  };
+
+  recoverFromDecodeRef.current = (reason: string) => {
+    if (seekInFlightRef.current || modeRef.current === "direct") {
+      setError("Prohlížeč nedokázal přehrát tento stream.");
+      return;
+    }
+    if (!canRecoverDecode(decodeRecoversRef.current)) {
+      setError("Prohlížeč nedokázal přehrát tento stream.");
+      return;
+    }
+    decodeRecoversRef.current = recordDecodeRecover(decodeRecoversRef.current);
+    report("WARN", `Restarting conversion after a decode error (${reason})`, context());
+    void seekTo(timeRef.current, true);
   };
 
   /** Jiná stopa nebo kvalita znamená jiné mapování pro FFmpeg, takže se převod restartuje na aktuální pozici. */
@@ -720,14 +758,18 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
         onError={() => {
+          if (seekInFlightRef.current) return;
           const media = videoRef.current?.error;
           report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
             ...context(), code: media?.code, detail: media?.message,
             networkState: videoRef.current?.networkState, readyState: videoRef.current?.readyState,
           });
+          if (media?.code === 3) { recoverFromDecodeRef.current("element"); return; }
           setError("Prohlížeč nedokázal přehrát tento stream.");
         }}>
-        {addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
+        {sidecarReady && session?.sidecarUrl
+          ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label="Titulky" default />
+          : addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
       {resumedFrom > 0 && <div className="player-resumed">Navázáno na {fmt(resumedFrom)}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>Přehrát od začátku</button></div>}

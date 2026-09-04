@@ -35,6 +35,7 @@ export interface PlaybackDescriptor {
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
   quality: number | null;
+  sidecarUrl?: string;
 }
 
 /** Povolené cílové kvality a strop datového toku videa pro každou z nich. */
@@ -116,6 +117,7 @@ export class PlaybackManager {
   private sessions = new Map<string, Session>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
+  private sidecarReady = new Set<string>();
   private readonly root: string;
   private vaapiDevice?: string;
   /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
@@ -214,17 +216,19 @@ export class PlaybackManager {
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
 
-    // Přímé přehrání dává smysl jen u výchozích stop a originální kvality; jinak musí zasáhnout FFmpeg.
-    const defaultTracks = audioTrack === 0 && subtitleTrack === null && quality === null;
+    // Audio and quality decide conversion. Embedded subtitles ride as a sidecar
+    // on direct play so a Czech track does not force remux of an otherwise playable file.
+    const avDefault = audioTrack === 0 && quality === null;
     const direct = this.directPlay(stream, info, capabilities);
-    if (defaultTracks && direct.ok) {
+    if (avDefault && direct.ok) {
+      if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
       return this.describe(session, source);
     }
 
     const plan = this.plan(session);
     session.mode = plan.copyVideo ? "remux" : "transcode";
-    const reason = defaultTracks ? direct.reason : "a non-default track or quality was requested";
+    const reason = avDefault && subtitleTrack === null ? direct.reason : "a non-default track or quality was requested";
     try {
       const limit = info?.duration ? Math.max(0, info.duration - 2) : Number.POSITIVE_INFINITY;
       const startTime = Math.max(0, Math.min(options.startTime ?? 0, limit));
@@ -256,10 +260,12 @@ export class PlaybackManager {
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
       // Návrat na originál může znovu splnit podmínky přímého přehrání.
-      if (session.quality === null && session.audioTrack === 0 && session.subtitleTrack === null
+      if (session.quality === null && session.audioTrack === 0
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
         session.pendingKill = this.kill(session);
         session.mode = "direct"; session.offset = 0;
+        if (session.subtitleTrack !== null) this.extractSidecar(session);
+        else this.sidecarReady.delete(session.id);
         log("INFO", "Back to direct play", { id });
         return this.describe(session, this.proxyPath(session.stream));
       }
@@ -296,6 +302,7 @@ export class PlaybackManager {
     log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });
     session.stopped = true;
     this.sessions.delete(id);
+    this.sidecarReady.delete(id);
     await this.kill(session);
     await session.operations.wait();
     await this.kill(session);
@@ -347,7 +354,37 @@ export class PlaybackManager {
       hardware: session.hardware, acceleration: Boolean(this.vaapiDevice),
       audioTracks: session.info?.audioTracks ?? [], subtitleTracks: session.info?.subtitleTracks ?? [],
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
+      sidecarUrl: session.mode === "direct" && session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
     };
+  }
+
+  sidecarFile(id: string) {
+    const session = this.sessions.get(id);
+    if (!session || session.subtitleTrack === null || !this.sidecarReady.has(id)) return undefined;
+    session.claimed = true;
+    session.lastAccess = Date.now();
+    return path.join(this.root, id, "sidecar.vtt");
+  }
+
+  private extractSidecar(session: Session) {
+    const index = session.subtitleTrack;
+    if (index === null) return;
+    this.sidecarReady.delete(session.id);
+    const dest = path.join(this.root, session.id, "sidecar.vtt");
+    void (async () => {
+      try {
+        await mkdir(path.dirname(dest), { recursive: true });
+        await promisify(execFile)("ffmpeg", [
+          "-hide_banner", "-loglevel", "error", "-nostdin",
+          "-i", this.localUrl(this.proxyPath(session.stream)),
+          "-map", `0:s:${index}`, "-c:s", "webvtt", "-y", dest,
+        ], { timeout: 45_000 });
+        if (this.sessions.get(session.id) === session && session.subtitleTrack === index) this.sidecarReady.add(session.id);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id: session.id, reason: reason.slice(0, 200) });
+      }
+    })();
   }
 
   /** Vestavěné titulky zapínáme samy od sebe jen tehdy, když opravdu sedí preferovaný jazyk. */

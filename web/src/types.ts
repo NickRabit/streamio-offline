@@ -64,7 +64,7 @@ export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; v
 export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
-  quality: number | null;
+  quality: number | null; sidecarUrl?: string;
 }
 
 export interface Session { username: string }
