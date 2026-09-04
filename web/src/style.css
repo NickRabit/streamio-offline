@@ -322,3 +322,5 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
    be visible, so the ring is replaced rather than removed. */
 button:focus{outline:none}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+
+.job-link{display:block;text-align:left;font-weight:700;color:var(--text);text-decoration:none}.job-link:hover{color:var(--accent2);text-decoration:underline}.browse-item.focused .browse-art{border-color:var(--accent);animation:focus-pulse 2.4s ease-out}@keyframes focus-pulse{0%,60%{box-shadow:0 0 0 3px #ff5b3855}100%{box-shadow:0 0 0 0 #ff5b3800}}

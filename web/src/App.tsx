@@ -85,6 +85,8 @@ export function App() {
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
+  // Cesta, na kterou se má výpis po prokliku ze stahování posunout a zvýraznit ji.
+  const [browseFocus, setBrowseFocus] = useState<string | null>(null);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
@@ -212,7 +214,7 @@ export function App() {
     setEpisodesOpen(true); setSeason(null); setCatalogReset((value) => value + 1);
   };
   const resetLibrary = () => {
-    setMenuFor(null); setFromFavorites(false);
+    setMenuFor(null); setFromFavorites(false); setBrowseFocus(null);
     setBrowsePath(""); setBrowseQuery("");
     setBrowseSort("name"); setBrowseDesc(false); setOnlyFavorites(false);
   };
@@ -320,6 +322,20 @@ export function App() {
     return () => window.removeEventListener("scroll", onScroll);
   }, [view, browse, browseBusy, browsePath]);
 
+  // Hledaná položka nemusí být na první stránce výpisu, tak se donačítá, dokud se nenajde.
+  useEffect(() => {
+    if (view !== "library" || !browseFocus || !browse || browse.path !== browsePath) return;
+    if (!browse.items.some((item) => item.path === browseFocus)) {
+      if (browseBusy) return;
+      if (browse.items.length < browse.total) void loadBrowse(browsePath, browse.items.length);
+      else setBrowseFocus(null);
+      return;
+    }
+    document.querySelector(`[data-path="${CSS.escape(browseFocus)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    const timer = setTimeout(() => setBrowseFocus(null), 2600);
+    return () => clearTimeout(timer);
+  }, [view, browse, browseBusy, browseFocus]);
+
   // Náhledy se dodělávají na pozadí; jakmile jsou hotové, stránka se sama obnoví.
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
@@ -328,6 +344,17 @@ export function App() {
     const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
     return () => clearTimeout(timer);
   }, [view, browse?.pending, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+
+  /** Proklik z fronty stahování: otevře složku, ve které soubor leží, a položku v ní najde.
+   * Filtry se musí uklidit, jinak by hledaný soubor zůstal odfiltrovaný mimo výpis. */
+  const revealInLibrary = (target: string) => {
+    const slash = target.lastIndexOf("/");
+    setMenuFor(null); setFromFavorites(false); setOnlyFavorites(false); setBrowseQuery("");
+    setBrowsePath(slash > 0 ? target.slice(0, slash) : "");
+    setBrowseFocus(target);
+    setView("library");
+    window.scrollTo(0, 0);
+  };
 
   /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
   const playLocal = (title: string, path: string, poster?: string) => {
@@ -779,7 +806,7 @@ export function App() {
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
                     </span>}
                   </button>
-                : <button className="browse-item" key={item.path} onClick={() => playLocal(item.label, item.path, item.poster)}>
+                : <button className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} onClick={() => playLocal(item.label, item.path, item.poster)}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i>{item.favorite && <i className="fav-mark"><Star/></i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
@@ -805,7 +832,7 @@ export function App() {
         </div>
       </section>}
       {view === "addons" && <Addons addons={addons} onChanged={refresh} onNotify={notify} onError={fail}/>} 
-      {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail}/>}
+      {view === "downloads" && <Downloads jobs={downloads} refresh={loadDownloads} onError={fail} onReveal={revealInLibrary}/>}
       {view === "stats" && <StatsPanel key={statsReset} onError={fail}/>}
       {view === "settings" && <SettingsPage build={buildInfo} settings={settings} languages={languages} session={session!} onSession={setSession} onSave={saveSettings} onImported={async (backup) => {
         const restored = await api.importSettings(backup);
@@ -1158,10 +1185,10 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   </article>;
 }
 
-function Downloads({ jobs, refresh, onError }: { jobs: DownloadJob[]; refresh: () => Promise<void>; onError: (e: unknown) => void }) {
+function Downloads({ jobs, refresh, onError, onReveal }: { jobs: DownloadJob[]; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
   const active = jobs.filter((job) => job.status === "downloading"); const totalSpeed = active.reduce((sum, job) => sum + job.speed, 0); const eta = (job: DownloadJob) => job.speed > 0 && job.total ? fmtEta((job.total - job.received) / job.speed) : "—";
   const action = async (operation: () => Promise<void>) => { try { await operation(); await refresh(); } catch (error) { onError(error); } };
-  return <section><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div><div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div><strong>{job.title}</strong><small>{job.target || (job.pending ? "Zdroj se vybere při stahování" : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div><span>{bytes(job.received)} / {bytes(job.total)}</span><div className="progress"><i style={{width:`${job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span>{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions"><button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte přímý HTTP stream a použijte tlačítko Stáhnout."/>}</div></section>;
+  return <section><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div><div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div>{job.status === "completed" && job.target ? <button className="link-button job-link" title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}>{job.title}</button> : <strong>{job.title}</strong>}<small>{job.target || (job.pending ? "Zdroj se vybere při stahování" : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div><span>{bytes(job.received)} / {bytes(job.total)}</span><div className="progress"><i style={{width:`${job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span>{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions">{job.status === "completed" && job.target && <button title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}><HardDrive/></button>}<button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte přímý HTTP stream a použijte tlačítko Stáhnout."/>}</div></section>;
 }
 const fmtEta = (seconds: number) => seconds < 60 ? `${Math.ceil(seconds)} s` : seconds < 3600 ? `${Math.ceil(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.ceil((seconds % 3600) / 60)} min`;
 const statusLabel = (status: DownloadJob["status"]) => ({ queued: "Ve frontě", downloading: "Stahuji", paused: "Pozastaveno", completed: "Dokončeno", failed: "Chyba" })[status];
