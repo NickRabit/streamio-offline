@@ -547,9 +547,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
    * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
   const enterBrowserFullscreen = async () => {
     if (document.fullscreenElement) return true;
+    const node = overlayRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
     try {
-      if (overlayRef.current?.requestFullscreen) {
-        await overlayRef.current.requestFullscreen();
+      if (node?.requestFullscreen) {
+        await node.requestFullscreen();
+        return true;
+      }
+      if (node?.webkitRequestFullscreen) {
+        await node.webkitRequestFullscreen();
         return true;
       }
     } catch { /* Bez uživatelského gesta může prohlížeč automatický fullscreen odmítnout. */ }
@@ -578,10 +583,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
       if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => { automaticFullscreenRef.current = entered; }), 80);
-      } else if (!landscape && previous && automaticFullscreenRef.current && document.fullscreenElement === overlayRef.current) {
-        void document.exitFullscreen().catch(() => undefined);
+        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => {
+          automaticFullscreenRef.current = entered;
+          if (!entered) setCssFullscreen(true);
+        }), 80);
+      } else if (!landscape && previous) {
+        if (automaticFullscreenRef.current && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
         automaticFullscreenRef.current = false;
+        setCssFullscreen(false);
       }
       previous = landscape;
     };

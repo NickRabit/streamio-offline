@@ -238,8 +238,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 }
 
 @media(max-width:700px) and (orientation:portrait){
-  html:has(main.view-catalog),body:has(main.view-catalog){height:100dvh;overflow:hidden;overscroll-behavior:none}
-  body:has(main.view-catalog){padding-bottom:0}
+  body:has(main.view-catalog){padding-bottom:0;min-height:100dvh}
   main.view-catalog{display:flex;height:calc(100dvh - 68px - env(safe-area-inset-bottom, 0px));padding-bottom:10px;overflow:hidden;overscroll-behavior:none}
   main.view-catalog>.catalog-view{display:flex;flex:1 1 auto;min-height:0;flex-direction:column;overflow:hidden;overscroll-behavior:none}
   main.view-catalog .heading{flex:0 0 auto;margin-bottom:8px}
@@ -315,7 +314,7 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
   main.view-catalog .poster-grid{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:9px}
   main.view-catalog .detail-panel{display:none}
-  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:0 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;border:0;border-radius:0;background:var(--bg);box-shadow:none}
+  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;border:0;border-radius:0;background:var(--bg);box-shadow:none}
   main.view-catalog .detail-panel.series-sources-layout.mobile-open{grid-template-columns:84px minmax(0,1fr)}
   .mobile-detail-head{grid-column:1/-1;position:static;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin:0 -8px;padding:3px 8px;border-bottom:1px solid var(--line);background:#0b0e13f2}
   .mobile-detail-head:after{content:"";width:68px}
