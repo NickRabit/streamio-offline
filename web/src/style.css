@@ -315,30 +315,36 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
   main.view-catalog .result-panel{height:100%;margin:0;padding:10px}
   main.view-catalog .poster-grid{grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:9px}
   main.view-catalog .detail-panel{display:none}
-  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:54px 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:43px minmax(0,1fr);gap:8px 10px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(9px, env(safe-area-inset-bottom, 0px)) 10px;overflow:hidden;border:0;border-radius:0;background:var(--bg);box-shadow:none}
-  .mobile-detail-head{grid-column:1/-1;position:static;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin:0 -10px;padding:5px 10px;border-bottom:1px solid var(--line);background:#0b0e13f2}
+  main.view-catalog .detail-panel.mobile-open{position:fixed;z-index:45;inset:0 0 0 calc(56px + env(safe-area-inset-left, 0px));display:grid;grid-template-columns:minmax(210px,.72fr) minmax(0,1.5fr);grid-template-rows:36px minmax(0,1fr);gap:6px 8px;min-height:0;margin:0;padding:0 max(10px, env(safe-area-inset-right, 0px)) max(8px, env(safe-area-inset-bottom, 0px)) 8px;overflow:hidden;border:0;border-radius:0;background:var(--bg);box-shadow:none}
+  main.view-catalog .detail-panel.series-sources-layout.mobile-open{grid-template-columns:84px minmax(0,1fr)}
+  .mobile-detail-head{grid-column:1/-1;position:static;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;margin:0 -8px;padding:3px 8px;border-bottom:1px solid var(--line);background:#0b0e13f2}
   .mobile-detail-head:after{content:"";width:68px}
-  .mobile-detail-head button{min-height:32px;padding:5px 9px;background:transparent;color:var(--accent2);font-size:11px}
+  .mobile-detail-head button{min-height:30px;padding:4px 8px;background:transparent;color:var(--accent2);font-size:11px}
   .mobile-detail-head strong{overflow:hidden;text-align:center;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
   .detail-primary{display:block;grid-column:1;grid-row:2;min-width:0;min-height:0}
   .detail-primary .hero,.series-sources-layout .detail-primary .hero{height:100%;min-height:0;max-height:none;margin:0;padding:13px;overflow:hidden}
+  .series-sources-layout .detail-primary .hero{padding:4px}
   .detail-primary .hero.has-gallery .detail-copy{max-width:calc(100% - 64px)}
   .detail-primary .detail-copy h2{margin:7px 0 3px;font-size:19px;line-height:1.1}
   .detail-primary .detail-copy p{margin:4px 0;font-size:10px;line-height:1.4}
   .detail-primary .detail-copy>p:last-child{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:3}
+  .series-sources-layout .detail-copy{display:none}
   .detail-primary .gallery-open{top:6px;right:6px;width:58px}
   .detail-primary .gallery-open img{width:48px;height:66px}
   .detail-primary .gallery-open span{display:none}
+  .series-sources-layout .gallery-open{position:static;width:100%;padding:0;border:0;background:transparent;box-shadow:none}
+  .series-sources-layout .gallery-open img{width:100%;height:auto;aspect-ratio:2/3}
   .detail-workflow{display:flex;grid-column:2;grid-row:2;min-width:0;min-height:0;flex-direction:column;overflow:hidden}
   .detail-workflow .episodes{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;margin:0;overflow:hidden}
   .detail-workflow .episode-list{flex:1 1 auto;max-height:none}
   .detail-workflow .sources{display:flex;min-height:0;flex:1 1 auto;flex-direction:column;margin:0;overflow:hidden}
-  .detail-workflow .sources>.subhead{margin-bottom:5px}
-  .detail-workflow .stream-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:6px}
-  .detail-workflow .stream-filters label{display:grid;gap:2px}
-  .detail-workflow .stream-filters select{width:100%;max-width:none;min-height:32px;padding:5px 7px}
-  .detail-workflow .stream-list{flex:1 1 auto;min-height:60px;max-height:none;gap:5px}
-  .detail-workflow .stream-list button{min-height:42px;padding:7px 9px}
+  .detail-workflow .sources>.subhead{margin-bottom:4px}
+  .detail-workflow .stream-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-bottom:4px}
+  .detail-workflow .stream-filters label{display:grid;gap:0}
+  .detail-workflow .stream-filters label>span{display:none}
+  .detail-workflow .stream-filters select{width:100%;max-width:none;min-height:30px;padding:4px 6px}
+  .detail-workflow .stream-list{flex:1 1 auto;min-height:60px;max-height:none;gap:4px}
+  .detail-workflow .stream-list button{min-height:38px;padding:6px 8px}
   .detail-workflow .source-footer{position:static;flex:0 0 auto;margin:6px 0 0;padding:6px 0 0;border-radius:0;background:transparent;backdrop-filter:none}
   .detail-workflow .source-footer .source-info{display:none}
   .detail-workflow .source-footer .actions{display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:6px}
