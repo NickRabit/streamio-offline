@@ -1,10 +1,10 @@
 # Proxy-safe playback and player improvements
 
 Status: proposed technical specification; no runtime changes implemented.
-Reviewed on 2026-09-06. This document revises the proposals in
+Reviewed on 2026-09-06. This document revises the original proposals in
 [PR #29](https://github.com/NickRabit/streamio-offline/pull/29), including its
-binding proxy requirement. It is intended to replace that PR's specification,
-not to become a second, conflicting implementation plan.
+binding proxy requirement. The revised specification is maintained in that
+same PR as a single implementation plan.
 
 ## 1. Evidence and scope
 
