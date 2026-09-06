@@ -1,0 +1,57 @@
+import { expect, test } from "@playwright/test";
+
+const poster = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360"><rect width="240" height="360" fill="${color}"/><circle cx="120" cy="130" r="70" fill="#ffffff22"/><path d="M0 360L130 170L240 360" fill="#00000033"/></svg>`)}`;
+const folder = { kind: "folder", path: "Seriály", name: "Seriály", fileCount: 8, size: 8e9, poster: poster("#38516d"), favorite: true };
+const file = { kind: "file", path: "Film.mkv", label: "Cesta za obzor", size: 2e9, season: null, episode: null, modified: "2026-09-01", poster: poster("#936347"), favorite: true };
+const episode = { ...file, path: "Seriály/01/epizoda.mkv", label: "Dlouhý název epizody, který se musí vejít i na telefonu", season: 1, episode: 1, progress: { position: 120, duration: 2400 } };
+
+test("library cards, favorites and folder navigation", async ({ page }, testInfo) => {
+  await page.route("**/api/library/favorites?*", (route) => route.fulfill({ json: { path: ":favorites", items: [folder, file], total: 2, pending: false } }));
+  await page.route("**/api/library/browse?*", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path") || "";
+    return route.fulfill({ json: { path, items: path ? [episode] : [folder, file, { ...file, path: "other.mkv", label: "Film bez plakátu", poster: undefined, favorite: false }], total: path ? 1 : 3, pending: false } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(page.locator(".favorites-collage img")).toHaveCount(2);
+  const art = page.locator(".browse-grid .browse-art").first();
+  const box = (await art.boundingBox())!;
+  expect(box.height / box.width).toBeCloseTo(1.5, 1);
+  await expect(page.locator(".library-page button button")).toHaveCount(0);
+  await expect(page).toHaveScreenshot("library-cards.png", { fullPage: true });
+  await page.getByRole("button", { name: "Možnosti: Seriály", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Odebrat z oblíbených", exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".browse-actions")).toHaveCount(0);
+  await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
+  await expect(page.getByRole("button", { name: /Dlouhý název.*Pokračovat/ })).toBeVisible();
+  await page.getByRole("button", { name: "O složku zpět" }).click();
+  await page.locator(".library-favorites").click();
+  await expect(page.locator(".crumbs")).toContainText("Oblíbené");
+  await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
+  await page.getByRole("button", { name: "O složku zpět" }).click();
+  await expect(page.locator(".crumbs button", { hasText: "Oblíbené" })).toBeDisabled();
+  await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
+  await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
+  await page.waitForTimeout(1000);
+  await expect(page.locator(".browse-rows .library-open")).toHaveCount(2);
+  await expect(page).toHaveScreenshot("library-list.png", { fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  if (testInfo.project.use.hasTouch) {
+    const buttons = await page.locator(".browse-menu").evaluateAll((items) => items.map((item) => item.getBoundingClientRect().height));
+    expect(buttons.every((height) => height >= 36)).toBe(true);
+  }
+});
+
+
+test("empty favorites explain how to add titles", async ({ page }) => {
+  await page.route("**/api/library/favorites?*", (route) => route.fulfill({ json: { path: ":favorites", items: [], total: 0, pending: false } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await page.locator(".library-favorites").click();
+  await expect(page.getByText("Zatím žádné oblíbené", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "O složku zpět" }).click();
+  await expect(page.locator(".library-favorites")).toBeVisible();
+  await expect(page.locator(".crumbs")).not.toContainText("Oblíbené");
+});

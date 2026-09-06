@@ -12,6 +12,7 @@ const storageState = "e2e/.tmp/session.json";
 export const viewports = [
   { name: "desktop", use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 900 } } },
   { name: "desktop-short", use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 760 } } },
+  { name: "tablet-landscape", use: { ...devices["Desktop Chrome"], viewport: { width: 1180, height: 820 }, hasTouch: true, isMobile: true } },
   { name: "tablet", use: { ...devices["Desktop Chrome"], viewport: { width: 820, height: 1180 }, hasTouch: true, isMobile: true } },
   { name: "mobile", use: { ...devices["iPhone 13"] } },
   { name: "mobile-landscape", use: { ...devices["iPhone 13 landscape"] } },

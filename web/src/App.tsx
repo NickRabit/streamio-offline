@@ -71,16 +71,20 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
   const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
   const [browseSort, setBrowseSort] = useState<LibrarySort>(() => recall("sort", ["name", "added", "size", "random"] as const, "name") as LibrarySort);
   const [browseDesc, setBrowseDesc] = useState(() => recall("order", ["asc", "desc"] as const, "asc") === "desc");
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
+  const browseRequest = useRef(0);
+  const browseLocation = useRef("");
   const browseSeed = useRef(String(Date.now()));
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [onlyFavorites, setOnlyFavorites] = useState(() => recall("favorites", ["0", "1"] as const, "0") === "1");
-  // Odkud se do složky přišlo, aby drobečky nezahodily krok přes Oblíbené.
+  browseLocation.current = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  // Preserve the favorites breadcrumb when entering a folder from favorites.
   const [fromFavorites, setFromFavorites] = useState(false);
   const [resume, setResume] = useState<ProgressEntry[]>([]);
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
@@ -287,27 +291,32 @@ export function App() {
     setSettings((current: AppSettings) => ({ ...current, ...patch }));
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
-  // Odznak u Stahování musí sedět i mimo tuto záložku, jen se tam nemusí obnovovat tak často.
   const loadBrowse = async (target = browsePath, skip = 0) => {
+    const request = ++browseRequest.current;
+    const location = browseLocation.current;
     setBrowseBusy(true);
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      // Virtuální složka sbírá oblíbené z celého stromu, běžné procházení jen filtruje aktuální úroveň.
+      // Favorites include entries from the entire library tree.
       const page = target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
+      if (request !== browseRequest.current || location !== browseLocation.current) return;
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
-    } catch (error) { fail(error); }
-    finally { setBrowseBusy(false); }
+    } catch (error) { if (request === browseRequest.current && location === browseLocation.current) fail(error); }
+    finally { if (request === browseRequest.current) setBrowseBusy(false); }
   };
   const refreshBrowse = async (limit: number) => {
+    const location = JSON.stringify([browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    if (location !== browseLocation.current) return;
+    const request = browseRequest.current;
     try {
       const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
       const page = browsePath === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites });
-      setBrowse(page);
-    } catch { /* obnovení náhledů není kritické */ }
+      if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
+    } catch { /* Artwork refresh is optional. */ }
   };
   useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); }, [ready, view]);
   useEffect(() => {
@@ -329,6 +338,13 @@ export function App() {
     }, playerOpen ? 0 : 900);
     return () => clearTimeout(timer);
   }, [ready, view, playerOpen]);
+  useEffect(() => {
+    if (!ready || view !== "library" || browsePath || browseQuery || onlyFavorites) return;
+    let cancelled = false;
+    void api.favorites({ limit: 12 }).then((result) => { if (!cancelled) setFavoritePreview(result); }).catch(() => { if (!cancelled) setFavoritePreview(null); });
+    return () => { cancelled = true; };
+  }, [ready, view, browse, browsePath, browseQuery, onlyFavorites]);
+
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
     [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
   // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
@@ -758,7 +774,7 @@ export function App() {
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
+      {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
         {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
           <div className="subhead"><h3>Pokračovat ve sledování</h3><span>{localResume.length}</span></div>
           <div className="resume-strip">
@@ -777,23 +793,24 @@ export function App() {
         </div>}
         <div className="panel browse-panel">
         <div className="browse-bar">
-          <nav className="crumbs">
-            <button onClick={() => { setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
+          <nav className="crumbs" aria-label="Cesta v knihovně">
+            {browsePath && <button className="library-back" aria-label="O složku zpět" onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath === ":favorites") setFromFavorites(false); setBrowsePath(browsePath === ":favorites" ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
+            <button onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
             {(fromFavorites || browsePath === ":favorites") && <span>
               <ChevronRight/>
-              <button disabled={browsePath === ":favorites"} onClick={() => setBrowsePath(":favorites")}>Oblíbené</button>
+              <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>Oblíbené</button>
             </span>}
             {browsePath !== ":favorites" && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
-              <button disabled={index === all.length - 1} onClick={() => setBrowsePath(all.slice(0, index + 1).join("/"))}>{part}</button>
+              <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
-            <div className="search-input"><Search/><input value={browseQuery} placeholder="Filtrovat…" onChange={(event) => setBrowseQuery(event.target.value)}/></div>
+            <div className="search-input"><Search/><input value={browseQuery} aria-label="Filtrovat knihovnu" placeholder="Filtrovat…" onChange={(event) => setBrowseQuery(event.target.value)}/></div>
             <select aria-label="Řazení" value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
-              // Nejnovější a největší dává smysl mít nahoře, názvy naopak od A.
+              // Dates and sizes start with the largest value; names start with A.
               setBrowseDesc(next === "added" || next === "size");
             }}>
               <option value="name">Podle názvu</option><option value="added">Podle data přidání</option>
@@ -810,31 +827,32 @@ export function App() {
           </div>
         </div>
 
+        {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
+          <span className="favorites-collage" aria-hidden="true">{[...new Set(favoritePreview?.items.map((item) => item.poster).filter((poster): poster is string => Boolean(poster)))].slice(0, 3).map((poster) => <img key={poster} src={poster} alt=""/>)}<Star/></span>
+          <span className="favorites-copy"><strong>Oblíbené</strong><small>{favoritePreview?.total ? `${favoritePreview.total} položek napříč knihovnou` : "Vaše oblíbené filmy a seriály na jednom místě"}</small></span><ChevronRight/>
+        </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">Načítám…</div>
-            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : "Dokončená stahování se tu objeví sama."}/>)
+            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : browsePath === ":favorites" || onlyFavorites ? "Zatím žádné oblíbené" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : browsePath === ":favorites" || onlyFavorites ? "Přidejte soubor nebo složku do oblíbených přes nabídku se třemi tečkami." : "Dokončená stahování se tu objeví sama."}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
-              {!browsePath && !onlyFavorites && <button className="browse-item folder favorites-tile" onClick={() => { setFromFavorites(false); setBrowsePath(":favorites"); }}>
-                <span className="browse-art"><Star/></span><strong>Oblíbené</strong><small>napříč knihovnou</small>
-              </button>}
               {browse.items.map((item) => item.kind === "folder"
-                ? <button className="browse-item folder" key={item.path} onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
+                ? <article className="browse-item folder" key={item.path}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
-                    <strong>{item.name}</strong><small>{bytes(item.size)}</small>
-                    <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
+                    <span className="library-copy"><strong>{item.name}</strong><small>{item.fileCount} souborů · {bytes(item.size)}</small></span><span className="library-action"><FolderOpen/> Otevřít složku <ChevronRight/></span></button>
+                    <button className="browse-menu" aria-label={`Možnosti: ${item.name}`} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
                     </span>}
-                  </button>
-                : <button className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} onClick={() => playLocal(item.label, item.path, item.poster)}>
-                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}<i className="browse-play"><CirclePlay/></i>{item.favorite && <i className="fav-mark"><Star/></i>}
+                  </article>
+                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path}><button className="library-open" onClick={() => playLocal(item.label, item.path, item.poster)}>
+                    <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
-                    <strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{bytes(item.size)}</small>
-                    <span className="browse-menu" onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></span>
+                    <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
+                    <small>{bytes(item.size)}</small></span><span className="library-action"><Play/> {item.progress ? "Pokračovat" : "Přehrát"}</span></button>
+                    <button className="browse-menu" aria-label={`Možnosti: ${item.label}`} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> Označit jako neshlédnuté</button>}
@@ -842,7 +860,7 @@ export function App() {
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
                     </span>}
-                  </button>)}
+                  </article>)}
             </div>
             {browseBusy && <div className="loading">Načítám…</div>}
             {(() => {
