@@ -41,8 +41,12 @@ npm run test:e2e:docker
 
 That builds first and runs inside the same image CI uses, so it needs nothing
 but Docker. With a browser installed locally (`npx playwright install
-chromium`), `npm run test:e2e` is the faster loop. See [TESTING.md](TESTING.md)
-for what belongs in which layer.
+chromium`), `npm run test:e2e` is the faster loop.
+
+A deliberate design change will fail the screenshot baselines. Regenerate them
+with `npm run test:e2e:snapshots`, or run the **Update screenshot baselines**
+workflow on the branch; do not regenerate them to make an unexplained diff go
+away. See [TESTING.md](TESTING.md) for what belongs in which layer.
 
 The supported runtime is Docker:
 

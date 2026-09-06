@@ -27,6 +27,15 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [["html", { open: "never" }], ["list"]] : "list",
   use: { baseURL: appUrl, trace: "retain-on-failure", screenshot: "only-on-failure" },
+  // Baselines live next to the spec, named by project rather than by platform:
+  // they are always produced in the Playwright container, so the host is not
+  // part of their identity.
+  snapshotPathTemplate: "{testDir}/{testFileDir}/__screenshots__/{projectName}/{arg}{ext}",
+  // Deliberately close to zero tolerance. A percentage-based allowance sounds
+  // safe but hides exactly the changes worth catching: a 4px font bump across a
+  // row of tiles stayed under a 1% ratio. Runs in the container are stable, so
+  // the small fixed budget only absorbs renderer noise.
+  expect: { toHaveScreenshot: { maxDiffPixels: 120, animations: "disabled", caret: "hide", scale: "css" } },
   projects: [
     { name: "setup", testMatch: /setup\.spec\.ts/ },
     {
@@ -36,10 +45,13 @@ export default defineConfig({
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },
+    // The layout projects run after the journeys, not merely after setup: the
+    // journeys leave a queued download and a library file behind, and a baseline
+    // has to be taken against a state that is the same every run.
     ...viewports.map(({ name, use }) => ({
       name,
       testMatch: /layout\//,
-      dependencies: ["setup"],
+      dependencies: ["setup", "chromium"],
       use: { ...use, storageState },
     })),
   ],

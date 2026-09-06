@@ -1,0 +1,80 @@
+import { expect, test, type Page } from "@playwright/test";
+
+// Baselines catch what the invariants cannot measure: spacing, overlap, truncation,
+// a control that quietly moved. They are kept to four screens on purpose -- every
+// extra one is a file to regenerate whenever the design legitimately changes.
+//
+// The images are only comparable when they are produced in one place, so they are
+// always generated inside the Playwright container. See TESTING.md.
+
+const settle = async (page: Page) => {
+  // Posters come from the fixture addon; a half-loaded image would differ per run.
+  await page.waitForLoadState("networkidle");
+  await page.evaluate(() => Promise.all(
+    [...document.images].filter((image) => !image.complete).map((image) => new Promise((done) => {
+      image.addEventListener("load", done, { once: true });
+      image.addEventListener("error", done, { once: true });
+    })),
+  ));
+};
+
+const openView = async (page: Page, name: string) => {
+  await page.goto("/");
+  await page.getByRole("button", { name, exact: true }).click();
+  await settle(page);
+};
+
+const openCatalog = async (page: Page, pattern: RegExp) => {
+  await openView(page, "Katalog");
+  const select = page.getByRole("combobox", { name: "Procházet katalog" });
+  const labels = await select.locator("option").allTextContents();
+  await select.selectOption({ label: labels.find((text) => pattern.test(text))! });
+  await settle(page);
+};
+
+test.describe("screenshots", () => {
+  test.beforeEach(({}, testInfo) => {
+    // These four screens look the same at 1280x760 as at 1440x900. The project
+    // earns its place through the invariants, which check the 780px height rule;
+    // duplicating a megabyte of near-identical baselines for it does not.
+    test.skip(testInfo.project.name === "desktop-short", "covered by the desktop baselines");
+  });
+
+  test("catalog", async ({ page }) => {
+    await openCatalog(page, /Filmy/);
+    await expect(page.getByRole("button", { name: /Zkušební film/ })).toBeVisible();
+    await expect(page).toHaveScreenshot("catalog.png", { fullPage: true });
+  });
+
+  test("title detail with sources", async ({ page }) => {
+    await openCatalog(page, /Filmy/);
+    await page.getByRole("button", { name: /Zkušební film/ }).click();
+
+    const detail = page.locator(".detail-panel");
+    await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+    await settle(page);
+
+    await expect(page).toHaveScreenshot("title-detail.png", {
+      fullPage: true,
+      // Track probing needs ffprobe, which the container does not carry, so this
+      // line reads differently depending on the machine.
+      mask: [detail.locator(".source-info")],
+    });
+  });
+
+  test("library", async ({ page }) => {
+    await openView(page, "Knihovna");
+    await expect(page.getByRole("heading", { name: "Stažené soubory" })).toBeVisible();
+    await expect(page).toHaveScreenshot("library.png", { fullPage: true });
+  });
+
+  test("settings", async ({ page }) => {
+    await openView(page, "Nastavení");
+    await expect(page.getByRole("combobox", { name: "Velikost položek katalogu" })).toBeVisible();
+    await expect(page).toHaveScreenshot("settings.png", {
+      fullPage: true,
+      // Version, uptime and free disk space are different on every run.
+      mask: [page.locator(".diagnostics-section"), page.locator(".storage-path")],
+    });
+  });
+});
