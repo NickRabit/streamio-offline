@@ -56,17 +56,41 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   return url;
 }
 
+const responseHeaders = new WeakMap<Response, Headers>();
+
+export function upstreamRequestHeaders(response: Response): Headers {
+  return new Headers(responseHeaders.get(response));
+}
+
 export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirects = 5): Promise<Response> {
   let url = await validateRemoteUrl(raw);
+  let headers = new Headers(init.headers);
   for (let redirect = 0; redirect <= maxRedirects; redirect += 1) {
-    const response = await fetch(url, { ...init, redirect: "manual" });
-    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const response = await fetch(url, { ...init, headers, redirect: "manual" });
+    if (![301, 302, 303, 307, 308].includes(response.status)) {
+      responseHeaders.set(response, headers);
+      return response;
+    }
     const location = response.headers.get("location");
-    if (!location) return response;
+    await response.body?.cancel();
+    if (!location) throw new Error("Source redirect has no destination.");
     if (redirect === maxRedirects) throw new Error("Zdroj překročil povolený počet přesměrování.");
-    url = await validateRemoteUrl(new URL(location, url).toString());
+    const next = await validateRemoteUrl(new URL(location, url).toString());
+    headers = redirectedHeaders(headers, url, next);
+    url = next;
   }
   throw new Error("Nepodařilo se zpracovat přesměrování zdroje.");
+}
+
+export function redirectedHeaders(input: HeadersInit, from: URL, to: URL): Headers {
+  const headers = new Headers(input);
+  if (from.origin === to.origin) return headers;
+  const forwarded = new Headers();
+  for (const name of ["accept", "accept-encoding", "accept-language", "range", "if-range", "user-agent"]) {
+    const value = headers.get(name);
+    if (value !== null) forwarded.set(name, value);
+  }
+  return forwarded;
 }
 
 export function publicAddon(addon: import("./types.js").AddonRecord) {
