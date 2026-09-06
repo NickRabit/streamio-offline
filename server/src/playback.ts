@@ -69,6 +69,8 @@ interface Session {
   claimed: boolean;
   /** Generace, ze které ještě chvíli po restartu obsluhujeme dobíhající požadavky. */
   retired?: { generation: number; directory: string; until: number };
+  /** The client refused the copied stream, so this session must never copy again. */
+  copyRejected?: boolean;
 }
 
 /** Main a Main 10 jsou pro prohlížeč dva různé kodeky. Desetibitový stream se nesmí kopírovat
@@ -103,12 +105,14 @@ const RETIRED_MS = 15_000;
 /** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
 const NOISE = /you should use tag|deprecated|Last message repeated|^\s*$/i;
-const describeFailure = (stderr: string, code: number | null) => {
+export const SOURCE_UNREACHABLE = "Zdroj se nepodařilo otevřít, neodpověděl nebo spojení odmítl.";
+
+export const describeFailure = (stderr: string, code: number | null) => {
   const lines = redact(stderr).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !NOISE.test(line));
   // "Server returned 400 Bad Request" je odpověď naší proxy na zdroj, který mlčí nebo odmítl
   // spojení. Beze slova o zdroji to vypadá jako chyba převodu, kterou nemá smysl hledat u nás.
   if (lines.some((line) => /Error opening input/i.test(line)) && lines.some((line) => /Server returned \d{3}/i.test(line))) {
-    return "Zdroj se nepodařilo otevřít, neodpověděl nebo spojení odmítl.";
+    return SOURCE_UNREACHABLE;
   }
   return lines.length ? lines.slice(-2).join(" ") : `FFmpeg skončil s kódem ${code}.`;
 };
@@ -251,6 +255,17 @@ export class PlaybackManager {
     return session.operations.run(() => this.restart(session, time, "Playback seek"));
   }
 
+  /** Prohlížeč odmítl, co mu server poslal. Opakovat totéž nemá cenu: kopie jde stranou
+   * a relace se rozjede znovu jako skutečný převod. */
+  async escalate(id: string, time: number) {
+    const session = this.require(id);
+    return session.operations.run(() => {
+      const first = !session.copyRejected;
+      session.copyRejected = true;
+      return this.restart(session, time, first ? "Copy refused by the client, transcoding instead" : "Playback restarted after another decode error");
+    });
+  }
+
   /** Přepnutí stopy nebo kvality znamená nové mapování či filtry, tedy restart od aktuální pozice. */
   async track(id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time?: number }) {
     const session = this.require(id);
@@ -260,7 +275,7 @@ export class PlaybackManager {
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
       // Návrat na originál může znovu splnit podmínky přímého přehrání.
-      if (session.quality === null && session.audioTrack === 0
+      if (session.quality === null && session.audioTrack === 0 && !session.copyRejected
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
         session.pendingKill = this.kill(session);
         session.mode = "direct"; session.offset = 0;
@@ -518,10 +533,12 @@ export class PlaybackManager {
     const video = session.info?.video?.codec ?? "";
     const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
     // Zvolená nižší kvalita vynucuje skutečné překódování; kopie by nesla původní rozlišení.
-    const copyVideo = session.quality === null
+    // A refused copy says the probe and the capability list disagreed with the real decoder.
+    // Which stream was to blame is unknowable from here, so both go through the encoder.
+    const copyVideo = !session.copyRejected && session.quality === null
       && ((video === "h264" && caps.h264 !== false) || (video === "hevc" && hevcPlayable(session.info?.video, caps)));
     const audioCapability = COPYABLE_AUDIO[audio];
-    return { copyVideo, copyAudio: Boolean(audioCapability && caps[audioCapability] === true) };
+    return { copyVideo, copyAudio: !session.copyRejected && Boolean(audioCapability && caps[audioCapability] === true) };
   }
 
   private async spawnAt(session: Session, offset: number): Promise<string> {
@@ -552,6 +569,8 @@ export class PlaybackManager {
       this.assertActive(session);
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
+      // A source that answers 404 will answer the same to the software attempt.
+      if (session.error === SOURCE_UNREACHABLE) break;
       if (hardware) {
         log("WARN", "VAAPI failed, falling back to a software conversion", { id: session.id, reason: session.error });
         // A driver that refuses twice will refuse every time, and each attempt costs the
@@ -587,7 +606,11 @@ export class PlaybackManager {
     // EVENT playlists have no live edge. Waiting for a second segment used to hide
     // hls.js stalling; liveDurationInfinity on the client makes one segment enough.
     for (let attempt = 0; attempt < 400; attempt += 1) {
-      if (session.stopped) { child.kill("SIGTERM"); break; }
+      if (session.stopped) {
+        child.kill("SIGTERM");
+        log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });
+        return undefined;
+      }
       try {
         const playlist = await readFile(ready, "utf8");
         if (hlsCanStart(playlist)) {

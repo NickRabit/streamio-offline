@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackManager, SerialOperations, hlsCanStart } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -281,4 +281,122 @@ test("mkv with subtitles still remuxes", async () => {
   assert.equal(spawned, true);
   assert.equal(started.mode, "remux");
   assert.equal(started.sidecarUrl, undefined);
+});
+
+const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => {
+  const session: Record<string, any> = {
+    id: "escalated", stream: { url: "https://cdn.example/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      container: "matroska,webm", duration: 3600,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [],
+    },
+    mode: "remux", generation: 1, offset: 0, hardware: false,
+    audioTrack: 0, subtitleTrack: null, quality: null,
+    lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: true,
+    ...overrides,
+  };
+  manager.sessions.set(session.id, session);
+  return session;
+};
+
+/** The real spawnAt settles the mode from the current plan; the stub has to do the same. */
+const stubSpawn = (manager: any, session: Record<string, any>, spawned: number[] = []) => {
+  manager.spawnAt = async (target: Record<string, any>, time: number) => {
+    spawned.push(time);
+    target.mode = manager.plan(session).copyVideo ? "remux" : "transcode";
+    target.offset = time;
+    return "/hls";
+  };
+  return spawned;
+};
+
+test("a copy the browser refused is transcoded instead, video and audio both", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = remuxSession(manager, { capabilities: { h264: true, ac3: true }, info: {
+    container: "matroska,webm", video: { codec: "h264" }, audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [],
+  } });
+
+  assert.deepEqual(manager.plan(session), { copyVideo: true, copyAudio: true });
+  session.copyRejected = true;
+  assert.deepEqual(manager.plan(session), { copyVideo: false, copyAudio: false });
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "libx264");
+  assert.equal(args[args.indexOf("-c:a") + 1], "aac");
+});
+
+test("escalate marks the session and restarts the conversion at the same spot", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = remuxSession(manager);
+  const spawned = stubSpawn(manager, session);
+
+  const restarted = await manager.escalate("escalated", 612);
+
+  assert.equal(session.copyRejected, true);
+  assert.equal(restarted.mode, "transcode");
+  assert.deepEqual(spawned, [612]);
+});
+
+test("escalate from direct play converts instead of handing the file over again", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = remuxSession(manager, { mode: "direct" });
+  stubSpawn(manager, session);
+
+  const restarted = await manager.escalate("escalated", 0);
+
+  assert.equal(restarted.mode, "transcode");
+  assert.equal(session.mode, "transcode");
+});
+
+test("a session that already transcodes is not escalated twice, only restarted", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = remuxSession(manager, { mode: "transcode", copyRejected: true });
+  const restarts = stubSpawn(manager, session);
+
+  await manager.escalate("escalated", 100);
+
+  assert.deepEqual(restarts, [100]);
+  assert.equal(session.mode, "transcode");
+});
+
+test("a track switch does not fall back to direct play the browser has already refused", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = remuxSession(manager, {
+    copyRejected: true, audioTrack: 1,
+    stream: { url: "https://cdn.example/movie.mp4" },
+    info: {
+      container: "mov,mp4,m4a,3gp,3g2,mj2", duration: 3600,
+      video: { codec: "h264" }, audio: { codec: "aac" },
+      audioTracks: [{ index: 0, codec: "aac" }, { index: 1, codec: "aac" }], subtitleTracks: [],
+    },
+  });
+  stubSpawn(manager, session);
+
+  const switched = await manager.track("escalated", { audio: 0, time: 30 });
+
+  assert.equal(switched.mode, "transcode");
+  assert.equal(session.mode, "transcode");
+});
+
+test("a source that answers 404 is not handed to FFmpeg a second time", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback-source") as any;
+  manager.vaapiDevice = "/dev/dri/renderD128";
+  const session = remuxSession(manager, { mode: "transcode", copyRejected: true });
+  let attempts = 0;
+  manager.run = async () => {
+    attempts += 1;
+    session.error = SOURCE_UNREACHABLE;
+    return undefined;
+  };
+
+  await assert.rejects(manager.spawnAt(session, 0), new RegExp(SOURCE_UNREACHABLE));
+  assert.equal(attempts, 1);
+});
+
+test("a conversion FFmpeg could not open is told apart from one the viewer walked away from", () => {
+  assert.equal(describeFailure("[http @ 0x1] HTTP error 404 Not Found\nError opening input: Server returned 404 Not Found\n", 8), SOURCE_UNREACHABLE);
+  assert.match(describeFailure("[libx264 @ 0x1] height not divisible by 2\n", 1), /height not divisible by 2/);
 });

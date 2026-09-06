@@ -4,7 +4,8 @@ import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Ga
 import { ApiError, api, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
-import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { detectCapabilities } from "./capabilities";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
@@ -106,27 +107,11 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
   </div>;
 }
 
-/** Prohlížeč sám nejlépe ví, co zvládne. Server podle toho rozhodne, co kopírovat a co překódovat. */
 const supports = (type: string) => {
   try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE není k dispozici */ }
   try { return document.createElement("video").canPlayType(type) !== ""; } catch { return false; }
 };
-const capabilities = (): Capabilities => ({
-  h264: supports('video/mp4; codecs="avc1.640029"'),
-  hevc: supports('video/mp4; codecs="hvc1.1.6.L93.B0"'),
-  // Main 10 je samostatný profil; hodně stažených souborů je desetibitových.
-  hevc10: supports('video/mp4; codecs="hvc1.2.4.L153.B0"'),
-  vp8: supports('video/webm; codecs="vp8"'),
-  vp9: supports('video/mp4; codecs="vp09.00.10.08"'),
-  av1: supports('video/mp4; codecs="av01.0.05M.08"'),
-  aac: supports('audio/mp4; codecs="mp4a.40.2"'),
-  mp3: supports('audio/mp4; codecs="mp4a.40.34"'),
-  opus: supports('audio/mp4; codecs="opus"'),
-  vorbis: supports('audio/webm; codecs="vorbis"'),
-  ac3: supports('audio/mp4; codecs="ac-3"'),
-  eac3: supports('audio/mp4; codecs="ec-3"'),
-  flac: supports('audio/mp4; codecs="flac"'),
-});
+const capabilities = (): Capabilities => detectCapabilities(supports, navigator.userAgent, navigator.maxTouchPoints);
 
 const MODE_LABEL: Record<PlaybackMode, string> = {
   direct: "PŘÍMÉ PŘEHRÁNÍ · BEZ PŘEVODU",
@@ -175,6 +160,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const catchupRef = useRef(0);
   const decodeRecoversRef = useRef<number[]>([]);
   const recoverFromDecodeRef = useRef<(reason: string) => void>(() => undefined);
+  /** Once playback is given up, the element and hls.js must stop, or they keep failing
+   * every few seconds and flood the log with the same error until the window is closed. */
+  const abandonedRef = useRef(false);
+  const escalateRef = useRef(false);
   const [sidecarReady, setSidecarReady] = useState(false);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
@@ -304,6 +293,21 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
 
+  /** Stop for good: with hls.js attached the element keeps refusing new segments and
+   * every failure is reported again, so the session has to be torn down, not just labelled.
+   * FFmpeg would otherwise keep converting and downloading for another five idle minutes. */
+  const abandon = (message: string) => {
+    if (abandonedRef.current) return;
+    abandonedRef.current = true;
+    detach();
+    const video = videoRef.current;
+    if (video) { video.pause(); video.removeAttribute("src"); video.load(); }
+    clearBuffering();
+    setError(message);
+    const id = sessionRef.current;
+    if (id) void api.stopPlayback(id).catch(() => undefined);
+  };
+
   const attach = (url: string, mode: PlaybackMode, autoplay = true) => {
     const video = videoRef.current; if (!video) return;
     detach();
@@ -320,7 +324,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       let recoveries = 0;
       hls.on(Hls.Events.FRAG_BUFFERED, () => { recoveries = 0; });
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (hlsRef.current !== hls) return;
+        if (hlsRef.current !== hls || abandonedRef.current) return;
         if (ignoreHlsErrorDuringRestart(seekInFlightRef.current)) return;
         report(data.fatal ? "ERROR" : "WARN", `hls.js: ${data.details}`, {
           ...context(), type: data.type, fatal: data.fatal,
@@ -337,7 +341,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
           recoverFromDecodeRef.current(data.details);
           return;
         }
-        setError(`Přehrávání selhalo: ${data.details} (${data.type})`);
+        abandon(`Přehrávání selhalo: ${data.details} (${data.type})`);
       });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
@@ -357,6 +361,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   });
 
   const applySession = (next: PlaybackSession, autoplay = true) => {
+    // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
+    abandonedRef.current = false;
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
@@ -370,7 +376,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; setSidecarReady(false);
+    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
     (async () => {
@@ -430,7 +436,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const video = videoRef.current; if (!video) return;
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
     setScrub(null); showTime(bounded);
-    if (modeRef.current === "direct") { video.currentTime = bounded; return; }
+    // A forced restart may be an escalation away from direct play, so it must reach the server.
+    if (modeRef.current === "direct" && !forceRestart) { video.currentTime = bounded; return; }
     const token = ++catchupRef.current;
     const relative = bounded - offsetRef.current;
     const end = video.seekable.length ? video.seekable.end(video.seekable.length - 1) : 0;
@@ -463,7 +470,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         const requested = pendingSeekRef.current; pendingSeekRef.current = null;
         let recoveredDirectAt: number | null = null;
         let next: PlaybackSession;
-        try { next = await api.seekPlayback(id, requested); }
+        const escalating = escalateRef.current; escalateRef.current = false;
+        try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
           const message = value instanceof Error ? value.message : String(value);
           if (!message.includes("Relace přehrávání už neexistuje")) throw value;
@@ -495,16 +503,16 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
 
   recoverFromDecodeRef.current = (reason: string) => {
-    if (seekInFlightRef.current || modeRef.current === "direct") {
-      setError("Prohlížeč nedokázal přehrát tento stream.");
-      return;
-    }
-    if (!canRecoverDecode(decodeRecoversRef.current)) {
-      setError("Prohlížeč nedokázal přehrát tento stream.");
+    // A restart is already on its way; whatever it produces decides the next step.
+    if (abandonedRef.current || seekInFlightRef.current) return;
+    const action = planDecodeRecovery(modeRef.current, decodeRecoversRef.current);
+    if (action === "give-up") {
+      abandon("Prohlížeč nedokázal přehrát tento stream.");
       return;
     }
     decodeRecoversRef.current = recordDecodeRecover(decodeRecoversRef.current);
-    report("WARN", `Restarting conversion after a decode error (${reason})`, context());
+    escalateRef.current = action === "escalate";
+    report("WARN", `Restarting conversion after a decode error (${reason})`, { ...context(), action });
     void seekTo(timeRef.current, true);
   };
 
@@ -758,14 +766,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
         onError={() => {
-          if (seekInFlightRef.current) return;
+          if (seekInFlightRef.current || abandonedRef.current) return;
           const media = videoRef.current?.error;
           report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
             ...context(), code: media?.code, detail: media?.message,
             networkState: videoRef.current?.networkState, readyState: videoRef.current?.readyState,
           });
           if (media?.code === 3) { recoverFromDecodeRef.current("element"); return; }
-          setError("Prohlížeč nedokázal přehrát tento stream.");
+          abandon("Prohlížeč nedokázal přehrát tento stream.");
         }}>
         {sidecarReady && session?.sidecarUrl
           ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label="Titulky" default />

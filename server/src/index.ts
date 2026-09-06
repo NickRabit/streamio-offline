@@ -1067,6 +1067,7 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   res.status(201).json(started);
 }));
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
+app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(await playback.escalate(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
   audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
   subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
