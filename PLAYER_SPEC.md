@@ -1,314 +1,420 @@
-# Player improvements taken from stremio-web
+# Proxy-safe playback and player improvements
 
-Technical specification. Compares the upstream Stremio web client
-(`Stremio/stremio-web`, v5.0.0-beta.39) with the player in this project and
-describes what is worth adopting, how, and in what order.
+Status: proposed technical specification; no runtime changes implemented.
+Reviewed on 2026-09-06. This document revises the proposals in
+[PR #29](https://github.com/NickRabit/streamio-offline/pull/29), including its
+binding proxy requirement. It is intended to replace that PR's specification,
+not to become a second, conflicting implementation plan.
 
-## 0. Binding constraint: source addresses never reach the client
+## 1. Evidence and scope
 
-Everything below is subject to one rule: **the browser must never see a source
-address, and never see the headers that authorise it.** All traffic goes through
-`/api/proxy`, so the provider only ever sees the server. A URL or token that
-leaks into the page can be copied out of devtools, an extension, history or a
-screenshot and replayed from another address, which is what gets an account or a
-debrid token banned.
+The comparison is based on source inspection, not a playback benchmark:
 
-### 0.1 Where we break that rule today
-
-| Leak | What the browser gets |
-| --- | --- |
-| `GET /api/streams/:type/:id` | the addon's `Stream` objects verbatim, including `url` and `behaviorHints.proxyHeaders` |
-| Direct play descriptor | `describe()` returns `proxyPath(stream)`, i.e. `/api/proxy?url=<source>&headers=<base64 of the auth headers>`, and that string becomes the `<video>` source |
-| Proxied HLS playlists | `/api/proxy` rewrites every playlist line to `/api/proxy?url=…`, so in direct mode the source address is repeated per segment |
-| `GET /api/subtitle?url=…` | the addon's subtitle address |
-| `GET /api/library/file?path=…` | the absolute path inside the container |
-
-The bytes already flow through us, so the provider sees one address. The exposure
-is that the credential itself is handed to the client, and its reuse from
-elsewhere is not something we can detect or revoke.
-
-### 0.2 P0 — opaque handles
-
-Ship this before any of the player work below; the seek work in P1 touches the
-same descriptors.
-
-1. **Mint a handle instead of a URL.** Sealed token, not a stored map: the
-   handle is `base64url(AES-256-GCM(JSON{url, proxyHeaders, addonKey, addonName,
-   title, exp}))` under a key kept in the data directory (generated on first
-   boot, never in a backup export). Stateless, so it survives a server restart
-   mid-playback, and expiry is inside the sealed payload.
-2. **`/api/streams` returns `handle` in place of `url`,** plus the booleans the
-   UI actually uses (`playable`, `p2p`, `external`). The client already treats
-   `stream.url` only as "is this playable" plus `file://` bookkeeping, so this is
-   a narrow change on the client.
-3. **`/api/inspect`, `/api/playback`, `/api/downloads` and the device download
-   accept `handle`** instead of a whole `Stream`. The server resolves it; nothing
-   about the source crosses back.
-4. **`/api/proxy` stops accepting `?url=` from the browser.** It takes `?h=`
-   only. The raw form stays for internal callers — FFmpeg and the download queue
-   go through localhost with `INTERNAL_TOKEN` — and is rejected on any request
-   that is not internal. Playlist rewriting emits `?h=` handles derived from the
-   same sealed key.
-5. **`/api/subtitle` and `/api/library/file` take handles too** (a library
-   handle seals the relative path, so the container layout stays private).
-6. Handles are bound to the logged-in session and expire (a few hours is enough
-   to cover one playback with restarts). An expired handle returns 410 and the
-   client re-fetches the stream list, which is what it already does when a
-   session disappears.
-
-**Tests:** an e2e assertion that no response body served to the browser matches
-the fake addon's source host, and a unit test that `/api/proxy?url=…` without the
-internal token is refused.
-
-**Effect on the rest of this document:** all session URLs (`/api/playback/<id>/
-<generation>/master.m3u8`) are already opaque, so P1-B and P1-C are unaffected.
-P1-A is client-only. The one place to watch is direct play — it is the mode that
-puts a proxy address straight into the `<video>` element, so it must be the first
-consumer of handles.
-
-
-## 1. Why the upstream player feels faster
-
-The two clients solve a different problem, and most of the perceived difference
-comes from three decisions rather than from better code.
-
-### 1.1 Different transport
-
-| | stremio-web | stremio-offline |
+| Source | Revision | Relevant implementation |
 | --- | --- | --- |
-| Playback source | `@stremio/stremio-video` picks an implementation per stream: `HTMLVideo` against the streaming server (plain HTTP with byte ranges), `HlsVideo` only when the browser cannot take the file | always our own server: direct play for MP4/WebM with playable codecs, otherwise an FFmpeg HLS session |
-| Seek | `video.currentTime = t` — the browser issues an HTTP range request | inside the produced playlist: native; outside it: HTTP call to the server, FFmpeg is killed and respawned with a new `-ss` |
-| Track switching | handled inside one session | FFmpeg restart |
+| stremio-offline | `fa85b8ae13cd64448c4e58b3b5b3278dd494df2c`, v0.3.12 | `web/src/Player.tsx`, `player-hls.ts`, `capabilities.ts`, `api.ts`; `server/src/playback.ts`, `probe.ts`, `index.ts`, `security.ts`, `downloads.ts`, `auth.ts` |
+| Local stremio-web checkout | `07553095e1c2f46f677e4ad341faa1dcb90fa760`, v5.0.0-beta.39 | `src/routes/Player/useKeyboardSeek.ts`, `useVideo.js`, `Player.js`, `useMediaSession.ts`, `subtitleDelay.ts`, `ControlBar/SeekBar/SeekBar.js` |
+| Existing proposal | PR #29, `d0af368` | `PLAYER_SPEC.md` |
 
-The upstream client rarely pays for a seek because the streaming server hands it
-a file the browser can seek in. Our server converts, so every seek outside the
-produced range costs a process restart. That gap cannot be closed by the UI
-alone, but most of the *felt* latency can be: today a single arrow key press
-already commits a restart.
+Pinned upstream references:
+[keyboard seeking](https://github.com/Stremio/stremio-web/blob/07553095e1c2f46f677e4ad341faa1dcb90fa760/src/routes/Player/useKeyboardSeek.ts),
+[video adapter](https://github.com/Stremio/stremio-web/blob/07553095e1c2f46f677e4ad341faa1dcb90fa760/src/routes/Player/useVideo.js),
+[player interaction and next episode](https://github.com/Stremio/stremio-web/blob/07553095e1c2f46f677e4ad341faa1dcb90fa760/src/routes/Player/Player.js),
+[Media Session](https://github.com/Stremio/stremio-web/blob/07553095e1c2f46f677e4ad341faa1dcb90fa760/src/routes/Player/useMediaSession.ts),
+[subtitle delay](https://github.com/Stremio/stremio-web/blob/07553095e1c2f46f677e4ad341faa1dcb90fa760/src/routes/Player/subtitleDelay.ts).
 
-### 1.2 The UI never waits for the transport
+Upstream delegates playback to `@stremio/stremio-video` 0.0.96. The inspected
+wrapper does not prove which transport a particular upstream playback uses,
+how often it transcodes, or that its streaming server seeks faster. Record the
+actual implementation in any benchmark. A synchronous dispatch also does not
+prove lower media latency; awaiting a promise does not block the JavaScript
+thread. Our player already previews time with `showTime(bounded)` before waiting.
 
-`useVideo.js` dispatches `setProp` and returns immediately; state arrives back
-through `propChanged` events. Our `seekTo()`
-([Player.tsx:435](web/src/Player.tsx:435)) `await`s a REST round trip that
-internally contains an FFmpeg spawn plus the wait for the first segment
-([playback.ts:600](server/src/playback.ts:600), up to 40 s). Any UI element bound
-to that promise is blocked for as long as the conversion takes.
+### Confirmed opportunities and existing strengths
 
-### 1.3 Seeks are debounced and previewed
+| Area | Observed behavior | Implication |
+| --- | --- | --- |
+| Initial playback | `start()` awaits `inspect()` before choosing a mode; probing can take a 20 s fast pass and a 45 s deep pass | Measure probing separately from conversion and browser startup |
+| Existing probe reuse | `App.tsx` inspects the selected source; `PlaybackManager.inspect()` caches for 10 minutes and shares in-flight work by URL | Preserve this; simply adding a cache or an eager inspection is not new work |
+| Direct playback | Compatible MP4/WebM uses our HTTP proxy; local files use the library route; embedded subtitles can use a sidecar | Preserve this fast path and its decode-error escalation |
+| HLS seeking | `planSeek()` uses native seeking within the produced interval, waits up to 8 s when at most 20 s ahead, otherwise restarts | Repeated keys do not necessarily cause a restart each; distinguish native, wait and restart outcomes |
+| Seek concurrency | Client retains the latest pending target while a request is active; server serializes operations | Improve supersession without removing existing race protection |
+| Keyboard UX | Upstream has an accumulated preview target, hold acceleration and release/flush behavior | Adapt its interaction model; do not copy timing behavior without gesture tests |
+| HLS startup | Server already waits for one usable segment; debug logs already include segment-ready timing | Extend observability rather than claim these mechanisms are absent |
+| Resource control | MSE buffer limits, upstream abort on client disconnect, hardware fallback and bounded decode recovery already exist | Keep these invariants during optimization |
 
-`useKeyboardSeek.ts` is the single most valuable thing to copy:
+## 2. P0: mandatory proxy boundary
 
-* a key press only moves a *preview* target and marks `seeking`;
-* the real seek is committed by a 300 ms debounce, so a burst of presses
-  produces **one** commit;
-* holding a key accelerates the step by 1.05× per repeat, capped at 10 % of the
-  duration, so crossing an episode takes a few presses instead of dozens;
-* the preview target is cleared 1500 ms after the last commit, so the timeline
-  never snaps back mid-gesture.
+**Clients must never receive original Real-Debrid media URLs, source authorization
+headers or provider credentials. Every provider media request must originate
+from the server, including direct play, probing, downloads, subtitles, HLS keys
+and segments. No error or fallback may redirect a client to the provider.**
 
-Our arrow keys call `seekTo()` directly ([Player.tsx:736](web/src/Player.tsx:736)).
-Five presses can mean up to five FFmpeg restarts; the client-side
-`pendingSeekRef` loop coalesces only the ones that arrive while a restart is
-already in flight.
+Here, `direct` means no FFmpeg conversion, not browser-to-provider access.
+This requirement applies to mobile browsers and any future external player or
+casting receiver. A proxy does not itself guarantee protection from provider
+account restrictions: operations must also use the intended stable server egress,
+including IPv4/IPv6 and any VPN configuration. This is an architectural
+constraint, not a claim about a verified provider ban policy.
 
-## 2. Proposed work
+### 2.1 Confirmed exposure and audit boundary
 
-Priorities: **P0** (section 0.2) blocks everything else, **P1** is the
-perceived-speed work, **P2** is feature parity that users notice, **P3** is
-structural.
+| Surface | Current state | Required change |
+| --- | --- | --- |
+| `/api/streams/:type/:id` | Returns addon stream objects, including `url`, nested subtitles and `behaviorHints.proxyHeaders` | Explicit public DTO with opaque source IDs |
+| Direct descriptor / `/api/proxy` | `proxyPath()` includes URL-encoded source and base64url headers | Same-origin opaque resource route; encoding is not secrecy |
+| Proxied HLS | Rewrites segment lines and `URI` attributes into raw `?url=` proxy addresses | Rewrite the complete supported playlist resource graph to opaque resources |
+| `/api/subtitles` and `/api/subtitle` | Subtitle list contains upstream addresses; browser sends `?url=` | Subtitle IDs and server-side resolution |
+| External-source UI | `App.tsx` renders `externalUrl` as a browser link | No provider links or client-side fallback; unsupported protected streams show a reason |
+| Library playback | `file://` source becomes `/api/library/file?path=` | Opaque library item IDs; local path exposure is distinct from an RD credential leak |
+| Device download | Returned download URL already uses a random ticket, but preparation accepts a raw stream | Reuse the ticket pattern; change preparation input and add owner binding |
+| Download list | `publicJob()` already removes `stream` and `source` | Preserve this; audit error strings, titles and all other public fields |
 
----
+Audit metadata, addon manifests, stream labels, artwork, progress, diagnostics,
+stats, logs, subtitle text and settings/addon exports as additional response
+surfaces. Do not claim each currently leaks a media URL without a reproducer.
+The logger already redacts ordinary HTTP URLs and sensitive keys, but that is
+not a guarantee for relative, percent-encoded or base64-encoded payloads.
+Generic error handlers must never return raw upstream exceptions or FFmpeg args.
 
-### P1-A — Debounced, optimistic seeking (client)
+Public serializers must allowlist fields and sanitize provider-controlled text,
+including nested URLs and credential-bearing strings. Drop unknown fields.
+Structured normalization is the primary defense; regex redaction is a secondary
+defense. Security fixtures must cover credentials inserted into otherwise
+allowed labels. Credential-bearing addon configuration must remain server-side:
+review settings exports and show a redacted configuration summary instead of
+returning stored provider secrets. Initial user-supplied configuration is input,
+not permission to echo its credentials back later.
 
-**New module** `web/src/player-seek.ts`, pure and unit-tested like
-`player-hls.ts`:
+### 2.2 Proposed API and resource ownership
+
+Prefer random 256-bit IDs referencing a bounded server-side resource registry
+for the first implementation. The existing device-download ticket map is a
+useful starting pattern. Unlike the sealed-token proposal in PR #29, this makes
+revocation, ownership and resource scope explicit and keeps URLs short.
 
 ```ts
-export const SEEK_COMMIT_MS = 300;      // debounce before the request goes out
-export const SEEK_PREVIEW_MS = 1500;    // how long the preview target survives
-export const HOLD_ACCELERATION = 1.05;  // per repeat while a key is held
-export const MAX_HOLD_FRACTION = 0.1;   // cap of one step, of the duration
-
-export function nextHoldStep(current: number | null, offset: number, duration: number): number | null;
-export function clampTarget(target: number, duration: number): number;
-```
-
-`nextHoldStep` returns `null` when the direction flips (upstream ignores the
-press instead of reversing an accelerated run).
-
-**Player integration** (`web/src/Player.tsx`):
-
-1. Add `seekTargetRef` / `seekTarget` state. Arrow keys, the −10/+10 buttons and
-   `TimelineBar` scrubbing write into it and call `revealControls()`.
-2. Render `seekTarget ?? scrub ?? time` in the timeline and the time label, so
-   the position moves at input speed regardless of the transport.
-3. Commit through a debounce; a commit calls the existing `seekTo()`.
-4. `cancel()` on unload, source change and `escalate`; `flush()` on
-   `pointerup`/`keyup` so a deliberate release is not delayed by the full 300 ms.
-5. Keep the buffering spinner suppressed while a preview target is pending —
-   upstream shows the target instead of a spinner, which reads as instant.
-
-**Tests** (`web/src/player-seek.test.ts`): step acceleration, cap, direction
-flip, clamping against `duration`, and that N presses inside the debounce window
-produce one commit.
-
-**Expected effect:** holding ← for two seconds turns from "up to ~10 FFmpeg
-restarts" into one, and the timeline responds within a frame.
-
----
-
-### P1-B — Reuse already produced output instead of restarting
-
-The HLS playlist is `EVENT` with `-hls_list_size 0`
-([playback.ts:718](server/src/playback.ts:718)), so **every segment a generation
-ever produced is still on disk** until the generation is purged. Two
-consequences we do not exploit:
-
-1. **Backward seeks inside the current generation already work natively** —
-   `planSeek` returns `native` for anything `>= 0` relative and inside the
-   playlist, which is correct. Verify with a test that a seek from 30:00 back to
-   02:00 in a session started at 00:00 does *not* hit the server.
-2. **Backward seeks into a retired generation currently restart.** After a seek
-   to 40:00, seeking back to 05:00 respawns FFmpeg even though the old
-   generation still has that range on disk for `RETIRED_MS`.
-
-**Change (server):** track per generation the range it produced
-(`{ generation, directory, from, until, playlistEnd }`) and keep a bounded list
-of them (say the last three) instead of a single `retired` slot. In
-`PlaybackManager.seek()`, before restarting, look for a generation whose
-`[from, playlistEnd]` covers the target; if one exists, return a descriptor
-pointing at that generation's `master.m3u8` with its `offset` and no FFmpeg work
-at all. Extend that generation's lifetime while it is the active one.
-
-The client already handles a descriptor with a different `offset` and URL
-(`applySession`, [Player.tsx:363](web/src/Player.tsx:363)), so this is a
-server-side change plus one client guard: do not tear down the running
-generation when the server hands back an older one that is still being written.
-
-**Cost:** disk. Bound it by purging generations beyond the newest three, or
-beyond a total segment budget.
-
----
-
-### P1-C — Cut the restart's time to first frame
-
-* `-hls_init_time 1` (FFmpeg hls muxer) makes the *first* segment one second
-  instead of two, so `hlsCanStart` succeeds roughly twice as early. Verify the
-  flag against the FFmpeg build in the image before shipping; keep `hls_time` at
-  2 for the rest.
-* Make the encoder preset for the **first** restart configurable and default to
-  something faster than `veryfast` for transcode sessions
-  ([playback.ts:702](server/src/playback.ts:702)); the first two seconds decide
-  the felt latency, the steady state can be slower.
-* **Abort a superseded spawn.** `SerialOperations` serialises restarts, but a
-  queued restart still waits for the previous `run()` to finish its up-to-40 s
-  polling loop ([playback.ts:600](server/src/playback.ts:600)). Give the session
-  a `restartToken`; when a newer restart is enqueued, bump the token, and let the
-  polling loop bail out and `SIGKILL` its child as soon as its token is stale.
-  With P1-A this is rare, but it removes the worst case entirely.
-* Log the time from request to first segment per restart so the effect is
-  measurable in `/api/stats` and in the diagnostics log.
-
----
-
-### P2-A — Next episode and binge watching
-
-Upstream: `NextVideoPopup` opens when `duration - time <=
-settings.nextVideoNotificationDuration`, is dismissible, and on `ended`
-navigates to the next episode when `bingeWatching` is on
-(`src/routes/Player/Player.js`).
-
-Ours ends playback and closes. Add:
-
-* a `nextVideo` prop on the player, filled by `App.tsx` from the selected
-  series' episode list (the data is already there — `selected.videos`);
-* a popup in the last N seconds (setting, default 30, 0 = off) with a countdown
-  and "Play now" / "Dismiss";
-* on `ended`: autoplay the next episode when the setting is on, otherwise close;
-* progress bookkeeping for the finished episode before switching.
-
-### P2-B — Media Session API
-
-`useMediaSession.ts` sets `navigator.mediaSession.metadata`, `playbackState` and
-action handlers. Cheap, and it makes hardware keys, the macOS Now Playing panel
-and phone lock screens work. Reuse the poster we already pass as
-`progressPoster`.
-
-### P2-C — Player controls we are missing
-
-| Feature | Upstream | Notes for us |
-| --- | --- | --- |
-| Playback speed | `SpeedMenu` | `video.playbackRate`; works in every mode, including HLS |
-| Video scale | `contain` / `cover` / `fill` cycling | pure CSS `object-fit` on the `<video>` |
-| Subtitle delay / size / position | `subtitleDelay.ts`, `useSubtitles.ts` | delay matters most for addon subtitles; applies to our VTT cues |
-| Statistics overlay | `StatisticsMenu` | we have a Stats *page*; an in-player overlay with mode, hardware flag, buffer length, dropped frames and restart count would shorten every playback bug report |
-| Volume | 0–200 % with a boost indicator | ours is a plain 0–100 range that is not persisted; persist it and remember mute |
-| Immersion | 3 s debounce, cancelled over the control bar, cleared on mouse leave | ours reveals on any pointer event; adopt the "control bar prevents immersion" rule |
-| Click / double click | click toggles play through a 200 ms debounce so a double click only toggles fullscreen | we have no click-to-pause at all |
-| Seek durations | `seekTimeDuration` and `seekShortTimeDuration`, Shift picks the short one | ours is hardcoded to 10 s |
-
-### P2-D — Non-fatal errors
-
-Upstream splits `error.critical`: critical replaces the player, everything else
-becomes a toast (`src/routes/Player/Player.js`).
-Our `setError` is terminal for the session. Classify: source/permission and
-"conversion could not start" stay fatal; a recovered decode error, a subtitle
-that failed to load, or a track switch that failed should be a toast over
-continuing playback.
-
----
-
-### P3 — A transport facade
-
-Upstream's real structural advantage is that `Player.js` talks to a `Video`
-object with `props` and events, never to `hls.js`. Ours mixes UI state,
-`hls.js` wiring, session lifecycle and error recovery in one 843-line component,
-which is why the HLS refs (`seekEpochRef`, `seekInFlightRef`,
-`pendingSeekRef`, `abandonedRef`, …) leak into rendering code.
-
-Proposal, only after P1: extract `web/src/player/transport.ts` exposing
-
-```ts
-interface Transport {
-  load(session: PlaybackSession, opts: { autoplay: boolean }): void;
-  setTime(time: number): void;      // fire and forget
-  setPaused(paused: boolean): void;
-  destroy(): void;
-  on(event: 'time' | 'buffering' | 'error' | 'ended' | 'session', cb): void;
+interface PublicStream {
+  sourceId: string;
+  kind: "remote" | "library" | "unsupported";
+  playable: boolean;
+  name?: string;
+  title?: string;
+  addonKey?: string;
+  size?: number;
+  languages?: string[];
+  subtitles: Array<{ subtitleId: string; lang?: string; label?: string }>;
 }
 ```
 
-with two implementations (`DirectTransport`, `HlsTransport`) behind one
-interface. `Player.tsx` then holds view state only, and the seek state machine
-from P1-A becomes testable without a DOM `<video>`.
+Internal records contain the normalized URL/path, permitted request headers,
+source identity, owner auth `sid`, scope, expiry, addon attribution and revision.
+They never become public DTOs. Update `web/src/types.ts`, `server/src/types.ts`,
+stream filtering/ranking, library resume and download actions together.
 
----
+| Operation | Proposed client contract |
+| --- | --- |
+| Inspect | `POST /api/inspect { sourceId }` |
+| Start | `POST /api/playback { sourceId, capabilities, time, requestId }` |
+| Save to library / device | Existing POST routes accept `sourceId` or `libraryItemId`, never a raw stream |
+| Subtitle | `GET /api/subtitle/:subtitleId?offset=...` |
+| Remote bytes / nested HLS resource | `GET /api/media/:resourceId` with normal session authentication |
+| Local file | `GET /api/library/file/:libraryItemId` with authorization and containment checks |
+| Converted playback | Existing opaque playback/generation routes, with explicit owner checks |
 
-## 3. What is deliberately *not* adopted
+Reject old public `url`, `headers`, `stream`, and arbitrary `path` input shapes
+after coordinated server/client deployment; never silently keep the unsafe API
+for compatibility. Administrative file-management APIs need their own
+containment checks and ID migration; renaming the playback route alone does not
+hide paths throughout the application.
 
-* **`stremio-core-web` / WASM core** — upstream keeps library, addons and player
-  state in a Rust core. We have an Express server for that; adopting it would
-  mean giving up the offline/download model.
-* **Chromecast, Discord presence, gamepad, shell integration** — no audience in
-  a self-hosted browser client.
-* **`@stremio/stremio-video`** as a dependency — it is built around the Stremio
-  streaming server's endpoints (`/hlsv2`, `/probe`) and its own settings model;
-  the useful parts are behavioural, not code we can import.
-* **Spatial navigation polyfill** — only worth it if TV-browser support becomes
-  a goal.
+Resource lifecycle:
 
-## 4. Suggested order
+1. Unclaimed source IDs expire after 30 minutes. Bound inactive entries by count
+   and estimated bytes, deduplicate within an owner/source revision, and rate-limit
+   creation. Initial limits: 2,000 entries and 16 MiB per server; tune from metrics.
+2. Playback claims a source into its session. Renew media access through the
+   authorized active playback lifecycle, so a long movie does not stop because
+   its stream-list ID expired. No renewal past authentication expiry/revocation.
+3. Each resource has a scope: source selection, playback media, subtitle,
+   library or device download. A segment ID cannot be used to create a download
+   job or resolve an unrelated URL. Child resources inherit the owner and parent
+   lifecycle. Deduplicate playlist children; budget overflow fails safely.
+4. Check owner, scope and current authorization on every access, including HLS
+   init, segment, key and sidecar routes. Unknown or foreign IDs return 404;
+   known expired IDs return 410; unauthenticated requests return 401.
+5. Logout revokes access and stops owned playback work. Saved server download
+   jobs retain their internal source independently of browser handle expiry.
+   Device tickets remain bounded and expire after the existing 24-hour maximum.
+6. In-memory handles and playback sessions do not survive a server restart.
+   Return a structured expiration code; client re-fetches sources and recovers
+   once at saved absolute time with tracks/preferences where still available.
+   Existing missing-session recovery does not already implement handle renewal.
+   Require reselection if the same source cannot be identified safely.
 
-0. P0 — opaque handles, before anything that touches playback descriptors
-1. P1-A (client only, no server risk, biggest felt win)
-2. P1-C (small, measurable)
-3. P1-B (real work, removes the last common restart)
-4. P2-A, P2-B, P2-C in that order
-5. P2-D alongside whichever of the above touches error handling
-6. P3 once the seek state machine is settled
+If persistent sealed tokens are later needed, specify authenticated encryption
+with a version, key ID, unique nonce, authentication tag, owner, purpose and
+expiry, plus key rotation and revocation. Persistent tokens alone do not preserve
+FFmpeg processes or generated playlists; current `PlaybackManager.load()` clears
+its playback directory. Do not introduce custom cryptography just for caching.
 
-Each step keeps `npm test` green and is verifiable through the existing
-Playwright journeys; P1-B needs a new e2e case that seeks forward and then back
-and asserts no second FFmpeg start in the log.
+### 2.3 Proxy transport requirements
+
+- Remove raw public proxy URL resolution. Prefer an internal registry ID for
+  FFmpeg too; narrow internal authorization to required media routes. A valid
+  login cookie or spoofed forwarded header must not grant internal privileges.
+  Never include `INTERNAL_TOKEN` in browser-visible URLs or diagnostics.
+- Resolve redirects on the server, validate every target and enforce the
+  configured outbound policy. Preserve the current redirect count limit; cancel
+  intermediate bodies. Do not forward client cookies, Authorization or
+  `X-Forwarded-For` to the provider. Provider headers come only from the record;
+  strip sensitive headers across origins unless explicitly approved for that
+  source's redirect/CDN relationship.
+- Parse and rewrite supported HLS master/media playlists, variants, audio,
+  subtitles, initialization maps, keys and URI-bearing extensions. Resolve
+  relative links against the final upstream URL. Remove nonessential upstream
+  metadata; reject unsupported URI-bearing constructs or protocols rather than
+  returning them unchanged. DASH needs its own manifest rewriter before support.
+- Preserve byte-range behavior (200, 206, 416, `Content-Range`, `Accept-Ranges`,
+  correct length and HEAD semantics). Never buffer a whole movie in memory.
+  Preserve backpressure and cancellation on seek, stop and disconnected clients.
+- Allowlist response headers. Never relay upstream `Location`, `Set-Cookie`,
+  `Link`, authentication challenges or diagnostic bodies. Use sanitized errors.
+  Use `private, no-store` for sensitive DTOs/manifests/keys; authenticated media
+  caches must never be shared publicly. Review the current `public` segment cache
+  headers; allow private segment caching only with deliberate revocation behavior.
+- Validate destination DNS/address policy at connection time, not solely before
+  a separate DNS lookup by fetch. Keep explicit private-addon allowances scoped;
+  handles do not remove SSRF risk from malicious addon responses.
+- Test one stable provider-facing egress for probe, playback and downloads.
+  Add shared per-provider media admission control if measurements show contention;
+  the current short-request addon guard intentionally excludes media transfers.
+  Do not solve startup latency by unlimited parallel ranges or probing all sources.
+
+### 2.4 Release gate: no-leak tests
+
+Use an isolated fake addon/provider with unique host, URL path, query secret and
+header secret canaries. No real RD credentials or account traffic is needed.
+
+1. Capture browser request URLs, response bodies/headers, console, DOM, storage,
+   and worker traffic for source selection, playback, seek, recovery, subtitles,
+   downloads, diagnostics and exports. Assert no source address or credential
+   appears in plaintext, percent encoding or base64/base64url. Inject secrets
+   into nested metadata as well as the normal URL/header fields.
+2. Assert the browser/receiver makes zero provider-origin requests, including
+   redirects, artwork/metadata injection and failure fallbacks. Assert the fake
+   provider only observes the server's configured network egress.
+3. Exercise nested HLS variants, alternate audio, subtitles, encryption keys,
+   init maps, redirects and unsupported URI constructs. Every supported resource
+   must resolve through an owned opaque route; unsupported cases fail closed.
+4. Exercise forged/foreign/expired IDs, logout, server restart and cross-scope
+   reuse; old raw routes and forged internal access must fail.
+5. Verify seek/range correctness, disconnect abort and slow-consumer memory use.
+   Test errors at every upstream stage without exposing canaries in public logs.
+
+## 3. Measure before claiming faster playback
+
+Add a safe correlation ID and structured stage timings: source selection,
+probe cache hit/miss and fast/deep duration, mode choice, spawn, first finalized
+segment, descriptor response, manifest/init load and first rendered frame.
+Measure frame presentation with `requestVideoFrameCallback` where available;
+use a documented weaker fallback elsewhere. `playing` alone is not proof of a
+rendered frame. Measure seek input-to-preview, commit-to-frame, absolute target
+error, stalls, restart count, canceled work, CPU, memory, disk and provider bytes.
+
+Run at least 20 trials per scenario with cold and warm caches separately. Use
+the same legal test media, network path and device: MP4/H.264/AAC, compatible
+WebM, MKV copy/remux, HEVC Main10, incompatible audio, software and available
+hardware transcode, local library and remote proxy. Cover desktop Chromium,
+Firefox, macOS Safari and a real iPhone/iPad; mark unavailable hardware untested.
+Test first play, resume far into the file, a two-second key hold, five taps,
+forward seek, backward seek and track/quality change. Report median and p95.
+
+Compare upstream only with synthetic/non-secret sources. Record its actual
+transport and backend. An upstream browser fetching RD directly is forbidden
+even as a benchmark, and results using different transport paths must be labeled.
+
+Proposed acceptance budgets, to be confirmed on baseline hardware: preview p95
+under 50 ms, one commit for a continuous key hold, no FFmpeg start for a covered
+native seek, and at least 20% lower p95 in the stage targeted by a performance
+change without more than 10% regression in other playback modes. These are
+targets, not measured results or universal latency promises.
+
+## 4. P1: perceived speed and startup
+
+### P1-A: gesture-aware seeking
+
+Extract a tested seek controller with states `idle`, `previewing`, `committing`,
+`waiting-for-media`, `failed`. Keep absolute desired time separate from confirmed
+media time and generation-relative time. All user seek inputs use it.
+
+- Arrow hold accumulates a preview; commit once on release. A 300 ms inactivity
+  debounce handles discrete button/tap bursts and missing-release recovery.
+  Do not flush on every discrete keyup while claiming five taps always coalesce;
+  specify and test hold and tap semantics separately. Blur/unmount cancels holds.
+- Pointer scrubbing previews during drag and commits on pointerup. A click or
+  accessibility absolute seek commits once. Native direct seeking need not pay
+  the remote-restart debounce after a completed gesture.
+- Optional hold acceleration starts at the configured step, grows by 1.05 per
+  repeat and caps at 10% of known duration. A direction change resets acceleration
+  and moves in the new direction; this deliberately differs from upstream's
+  ignored reverse press. Handle unknown duration and non-finite input explicitly.
+- Retain the desired target until the corresponding media frame is reached or
+  the operation fails; a fixed 1,500 ms timer must not snap the UI back during a
+  slow server seek. Preserve paused state and the last frame; show truthful
+  buffering after a short grace interval instead of hiding it indefinitely.
+- Cancel obsolete work on source change, close and decode escalation. Ignore
+  stale responses by request revision and session identity. Save confirmed
+  playback progress, not an uncommitted preview target.
+
+Tests: fake-clock gesture sequences, target clamping, reverse direction, pause,
+blur, stale responses and a new target during an existing seek. Preserve native
+and ahead-wait behavior from `player-hls.ts` and existing decode-loop tests.
+
+### P1-B: latest request wins, including on the server
+
+Client-side coalescing alone cannot cancel the active server restart: currently
+the client waits before sending another one. Add a monotonically increasing
+operation revision to seek/track/escalation requests, with a way to submit a
+newer desired operation while the older request is pending. The server records
+supersession before the serialized work queue, drops obsolete queued operations
+and aborts their startup polling/processes. Browser fetch abort alone is not a
+server cancellation protocol. Closing a player also cancels probe/start work.
+
+Maintain at most one intended producer per session. Terminate the old process
+gracefully, then force-kill after a bounded timeout; await exit before reclaiming
+resources. Child callbacks may update only their own generation/revision.
+Cancellation is not a conversion failure and must not trigger retries, software
+fallback or the VAAPI failure counter. New seeks retain the latest desired
+track/quality and `copyRejected` state; they must not undo decode escalation.
+
+Tests: a deliberately stalled spawn superseded by a seek, seek concurrent with
+track change, close during probe, late child exit, and a 100-input burst with
+bounded processes/directories. Target cancellation acknowledgement below 1 s;
+forced process cleanup may use the existing 3 s grace period.
+
+### P1-C: shorten startup based on stage data
+
+Preserve the existing probe cache/in-flight sharing. Key cached results by
+internal source identity plus header/credential revision, and local file
+size/mtime, rather than URL alone. Cache failures briefly so a transient failure
+does not remain authoritative for 10 minutes. Probe only the selected source.
+Consider making deep track discovery lazy only when enough trusted information
+already exists for a safe playback decision; filename hints alone are insufficient.
+
+Keep compatible media on the same-origin direct path. Measure byte-range/HEAD
+handling and tail metadata reads before expanding format support. Do not force
+MKV into native playback or weaken iOS AC-3/E-AC-3 restrictions to raise the
+direct-play percentage. HLS capability support and native container support are
+different questions; retain observed decode-failure escalation.
+
+Treat shorter segments as an experiment. `hls_init_time=1` is a target tied to
+playlist initialization and keyframes; it does not guarantee exactly one short
+segment or twice-as-fast startup. Validate interaction with our EVENT playlist
+and `hls_list_size=0` in the exact Docker FFmpeg build. Copy/remux cannot invent
+keyframes, and current transcoding forces keyframes at two-second intervals.
+Test matching GOP/first-keyframe settings, actual segment durations, decoder
+startup and steady-state stalls together. See the
+[FFmpeg HLS muxer documentation](https://ffmpeg.org/ffmpeg-formats.html#hls-2).
+
+`FFMPEG_PRESET` is already configurable. Benchmark `veryfast` against faster
+presets on software-only hardware, including bitrate/quality and NAS load.
+A process uses its selected preset throughout; switching to a slower steady
+state needs a separate architecture and is not part of this change. Keep a
+feature switch for measured startup experiments, never for bypassing the proxy.
+
+## 5. P2: reusable HLS output, with continuation semantics
+
+Demote PR #29's retired-generation reuse until the simpler changes are measured.
+Current retired output belongs to a stopped producer and is retained briefly
+for in-flight requests. Returning its playlist may speed a backward jump but
+will eventually reach the end of that partial output. It is not equivalent to
+resuming an ongoing full movie.
+
+Prototype generation metadata: immutable ID, source revision, absolute start,
+finalized seekable intervals, init/codec identity, audio/subtitle selection,
+quality, copy-rejection state, producer state, bytes, expiry and reader leases.
+Reuse only a compatible generation with enough playable coverage; never use
+copy output after a decode escalation or the wrong audio/quality after a switch.
+
+For a first safe increment, reuse only a compatible generation proven complete
+through source EOF. Partial-generation reuse requires explicit continuation:
+start a new producer before cached coverage ends, preserve absolute timestamps
+and subtitles across the handoff, and never interpret partial `ENDLIST` as the
+episode ending. If that handoff is not proven, fall back to a normal restart.
+The client must load at `target - generation.offset`, not at playlist zero.
+
+Bound retained output by bytes as well as count (initial experiment: three
+retained generations, 512 MiB per session, 2 GiB global, excluding active output).
+Use LRU eviction with reader leases; cancel/reschedule cleanup instead of letting
+an old purge timer delete a newly selected generation. Active output needs a
+separate disk admission/free-space policy; these retention limits do not bound
+an entire long EVENT recording. Under pressure, decline reuse safely.
+
+Tests must play beyond the cached interval, not only assert no process start at
+the moment of the backward seek. Cover gaps, EOF, expiry, concurrent requests,
+disk pressure, wrong track/quality, subtitle offset and stale cleanup timers.
+
+## 6. P2: useful upstream interactions
+
+| Feature | Proposed behavior | Acceptance and limits |
+| --- | --- | --- |
+| Next episode | Dismissible prompt in last 30 s; opt-in autoplay; use `selected.videos` and season/episode ordering | Save finished progress once; exclude unavailable episodes; prevent double navigation; source selection and resolution stay server-side; no speculative provider downloads |
+| Media Session | Metadata, play/pause, seek and next-track through the same controller | Feature-detect each action; clean up handlers on close; use safe artwork; native lock-screen behavior needs real-device checks |
+| Playback speed | 0.5–2x selector; restore chosen rate after source attachment | Check A/V sync and buffer behavior; a slow transcode may not sustain 2x |
+| Subtitle adjustment | Delay in 100 ms increments, size and position; retain preference | Define positive delay as later display; use `cue time = original time + delay - generation offset`; regenerate from original cues to avoid cumulative shifts; test native iOS and custom rendering |
+| Player diagnostics | Mode, codecs, hardware, buffered seconds, dropped frames, stage timings and restarts | Copy a sanitized report; no source URL, token or raw FFmpeg command |
+| Controls | Click-to-pause with double-click fullscreen arbitration; persisted volume/mute; configurable seek step; contain/cover | Do not intercept control clicks or editable fields; support keyboard/focus and mobile safe areas; keep native volume 0–100%, defer Web Audio amplification |
+| Error UX | Nonfatal subtitle/recovered media errors show a dismissible notification | Track-switch failure is nonfatal only when the old transport still works; current restart may already have killed it. Otherwise offer recovery/source selection |
+
+Outside the player, improve the existing Continue Watching flow with reliable
+resume/source recovery, and preserve detail/source selection on navigation.
+Expose measured preparation stages (source, inspection, playback) and distinguish
+estimated codec/language hints from probed data. These fit our local library and
+download workflows; they do not require replacing the application state engine.
+
+## 7. P3: transport separation
+
+After the seek/recovery contract settles, extract direct and HLS transports from
+`Player.tsx`. Expose typed load/seek/pause/dispose operations with cancellation,
+operation revision and acknowledged events for time, buffering, recoverable/fatal
+errors and session changes. Keep absolute time conversion in one place. Avoid a
+fire-and-forget facade that hides failures or obsolete requests.
+
+Retain React/Express and hls.js. Upstream WASM/core, shell integrations, gamepad
+and casting are outside this iteration because of cost and scope, not because
+self-hosted users could never need them. Do not import or copy upstream GPL code
+into this MIT project as part of the specification; independently implement the
+described behavior. A future dependency adoption needs a separate review.
+
+## 8. Delivery sequence and definition of done
+
+| Increment | Scope | Relative size | Required gate |
+| --- | --- | --- | --- |
+| 1 | P0 DTOs, registry, ownership, proxy graph and migrations | Large | Complete no-leak suite and direct/HLS/download compatibility |
+| 2 | Safe stage instrumentation and baseline | Medium | Reproducible cold/warm report with explicit untested platforms |
+| 3 | P1-A seeking UX | Medium | Gesture tests and device checks; no extra native-seek restarts |
+| 4 | P1-B cancellation | Large | Supersession/race tests and bounded process/resource use |
+| 5 | P1-C selected measured experiments | Medium per experiment | Demonstrated stage improvement without safety or playback regression |
+| 6 | Player features from section 6 | Small–medium each | Feature-specific tests, accessibility and proxy assertions |
+| 7 | Retained HLS reuse prototype, then P3 | Large each | Continuation/disk proof; stable transport contract |
+
+P0 is a release prerequisite for subsequent playback changes. Instrumentation
+may be developed earlier if it is sanitized and does not delay P0. No percentage
+speedup should be advertised before measurement. Keep every implementation in a
+dedicated PR; patch-bump all workspace versions for shipping changes. Performance
+flags may roll back tuning, but must never re-enable raw provider URL exposure.
+
+For each implementation, run appropriate unit/integration tests and Playwright
+journeys, build, then perform the repository's Docker deployment checks:
+
+```sh
+docker compose up -d --build
+docker compose ps
+docker compose logs --tail=50 stremio-offline
+curl --fail "http://localhost:${STREMIO_OFFLINE_PORT:-8090}/api/status"
+```
+
+This specification-only PR does not bump package versions or claim that any
+security or performance change is deployed. Its verification is source/contract
+review and document checks; the implementation gates above remain outstanding.
