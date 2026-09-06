@@ -90,6 +90,21 @@ const server = createServer((req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
 
+  if (pathname === "/proxy-playlist.m3u8") {
+    res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+    return res.end('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.test/key"\nsegment.ts\nhttps://cdn.test/segment.ts\n');
+  }
+  if (pathname === "/proxy-fixture") {
+    const status = searchParams.has("head") && req.method !== "HEAD" ? 405 : Number(searchParams.get("status") ?? 200);
+    res.writeHead(status, {
+      "content-type": "application/octet-stream", "cache-control": "public, max-age=3600",
+      "set-cookie": "provider-canary=secret", "link": "<https://provider-canary.test/secret>",
+      "www-authenticate": "Bearer provider-canary",
+      ...(status === 416 ? { "content-range": "bytes */123" } : {}),
+      ...(status === 302 ? { location: "/proxy-fixture?status=403" } : {}),
+    });
+    return res.end(status === 200 ? req.method : "provider-canary-secret");
+  }
   if (pathname === "/manifest.json") return json(res, MANIFEST);
   if (pathname === "/poster.svg") {
     res.writeHead(200, { "content-type": "image/svg+xml" });

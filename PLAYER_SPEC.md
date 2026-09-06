@@ -1,10 +1,43 @@
 # Proxy-safe playback and player improvements
 
-Status: proposed technical specification; no runtime changes implemented.
+Status: implementation in progress; initial P0 transport hardening implemented.
+The full P0 release gate remains open.
 Reviewed on 2026-09-06. This document revises the original proposals in
 [PR #29](https://github.com/NickRabit/streamio-offline/pull/29), including its
 binding proxy requirement. The revised specification is maintained in that
 same PR as a single implementation plan.
+
+## Implementation checklist
+
+- [x] P0 transport: cancel intermediate redirect bodies, including rejected redirects;
+  preserve the redirect limit and validate every destination.
+- [x] P0 transport: retain source headers only within the same origin; forward only
+  allowlisted transport headers across origins, including HLS child resources.
+  Credentials stripped during a redirect chain cannot return on a later hop.
+- [x] P0 proxy responses: suppress upstream error bodies and exceptional error text,
+  preserve an empty 416 response with validated `Content-Range`, and retain the
+  response-header allowlist. Forward HEAD upstream and preserve successful ranges.
+- [x] P0 cache: prevent shared caching of proxy media, converted segments, subtitles
+  and device downloads; do not relay provider cache policy.
+- [ ] Complete P0: opaque DTOs/registry, owner binding, raw-route removal, full HLS
+  graph validation, configuration/metadata/log audit, connection-time DNS policy,
+  restart/revocation recovery and the complete no-leak release suite.
+- [ ] Stage instrumentation and cold/warm baseline (increment 2).
+- [ ] Gesture-aware seeking (P1-A).
+- [ ] Server operation supersession and cancellation (P1-B).
+- [ ] Measured startup experiments (P1-C).
+- [ ] P2 interactions, retained HLS continuation and P3 transport separation.
+
+Initial transport verification: 129 server tests, 92 web tests, production build
+and 16 Playwright Chromium scenarios using the isolated addon/provider fixture.
+Local Docker build/deployment passed; the container is healthy and `/api/status`
+returns `{"status":"ok","version":"0.3.13"}`.
+The proxy tests cover response canaries, 200/206/416, HEAD and HLS child header
+isolation. This is not the complete no-leak suite: raw source URLs and encoded
+headers still exist in the current API. Real-provider playback, real iOS devices,
+FFmpeg conversion journeys and performance benchmarks remain untested in this
+increment. Cross-origin providers requiring custom headers now fail closed;
+explicit source-scoped CDN approval is not implemented.
 
 ## 1. Evidence and scope
 
@@ -415,6 +448,6 @@ docker compose logs --tail=50 stremio-offline
 curl --fail "http://localhost:${STREMIO_OFFLINE_PORT:-8090}/api/status"
 ```
 
-This specification-only PR does not bump package versions or claim that any
-security or performance change is deployed. Its verification is source/contract
-review and document checks; the implementation gates above remain outstanding.
+The original specification-only PR did not change runtime behavior. The initial
+transport implementation bumps all workspace versions to 0.3.13. Only checked
+items above are implemented; the remaining release gates stay outstanding.

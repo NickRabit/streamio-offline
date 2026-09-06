@@ -9,7 +9,7 @@ import { DownloadQueue } from "./downloads.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, safeFetch, validateRemoteUrl } from "./security.js";
+import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { Store } from "./store.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
@@ -286,6 +286,7 @@ app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(
   await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined))));
 app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
 app.get("/api/subtitle", asyncRoute(async (req, res) => {
+  res.setHeader("cache-control", "private, no-store");
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await guardedFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
   let text = await response.text(); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
   const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
@@ -867,8 +868,8 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   if (!upstream.ok || !upstream.body) throw new Error(`Zdroj odpověděl HTTP ${upstream.status}.`);
 
   countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
-  res.status(upstream.status).attachment(ticket.filename);
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) {
+  res.status(upstream.status).attachment(ticket.filename).setHeader("cache-control", "private, no-store");
+  for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
     const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
   }
   const { Readable } = await import("node:stream");
@@ -1078,7 +1079,7 @@ app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
   const file = playback.sidecarFile(String(req.params.id));
   if (!file) return res.status(404).end();
-  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "no-store").sendFile(file, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").sendFile(file, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));
@@ -1095,24 +1096,24 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
     // a stream by odmítly dřív, než ho zkusí; bez atributu si kodeky odvodí z init segmentu.
     const playlist = await readFile(path.join(directory, file), "utf8").catch(() => "");
     if (playlist.includes("#EXT-X-STREAM-INF")) {
-      return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store")
+      return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store")
         .send(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, ""));
     }
     const hasSubtitles = await readFile(path.join(directory, "index-0_vtt.m3u8"), "utf8").then(() => true, () => false);
     const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
     if (hasSubtitles) lines.push('#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Titulky",DEFAULT=YES,AUTOSELECT=YES,URI="index-0_vtt.m3u8"');
     lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=8000000${hasSubtitles ? ',SUBTITLES="subs"' : ""}`, "index-0.m3u8");
-    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store").send(`${lines.join("\n")}\n`);
+    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(`${lines.join("\n")}\n`);
   }
-  if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store");
-  else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "public, max-age=3600"); }
+  if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
+  else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "private, no-store"); }
   res.sendFile(path.join(directory, file), (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 
 app.get("/api/proxy", asyncRoute(async (req, res) => {
+  res.setHeader("cache-control", "private, no-store");
   const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw);
-  // Proxy je jediné místo, kudy jde přehrávání z katalogu ven -- přímé i převáděné,
-  // protože i FFmpeg si zdroj bere přes ni. Měřit stačí tady.
+  // Both browser playback and FFmpeg read through this proxy.
   const meta = statMeta({
     source: "catalog", url: raw, title: String(req.query.title ?? "") || providerOf(raw),
     addonKey: typeof req.query.addonKey === "string" ? req.query.addonKey : undefined,
@@ -1129,7 +1130,7 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
   // upstream keeps downloading from the debrid host and starves the new one.
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
   let upstream: Response;
-  try { upstream = await safeFetch(raw, { headers, signal: controller.signal }); }
+  try { upstream = await safeFetch(raw, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); }
   catch (error) {
     if (res.destroyed || res.writableEnded) {
       log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
@@ -1147,12 +1148,26 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
     return;
   }
   if (upstream.status >= 400) log("WARN", "The source refused the request", { req: req.id, url: raw, status: upstream.status, range: req.headers.range });
+  if (![200, 206].includes(upstream.status)) {
+    await upstream.body?.cancel().catch(() => undefined);
+    if (upstream.status === 416) {
+      const range = upstream.headers.get("content-range");
+      if (range && /^bytes \*\/\d+$/.test(range)) res.setHeader("content-range", range);
+      return void res.status(416).end();
+    }
+    return void res.status(502).json({ error: "Media source request failed." });
+  }
   const contentType = upstream.headers.get("content-type") ?? "";
-  if (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8")) {
-    const headerToken = typeof req.query.headers === "string" ? req.query.headers : undefined;
+  if (req.method !== "HEAD" && (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8"))) {
+    const finalHeaders = upstreamRequestHeaders(upstream);
+    finalHeaders.delete("range");
+    finalHeaders.delete("if-range");
     const proxied = (value: string) => {
-      const params = new URLSearchParams({ url: new URL(value, upstream.url).toString() });
-      if (headerToken) params.set("headers", headerToken);
+      const child = new URL(value, upstream.url);
+      if (!["http:", "https:"].includes(child.protocol)) throw new Error("Unsupported playlist resource.");
+      const params = new URLSearchParams({ url: child.toString() });
+      const childHeaders = redirectedHeaders(finalHeaders, new URL(upstream.url), child);
+      if ([...childHeaders].length) params.set("headers", Buffer.from(JSON.stringify(Object.fromEntries(childHeaders))).toString("base64url"));
       for (const name of ["addonKey", "addonName", "title"]) { const carried = req.query[name]; if (typeof carried === "string") params.set(name, carried); }
       return `/api/proxy?${params}`;
     };
@@ -1162,11 +1177,11 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
       return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => `URI="${proxied(uri)}"`);
     }).join("\n");
     if (res.destroyed || res.writableEnded) return;
-    res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "no-store").send(playlist);
+    res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(playlist);
     return;
   }
   res.status(upstream.status);
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges", "cache-control"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+  for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
   if (!upstream.body) return res.end();
   const { Readable } = await import("node:stream");
   try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
@@ -1205,7 +1220,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     user: currentUser(req), reason: message,
     stack: error instanceof Error ? error.stack : undefined,
   });
-  res.status(status).json({ error: message });
+  res.status(req.route?.path === "/api/proxy" ? 502 : status).json({ error: req.route?.path === "/api/proxy" ? "Media source request failed." : message });
 });
 process.on("unhandledRejection", (reason) => {
   log("ERROR", "Unhandled promise rejection", { reason: reason instanceof Error ? reason.stack ?? reason.message : String(reason) });
