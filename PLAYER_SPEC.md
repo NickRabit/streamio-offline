@@ -4,6 +4,69 @@ Technical specification. Compares the upstream Stremio web client
 (`Stremio/stremio-web`, v5.0.0-beta.39) with the player in this project and
 describes what is worth adopting, how, and in what order.
 
+## 0. Binding constraint: source addresses never reach the client
+
+Everything below is subject to one rule: **the browser must never see a source
+address, and never see the headers that authorise it.** All traffic goes through
+`/api/proxy`, so the provider only ever sees the server. A URL or token that
+leaks into the page can be copied out of devtools, an extension, history or a
+screenshot and replayed from another address, which is what gets an account or a
+debrid token banned.
+
+### 0.1 Where we break that rule today
+
+| Leak | What the browser gets |
+| --- | --- |
+| `GET /api/streams/:type/:id` | the addon's `Stream` objects verbatim, including `url` and `behaviorHints.proxyHeaders` |
+| Direct play descriptor | `describe()` returns `proxyPath(stream)`, i.e. `/api/proxy?url=<source>&headers=<base64 of the auth headers>`, and that string becomes the `<video>` source |
+| Proxied HLS playlists | `/api/proxy` rewrites every playlist line to `/api/proxy?url=…`, so in direct mode the source address is repeated per segment |
+| `GET /api/subtitle?url=…` | the addon's subtitle address |
+| `GET /api/library/file?path=…` | the absolute path inside the container |
+
+The bytes already flow through us, so the provider sees one address. The exposure
+is that the credential itself is handed to the client, and its reuse from
+elsewhere is not something we can detect or revoke.
+
+### 0.2 P0 — opaque handles
+
+Ship this before any of the player work below; the seek work in P1 touches the
+same descriptors.
+
+1. **Mint a handle instead of a URL.** Sealed token, not a stored map: the
+   handle is `base64url(AES-256-GCM(JSON{url, proxyHeaders, addonKey, addonName,
+   title, exp}))` under a key kept in the data directory (generated on first
+   boot, never in a backup export). Stateless, so it survives a server restart
+   mid-playback, and expiry is inside the sealed payload.
+2. **`/api/streams` returns `handle` in place of `url`,** plus the booleans the
+   UI actually uses (`playable`, `p2p`, `external`). The client already treats
+   `stream.url` only as "is this playable" plus `file://` bookkeeping, so this is
+   a narrow change on the client.
+3. **`/api/inspect`, `/api/playback`, `/api/downloads` and the device download
+   accept `handle`** instead of a whole `Stream`. The server resolves it; nothing
+   about the source crosses back.
+4. **`/api/proxy` stops accepting `?url=` from the browser.** It takes `?h=`
+   only. The raw form stays for internal callers — FFmpeg and the download queue
+   go through localhost with `INTERNAL_TOKEN` — and is rejected on any request
+   that is not internal. Playlist rewriting emits `?h=` handles derived from the
+   same sealed key.
+5. **`/api/subtitle` and `/api/library/file` take handles too** (a library
+   handle seals the relative path, so the container layout stays private).
+6. Handles are bound to the logged-in session and expire (a few hours is enough
+   to cover one playback with restarts). An expired handle returns 410 and the
+   client re-fetches the stream list, which is what it already does when a
+   session disappears.
+
+**Tests:** an e2e assertion that no response body served to the browser matches
+the fake addon's source host, and a unit test that `/api/proxy?url=…` without the
+internal token is refused.
+
+**Effect on the rest of this document:** all session URLs (`/api/playback/<id>/
+<generation>/master.m3u8`) are already opaque, so P1-B and P1-C are unaffected.
+P1-A is client-only. The one place to watch is direct play — it is the mode that
+puts a proxy address straight into the `<video>` element, so it must be the first
+consumer of handles.
+
+
 ## 1. Why the upstream player feels faster
 
 The two clients solve a different problem, and most of the perceived difference
@@ -51,8 +114,9 @@ already in flight.
 
 ## 2. Proposed work
 
-Priorities: **P1** is the perceived-speed work, **P2** is feature parity that
-users notice, **P3** is structural.
+Priorities: **P0** (section 0.2) blocks everything else, **P1** is the
+perceived-speed work, **P2** is feature parity that users notice, **P3** is
+structural.
 
 ---
 
@@ -237,6 +301,7 @@ from P1-A becomes testable without a DOM `<video>`.
 
 ## 4. Suggested order
 
+0. P0 — opaque handles, before anything that touches playback descriptors
 1. P1-A (client only, no server risk, biggest felt win)
 2. P1-C (small, measurable)
 3. P1-B (real work, removes the last common restart)
