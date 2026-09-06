@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hostOf, report } from "./diagnostics";
+import { classifyClientError, hostOf, report } from "./diagnostics";
 
 describe("hostOf", () => {
   it("keeps only the host, so tokens in the path are never sent", () => {
@@ -70,5 +70,35 @@ describe("report", () => {
   it("never rejects when the server is unreachable", () => {
     fetchMock.mockRejectedValue(new Error("offline"));
     expect(() => report("ERROR", "Cannot reach server")).not.toThrow();
+  });
+});
+
+describe("classifyClientError", () => {
+  it("keeps a failure from our own bundle as an error", () => {
+    expect(classifyClientError({
+      message: "Cannot read properties of null",
+      filename: `${location.origin}/assets/index-a1b2c3.js`,
+      stack: `TypeError\n    at Player (${location.origin}/assets/index-a1b2c3.js:12:5)`,
+    })).toBe("ERROR");
+  });
+
+  it("drops the bridge a Safari extension injects into the page", () => {
+    expect(classifyClientError({
+      message: "undefined is not an object (evaluating 'top.webkit.messageHandlers.foregroundToBackground.postMessage')",
+    })).toBeNull();
+  });
+
+  it("drops anything raised from an extension", () => {
+    expect(classifyClientError({ message: "boom", filename: "safari-web-extension://abc/injected.js" })).toBeNull();
+    expect(classifyClientError({ message: "boom", stack: "at f (chrome-extension://abc/content.js:1:1)" })).toBeNull();
+    expect(classifyClientError({ message: "boom", stack: "at f (moz-extension://abc/content.js:1:1)" })).toBeNull();
+  });
+
+  it("drops the blind cross-origin script error, which says nothing at all", () => {
+    expect(classifyClientError({ message: "Script error.", filename: "", stack: undefined })).toBeNull();
+  });
+
+  it("reports a rejection nobody can attribute as a warning, not an error", () => {
+    expect(classifyClientError({ message: "undefined is not an object (evaluating 'i.generateKey')" })).toBe("WARN");
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 
 describe("HLS_PLAYER_CONFIG", () => {
   it("keeps the forward buffer short enough that an 8x remux burst should not fill MSE", () => {
@@ -60,5 +60,24 @@ describe("canRecoverDecode", () => {
     const twice = recordDecodeRecover(once, t + 1000);
     expect(canRecoverDecode(twice, t + 2000)).toBe(false);
     expect(canRecoverDecode(twice, t + 61_000)).toBe(true);
+  });
+});
+
+describe("planDecodeRecovery", () => {
+  const t = 1_000_000;
+
+  it("escalates a copied stream the browser refused to a real transcode", () => {
+    expect(planDecodeRecovery("remux", [], t)).toBe("escalate");
+    expect(planDecodeRecovery("direct", [], t)).toBe("escalate");
+  });
+
+  it("only restarts when the server already transcodes: there is nothing left to drop", () => {
+    expect(planDecodeRecovery("transcode", [], t)).toBe("restart");
+  });
+
+  it("gives up once the restarts are spent, so the player stops looping on the error", () => {
+    const spent = recordDecodeRecover(recordDecodeRecover([], t), t + 1000);
+    expect(planDecodeRecovery("remux", spent, t + 2000)).toBe("give-up");
+    expect(planDecodeRecovery("transcode", spent, t + 2000)).toBe("give-up");
   });
 });

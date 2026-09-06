@@ -75,6 +75,8 @@ export const api = {
   startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }), timeoutMs: PLAYBACK_START_MS }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
+  /** The browser refused the stream: the server stops copying and really transcodes. */
+  escalatePlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/escalate`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),

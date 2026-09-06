@@ -1,3 +1,5 @@
+import type { PlaybackMode } from "./types";
+
 /** Shared hls.js options. Remux can run faster than realtime, so a long
  *  forward buffer fills MSE and surfaces bufferFullError. */
 export const HLS_PLAYER_CONFIG = {
@@ -56,4 +58,15 @@ export function canRecoverDecode(stamps: number[], now = Date.now()) {
 
 export function recordDecodeRecover(stamps: number[], now = Date.now()) {
   return [...stamps.filter((at) => now - at < DECODE_RECOVER_WINDOW_MS), now];
+}
+
+export type DecodeAction = "escalate" | "restart" | "give-up";
+
+/** What to do about a decoder failure. Repeating the same conversion is pointless: the
+ *  server would spawn an identical FFmpeg and the browser would refuse it again, over and
+ *  over until the window is closed. The video copy is the first thing to drop; after that
+ *  there is nothing left to try. */
+export function planDecodeRecovery(mode: PlaybackMode, stamps: number[], now = Date.now()): DecodeAction {
+  if (!canRecoverDecode(stamps, now)) return "give-up";
+  return mode === "transcode" ? "restart" : "escalate";
 }

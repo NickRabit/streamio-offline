@@ -26,3 +26,19 @@ export function report(level: Level, message: string, context: Record<string, un
     keepalive: true,
   }).catch(() => undefined);
 }
+
+const EXTENSION_SOURCE = /(chrome|moz|safari-web|safari)-extension:\/\//;
+/** Safari extensions inject their bridge into every page and it throws on ours. */
+const EXTENSION_MESSAGE = /webkit\.messageHandlers|__firefox__|browser\.runtime/;
+
+/** How to treat an error caught by the global listeners. A foreign script running in our
+ * page is not our failure and only buries the real ones, so it never reaches the log. A
+ * rejection without a stack cannot be attributed to anyone and stays a warning. */
+export function classifyClientError(input: { message: string; filename?: string; stack?: string }): Level | null {
+  const { message, filename = "", stack = "" } = input;
+  if (EXTENSION_SOURCE.test(filename) || EXTENSION_SOURCE.test(stack)) return null;
+  if (EXTENSION_MESSAGE.test(message)) return null;
+  // Cross-origin script has nothing but this placeholder: no file, no line, no stack.
+  if (message === "Script error." && !filename && !stack) return null;
+  return stack ? "ERROR" : "WARN";
+}
