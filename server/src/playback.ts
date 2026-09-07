@@ -6,6 +6,7 @@ import { constants } from "node:fs";
 import path from "node:path";
 import { mediaResources, safeSourceText } from "./media-resources.js";
 import { createHash } from "node:crypto";
+import { PlayerPreviews } from "./player-previews.js";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
@@ -122,6 +123,7 @@ export const describeFailure = (stderr: string, code: number | null) => {
 };
 
 export class PlaybackManager {
+  private previews = new PlayerPreviews();
   private sessions = new Map<string, Session>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
@@ -320,12 +322,20 @@ export class PlaybackManager {
     return this.describe(session, url);
   }
 
+  async preview(id: string, time: number, signal: AbortSignal) {
+    const session = this.sessions.get(id);
+    if (!session || !Number.isFinite(time) || time < 0) return undefined;
+    const at = Math.min(time, Math.max(0, (session.info?.duration ?? time + 1) - 0.1));
+    return this.previews.frame(id, this.localUrl(this.proxyPath(session.stream)), at, signal);
+  }
+
   touch(id: string) {
     const session = this.sessions.get(id);
     if (session) { session.lastAccess = Date.now(); session.claimed = true; }
   }
 
   async stop(id: string) {
+    this.previews.stop(id);
     const session = this.sessions.get(id);
     if (!session) return;
     log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });

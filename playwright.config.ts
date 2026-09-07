@@ -42,9 +42,15 @@ export default defineConfig({
     {
       // The journeys are about behaviour, not layout, so one viewport is enough.
       name: "chromium",
-      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/],
+      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/, /safari-scroll\.spec\.ts/],
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
+    },
+    {
+      name: "safari-landscape",
+      testMatch: /safari-scroll\.spec\.ts/,
+      dependencies: ["setup", "chromium"],
+      use: { ...devices["iPhone 13 landscape"], browserName: "webkit", storageState },
     },
     // The layout projects run after the journeys, not merely after setup: the
     // journeys leave a queued download and a library file behind, and a baseline
