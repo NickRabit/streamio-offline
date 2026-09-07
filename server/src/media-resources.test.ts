@@ -81,3 +81,22 @@ test("selection creation is rate limited but duplicate lookups do not consume ca
   now = 60_000;
   assert.ok(registry.add({ url: "https://other.test" }, owner, "source"));
 });
+
+test("subtitle tracks ride along with their listing instead of spending the window", () => {
+  const registry = new MediaResources(() => 0, 100, 100_000, 1);
+  const listing = registry.publicStream({ ...source, subtitles: [{ url: "https://a.test/1" }, { url: "https://a.test/2" }] }, owner);
+  assert.equal(listing.subtitles.length, 2);
+  assert.throws(() => registry.add({ url: "https://other.test" }, owner, "source"), { status: 429 });
+});
+
+test("a full registry drops the oldest selections instead of refusing new ones", () => {
+  const registry = new MediaResources(() => 0, 3);
+  const active = registry.mediaStream(source, owner);
+  const stale = registry.add({ url: "https://stale.test" }, owner, "source");
+  const kept = registry.add({ url: "https://kept.test" }, owner, "source");
+  const fresh = registry.add({ url: "https://fresh.test" }, owner, "source");
+  assert.throws(() => registry.get(stale, owner.sid, "source"), { status: 410, code: "RESOURCE_EXPIRED" });
+  assert.equal(registry.get(kept, owner.sid, "source").id, kept);
+  assert.equal(registry.get(fresh, owner.sid, "source").id, fresh);
+  assert.equal(registry.get(active.resourceId, owner.sid, "media").id, active.resourceId);
+});

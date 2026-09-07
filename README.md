@@ -411,9 +411,11 @@ Addon requests (catalog, metadata, streams, subtitles, artwork) go through a
 guard that watches each host on its own. At most `ADDON_MAX_CONCURRENT`
 requests (default 8) reach one host at a time. The cap is there only to bound
 a runaway pile-up, not to slow an ordinary fan-out: a single addon routinely
-serves a dozen catalogs from one address. Spacing requests apart
-(`ADDON_MIN_INTERVAL_MS`) is off by default and worth setting only when a
-provider says it is getting too many.
+serves a dozen catalogs from one address. Requests over the cap wait in a
+queue of `ADDON_MAX_QUEUE` (default 256), large enough to hold a whole search
+fan-out; beyond it a request is refused rather than queued forever. Spacing
+requests apart (`ADDON_MIN_INTERVAL_MS`) is off by default and worth setting
+only when a provider says it is getting too many.
 
 After `ADDON_BREAKER_FAILURES` consecutive failures (default 5) the host is
 taken out of service for `ADDON_BREAKER_COOLDOWN_MS` (30 s): further requests
