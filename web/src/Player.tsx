@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
@@ -151,6 +151,9 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
   const overlayRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
   const sessionRef = useRef<string | null>(null);
@@ -198,6 +201,19 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
+  useEffect(() => {
+    if (!open) { setSettingsOpen(false); return; }
+    const bottom = bottomRef.current;
+    if (!bottom) return;
+    const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
+    const observer = new ResizeObserver(measure);
+    observer.observe(bottom);
+    measure();
+    const sync = () => setBrowserFullscreen(document.fullscreenElement === overlayRef.current);
+    document.addEventListener("fullscreenchange", sync);
+    sync();
+    return () => { observer.disconnect(); document.removeEventListener("fullscreenchange", sync); };
+  }, [open]);
   // The resumed-at notice should inform, not get in the way; it leaves after five seconds.
   useEffect(() => {
     if (!resumedFrom) return;
@@ -633,6 +649,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     if (videoRef.current?.paused || buffering || error || scrub !== null) return;
     controlsTimerRef.current = window.setTimeout(() => {
       controlsTimerRef.current = undefined;
+      if (overlayRef.current?.querySelector(".player-settings") || (overlayRef.current?.contains(document.activeElement) && document.activeElement?.matches(":focus-visible"))) return;
       setControlsVisible(false);
     }, 3500);
   };
@@ -746,6 +763,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         const active = document.activeElement;
         if (active instanceof HTMLElement && active !== document.body && overlayRef.current?.contains(active)) active.blur();
       }
+      if (event.key === "Escape" && settingsOpen) { event.preventDefault(); setSettingsOpen(false); return; }
       if (event.key === " " || event.key === "k") { event.preventDefault(); toggle(); }
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
@@ -755,7 +773,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, time, duration, cssFullscreen]);
+  }, [open, time, duration, cssFullscreen, settingsOpen]);
 
   if (!open) return null;
   const position = scrub ?? time;
@@ -764,9 +782,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
+      {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
+        <Star/> <span>{favorite ? t("favorite.on") : t("favorite.off")}</span>
+      </button>}
       <button className="icon-button" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
     </div>
     <div className="player-host">
@@ -803,22 +824,29 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
       </div>}
     </div>
-    <div className="timeline">
-      <span>{fmt(position)}</span>
-      <TimelineBar value={Math.min(position, seekable)} max={seekable}
-        onScrub={(next) => { revealControls(); setScrub(next); }}
-        onSeek={(next) => void seekTo(next)}
-        onReveal={revealControls} />
-      <span>{fmt(duration)}</span>
-    </div>
-    <div className="player-controls">
-      <button className="icon-button player-close-control" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
-      <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
-      <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
-      <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
-      <Volume2 />
-      <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
+    <div ref={bottomRef} className="player-bottom">
+      <div className="timeline">
+        <span>{fmt(position)}</span>
+        <TimelineBar value={Math.min(position, seekable)} max={seekable}
+          onScrub={(next) => { revealControls(); setScrub(next); }}
+          onSeek={(next) => void seekTo(next)}
+          onReveal={revealControls} />
+        <span>{fmt(duration)}</span>
+      </div>
+      <div className="player-controls">
+        <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
+        <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
+        <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
+        <Volume2 />
+        <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
+        {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
+        <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
+        <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{cssFullscreen || browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>
+      </div>
+    </div>
+    {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
+      <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
       {session && <label className="track-picker" title={t("player.quality")}>
         <SlidersHorizontal />
         <select aria-label={t("player.quality")} value={session.quality ?? "original"}
@@ -850,16 +878,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       </div>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
-      {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
-        <Star/> <span>{favorite ? t("favorite.on") : t("favorite.off")}</span>
-      </button>}
       {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
         {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}
       </button>}
       <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title={t("save.toDeviceHint")} aria-label={t("save.toDeviceHint")}>
         <Download /> <span>{deviceDownloadBusy ? t("save.preparing") : t("save.toDevice")}</span>
       </button>
-      <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{cssFullscreen ? <Minimize/> : <Maximize/>} <span>{t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>
-    </div>
+    </div>}
   </div>;
 }

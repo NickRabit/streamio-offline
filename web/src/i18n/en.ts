@@ -110,6 +110,8 @@ export const en = {
   "nav.stats": "Statistics",
 
   // Player overlay.
+  "player.settings": "Playback settings",
+  "player.closeSettings": "Close playback settings",
   "player.mode.direct": "DIRECT PLAY · NO CONVERSION",
   "player.mode.remux": "REMUXED · VIDEO NOT RE-ENCODED",
   "player.mode.transcode": "TRANSCODED",

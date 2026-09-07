@@ -106,6 +106,8 @@ export const cs: Catalog = {
   "nav.stats": "Statistiky",
 
   // Přehrávač.
+  "player.settings": "Nastavení přehrávání",
+  "player.closeSettings": "Zavřít nastavení přehrávání",
   "player.mode.direct": "PŘÍMÉ PŘEHRÁNÍ · BEZ PŘEVODU",
   "player.mode.remux": "PŘEBALENO · VIDEO BEZ PŘEKÓDOVÁNÍ",
   "player.mode.transcode": "PŘEKÓDOVÁNO",

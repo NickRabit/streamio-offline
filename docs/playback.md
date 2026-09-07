@@ -10,8 +10,8 @@ browser reports which codecs it can handle, and the server decides.
 | AC3, DTS, or TrueHD audio | remux, audio only converted to AAC | low |
 | MPEG-4 ASP, VC-1, and similar | real transcode to H.264 | high |
 
-The current mode is shown above the picture; the real source codecs sit next to
-the controls.
+The current mode is shown in the player header; the real source codecs appear
+in playback settings.
 
 Quality other than **Original** forces a real transcode, because shrinking the
 picture cannot be done by copying. On a NAS without QuickSync, stay on original
@@ -33,6 +33,18 @@ browser.
 
 Because remux copies video, playback starts at the nearest keyframe before the
 requested time — usually a few seconds off. Emby and Jellyfin do the same.
+
+## Player controls
+
+The picture fills the available player area without cropping. The header and
+bottom controls overlay it, so hiding the controls does not resize the video.
+Subtitles move above the bottom controls while they are visible.
+
+The close button and favorite star stay at the top right in every orientation.
+Playback, seeking, subtitle visibility, settings and fullscreen are available
+from the bottom controls. Playback settings contain quality, audio and subtitle
+track selection, source codecs, and downloads to the library or device.
+Controls stay visible while settings are open or a control has keyboard focus.
 
 ## Keyboard
 
