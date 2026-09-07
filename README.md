@@ -464,6 +464,12 @@ password is stored only as a scrypt hash and the session carries a signed
 ticket. Signing out of all devices rotates the signing secret, so previously
 issued tickets stop working at once.
 
+After five failed attempts from one address every further failure pauses
+sign-in, doubling from a second up to a minute; a success clears the record and
+the count is forgotten after fifteen minutes. The cap stays low on purpose:
+behind a reverse proxy every request arrives from the same address, so a long
+lock would keep the household out as effectively as an attacker.
+
 A forgotten password can be bypassed with environment fallbacks: set
 `ADMIN_USERNAME` and `ADMIN_PASSWORD`, sign in with those, and change the
 password in Settings. The other option is to delete the `auth` key from
