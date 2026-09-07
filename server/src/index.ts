@@ -1401,8 +1401,9 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     stack: error instanceof Error ? error.stack : undefined,
   });
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
-  res.status(error instanceof ResourceError ? error.status : mediaRoute ? 502 : status).json({
-    error: error instanceof ResourceError ? error.message : mediaRoute ? "Media source request failed." : message,
+  const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
+  res.status(hideDetails ? 502 : status).json({
+    error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,
   });
 });

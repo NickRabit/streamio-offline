@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import { guardedFetch } from "./outbound.js";
 
 export const RD_API = "https://api.real-debrid.com/rest/1.0";
@@ -18,13 +19,33 @@ export function normalizeToken(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-const rdError = (status: number, code?: string, fallback?: string) => {
-  if (status === 401 || code === "bad_token") return new DebridError("Token Real-Debrid není platný.", 401, code);
-  if (status === 403) return new DebridError("Real-Debrid tento účet k API nepustil.", 403, code);
-  if (status === 429 || status === 509) return new DebridError("Real-Debrid má plné sloty, zkusím to znovu.", status, code);
-  if (status === 503 || code === "infringing_file") return new DebridError("Real-Debrid tenhle torrent odmítl.", 503, code);
-  return new DebridError(fallback || `Real-Debrid odpověděl chybou (${status}).`, status, code);
+const INFRINGING = new Set(["infringing_file", "virus_file"]);
+const FATAL = new Set([...INFRINGING, "bad_token", "expired_token", "account_blocked", "need_premium", "traffic_exhausted", "fair_usage_limit"]);
+
+const rdError = (status: number, code?: string, errorCode?: number) => {
+  if (status === 401 || code === "bad_token" || errorCode === 8) return new DebridError("Token Real-Debrid není platný.", 401, code ?? "bad_token");
+  if (status === 403 && code !== "traffic_exhausted") return new DebridError("Real-Debrid tento účet k API nepustil.", 403, code);
+  if (INFRINGING.has(code ?? "") || errorCode === 16) {
+    return new DebridError("Real-Debrid tenhle torrent odmítl.", 503, "infringing_file");
+  }
+  if (code === "traffic_exhausted" || errorCode === 29) return new DebridError("Na účtu Real-Debrid došel traffic.", 403, "traffic_exhausted");
+  if (code === "too_many_torrents" || errorCode === 21) {
+    return new DebridError("Na účtu Real-Debrid je moc torrentů. Některé smažte na real-debrid.com/torrents.", 400, code);
+  }
+  if (status === 429 || status === 509 || code === "too_many_active_downloads" || errorCode === 26) {
+    return new DebridError("Real-Debrid má plné sloty, zkusím to znovu.", status === 429 ? 429 : 509, code);
+  }
+  if (status === 503 || status === 408 || code === "service_unavailable") {
+    return new DebridError("Real-Debrid teď neodpovídá, zkusím to znovu.", status === 408 ? 408 : 503, code ?? "service_unavailable");
+  }
+  return new DebridError(code ? `Real-Debrid: ${code}` : `Real-Debrid odpověděl chybou (${status}).`, status, code);
 };
+
+export function isRetryableDebridFailure(error: unknown): boolean {
+  if (error instanceof DebridError) return !FATAL.has(error.code ?? "") && (error.status === 408 || error.status === 429 || error.status === 503 || error.status === 509);
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|UND_ERR|neodpovídá|plné sloty/i.test(message);
+}
 
 async function rdRequest(token: string, path: string, body?: Record<string, string>, fetchImpl: FetchLike = guardedFetch): Promise<Response> {
   const init: RequestInit = {
@@ -32,16 +53,23 @@ async function rdRequest(token: string, path: string, body?: Record<string, stri
     headers: { authorization: `Bearer ${token}`, ...(body ? { "content-type": "application/x-www-form-urlencoded" } : {}) },
     body: body ? new URLSearchParams(body).toString() : undefined,
   };
-  const response = await fetchImpl(`${RD_API}${path}`, init);
+  let response: Response;
+  try {
+    response = await fetchImpl(`${RD_API}${path}`, init);
+  } catch (error) {
+    log("WARN", "Real-Debrid request failed", { path, reason: error instanceof Error ? error.message : String(error) });
+    throw new DebridError("Real-Debrid teď neodpovídá, zkusím to znovu.", 408, "network");
+  }
   if (response.ok) return response;
   let code: string | undefined;
-  let message: string | undefined;
+  let errorCode: number | undefined;
   try {
     const payload = await response.json() as { error?: string; error_code?: number };
     code = typeof payload.error === "string" ? payload.error : undefined;
-    message = code;
+    errorCode = Number.isFinite(payload.error_code) ? Number(payload.error_code) : undefined;
   } catch { /* Real-Debrid sometimes answers with an empty body. */ }
-  throw rdError(response.status, code, message);
+  log("WARN", "Real-Debrid request failed", { path, status: response.status, code, errorCode });
+  throw rdError(response.status, code, errorCode);
 }
 
 export interface DebridUser { username: string; premium: boolean }

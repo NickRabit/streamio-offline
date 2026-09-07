@@ -435,6 +435,30 @@ test("the same infoHash is not queued twice", async () => {
   }
 });
 
+test("a dropped Real-Debrid call is retried instead of failing the job", async () => {
+  let calls = 0;
+  const { directory, queue } = await tempQueue({
+    debridPollMs: 20,
+    debridRetryMs: 20,
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        calls += 1;
+        if (calls === 1) throw new TypeError("fetch failed");
+        return { ready: false, torrentId: "rd1", progress: 10, status: "downloading" };
+      },
+    },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await waitFor(queue, () => calls >= 2 && queue.list()[0].status === "waiting");
+    assert.equal(queue.list()[0].status, "waiting");
+  } finally {
+    queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a torrent without a token is refused", async () => {
   const { directory, queue } = await tempQueue();
   try {

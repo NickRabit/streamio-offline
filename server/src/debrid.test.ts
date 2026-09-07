@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { advanceTorrent, DebridError, magnetFromHash, RD_API, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
+import { addMagnet, advanceTorrent, DebridError, isRetryableDebridFailure, magnetFromHash, RD_API, resolveIfReady, videoFileIds, verifyRealDebridToken, type FetchLike } from "./debrid.js";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -98,6 +98,27 @@ test("resolveIfReady returns nothing while Real-Debrid is still downloading", as
 test("a full slot is a retryable error", async () => {
   await assert.rejects(
     advanceTorrent("token", HASH, 0, undefined, async () => json({ error: "too_many_active_downloads" }, 509)),
-    (error: unknown) => error instanceof DebridError && error.status === 509,
+    (error: unknown) => error instanceof DebridError && error.status === 509 && isRetryableDebridFailure(error),
+  );
+});
+
+test("a generic 503 is unavailable, not an infringing torrent", async () => {
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => json({ error: "service_unavailable" }, 503)),
+    (error: unknown) => error instanceof DebridError && error.status === 503 && /neodpovídá/.test(error.message) && isRetryableDebridFailure(error),
+  );
+});
+
+test("an infringing torrent is a fatal rejection", async () => {
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => json({ error: "infringing_file", error_code: 16 }, 503)),
+    (error: unknown) => error instanceof DebridError && error.code === "infringing_file" && /odmítl/.test(error.message) && !isRetryableDebridFailure(error),
+  );
+});
+
+test("a dropped connection is retried", async () => {
+  await assert.rejects(
+    addMagnet("token", magnetFromHash(HASH), async () => { throw new TypeError("fetch failed"); }),
+    (error: unknown) => error instanceof DebridError && error.status === 408 && isRetryableDebridFailure(error),
   );
 });

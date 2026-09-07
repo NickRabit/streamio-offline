@@ -14,7 +14,7 @@ import {
   retryDelayMs, SourceError, StorageError, storageHeadroom, storageMessage, storageResumeNeed,
   type QueueHalt,
 } from "./download-policy.js";
-import { DebridError, type DebridAdvance } from "./debrid.js";
+import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
@@ -44,6 +44,7 @@ export interface QueueHooks {
   retryDelay?: (retryCount: number, retryAfterMs?: number) => number;
   debrid?: DebridEngine;
   debridPollMs?: number;
+  debridRetryMs?: number;
   debridTimeoutMs?: number;
 }
 
@@ -81,6 +82,7 @@ export class DownloadQueue {
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
   private debrid?: DebridEngine;
   private readonly debridPollMs: number;
+  private readonly debridRetryMs: number;
   private readonly debridTimeoutMs: number;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
@@ -108,6 +110,7 @@ export class DownloadQueue {
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
     this.debrid = hooks.debrid;
     this.debridPollMs = hooks.debridPollMs ?? 15_000;
+    this.debridRetryMs = hooks.debridRetryMs ?? 30_000;
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
   }
 
@@ -318,13 +321,12 @@ export class DownloadQueue {
       await this.saveSoon();
       this.scheduleDebrid(job.id, this.debridPollMs);
     } catch (error) {
-      const retryable = error instanceof DebridError && (error.status === 509 || error.status === 429);
       job.error = error instanceof Error ? error.message : String(error);
       job.updatedAt = new Date().toISOString();
-      if (retryable) {
+      if (isRetryableDebridFailure(error)) {
         log("WARN", "Real-Debrid is busy, will retry", { id: job.id, title: job.title, reason: job.error });
         await this.save();
-        this.scheduleDebrid(job.id, Math.max(this.debridPollMs, 30_000));
+        this.scheduleDebrid(job.id, Math.max(this.debridPollMs, this.debridRetryMs));
         return;
       }
       job.status = "failed";
