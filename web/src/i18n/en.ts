@@ -398,6 +398,13 @@ export const en = {
   "addons.storageSaved": "Storage rules for {addon} saved.",
 
   // Settings.
+  "settings.privacyTitle": "Privacy",
+  "settings.privacyText": "What the browser is allowed to load from outside this server.",
+  "settings.secureMode": "Fetch artwork through the server",
+  "settings.secureModeHint": "Posters, backdrops, episode stills and addon logos are downloaded and cached by the server. Turned off, the browser loads them straight from the provider, which then sees the address of everyone watching and the titles they open.",
+  "settings.secureModeLabel": "Artwork source",
+  "settings.secureModeOn": "Through the server",
+  "settings.secureModeOff": "Straight from the provider",
   "settings.appearanceTitle": "Appearance",
   "settings.eyebrow": "SETTINGS",
   "settings.title": "Application settings",

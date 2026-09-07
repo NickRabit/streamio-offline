@@ -14,6 +14,8 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { guardedFetch, outbound } from "./outbound.js";
+import { images } from "./images.js";
+import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
@@ -27,14 +29,16 @@ import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
 import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError, messageKeyOf } from "./errors.js";
-import type { AddonRole, MetaItem, StreamItem } from "./types.js";
+import type { AddonRecord, AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
+configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
+await images.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
@@ -161,6 +165,7 @@ const stopOwnedPlayback = async (sid?: string) => {
   for (const [id, ticket] of deviceDownloadTickets) if (!sid || ticket.owner.sid === sid) deviceDownloadTickets.delete(id);
 };
 
+app.use(securityHeaders());
 app.use(express.json({ limit: "256kb" }));
 
 // Každý požadavek dostane krátkou značku. Chyba nahlášená z prohlížeče a její příčina
@@ -312,13 +317,37 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   res.json({ username });
 }));
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build, restricted: restrictedMode() }));
-app.get("/api/addons", (_req, res) => res.json(store.addons().map((addon) => restrictedMode() ? publicAddonRestricted(addon) : publicAddon(addon))));
+/** The page only ever holds our own id, so anything it hands back is turned into the
+ *  real address again before it is stored or downloaded. */
+const posterOf = (value: unknown): string | undefined => {
+  const raw = value ? String(value) : "";
+  return raw ? images.original(raw) : undefined;
+};
+
+const mediaSource = (value: unknown): MediaInfo | undefined => {
+  const media = value as MediaInfo | undefined;
+  return media ? { ...media, poster: posterOf(media.poster) } : undefined;
+};
+
+/** The catalogue poster travels with the queued job and with library metadata as well. */
+const mediaView = (media: MediaInfo) => ({ ...media, poster: images.proxied(media.poster) });
+const jobView = <T extends { media?: MediaInfo }>(job: T): T => (job.media ? { ...job, media: mediaView(job.media) } : job);
+
+/** An addon logo sits on the provider's server as well, so it takes the same detour. */
+const withProxiedLogo = <T extends { manifest: { logo?: string } }>(view: T): T =>
+  (images.proxied(view.manifest.logo) === view.manifest.logo
+    ? view
+    : { ...view, manifest: { ...view.manifest, logo: images.proxied(view.manifest.logo) } });
+const publicAddonView = (addon: AddonRecord) =>
+  (restrictedMode() ? withProxiedLogo(publicAddonRestricted(addon)) : withProxiedLogo(publicAddon(addon)));
+
+app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build, restricted: restrictedMode(), secure: secureMode() }));
+app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddonView)));
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
   const addon = await loadAddon(String(req.body.url ?? ""), role);
   if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
-  await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddon(addon));
+  await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddonView(addon));
 }));
 // Pořadí doplňků je zároveň jejich priorita při řazení zdrojů.
 app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
@@ -361,21 +390,35 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
     if (reloaded) { addon.manifestUrl = reloaded.manifestUrl; addon.manifest = reloaded.manifest; }
   });
   if (reloaded) log("INFO", "Addon reconfigured", { name: reloaded.manifest.name, role });
-  res.json(publicAddon(store.addons().find((a) => a.key === req.params.key)!));
+  res.json(publicAddonView(store.addons().find((a) => a.key === req.params.key)!));
 }));
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
 app.get("/api/catalog", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
-  res.json(await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined));
+  const items = await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined);
+  res.json(items.map((item) => images.rewriteMeta(item)));
 }));
 app.get("/api/search", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim();
   if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
   const type = req.query.type ? String(req.query.type) : undefined;
-  res.json(await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, req.query.addon ? String(req.query.addon) : undefined));
+  const found = await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, req.query.addon ? String(req.query.addon) : undefined);
+  res.json({ ...found, items: found.items.map((item) => images.rewriteMeta(item)) });
 }));
 app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addons()).map(({ addon, definition }) => ({ addonKey: addon.key, addonName: addon.manifest.name, type: definition.type, id: definition.id }))));
-app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
+app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(images.rewriteMeta(meta)); }));
+/** Opaque id in, cached bytes out. An id we never handed out means nothing here. */
+app.get("/api/image/:id", asyncRoute(async (req, res) => {
+  const cached = await images.fetch(String(req.params.id));
+  if (!cached) return res.status(404).end();
+  res.setHeader("content-type", cached.type);
+  res.setHeader("etag", cached.etag);
+  res.setHeader("cache-control", "private, max-age=86400");
+  if (req.headers["if-none-match"] === cached.etag) return res.status(304).end();
+  // The path is ours, not the caller's, and a data directory may well sit inside a
+  // dotted folder -- which sendFile refuses unless told otherwise.
+  res.sendFile(cached.file, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+}));
 app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
   streamCandidates(store.addons(), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
 app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
@@ -501,7 +544,9 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
   const summaries = await Promise.all(entries.map(async (entry) => {
     const art = await locateArtwork(entry);
     if (!art) scheduleArtwork(entry);
-    return { ...summarize(entry), poster: art ? `/api/library/thumb?key=${encodeURIComponent(entry.key)}` : undefined };
+    const summary = summarize(entry);
+    return { ...summary, meta: summary.meta && { ...summary.meta, poster: images.proxied(summary.meta.poster), background: images.proxied(summary.meta.background) },
+      poster: art ? `/api/library/thumb?key=${encodeURIComponent(entry.key)}` : undefined };
   }));
   res.json(summaries);
 }));
@@ -633,7 +678,7 @@ const withFavorites = <T extends { path: string }>(items: T[]) => {
 app.get("/api/watchlist", (_req, res) => {
   const all = store.watchlist();
   res.json(Object.entries(all)
-    .map(([key, value]) => ({ key, ...value }))
+    .map(([key, value]) => ({ key, ...value, poster: images.proxied(value.poster) }))
     .sort((a, b) => b.addedAt.localeCompare(a.addedAt)));
 });
 app.post("/api/watchlist", asyncRoute(async (req, res) => {
@@ -644,7 +689,7 @@ app.post("/api/watchlist", asyncRoute(async (req, res) => {
   const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
     const all = { ...state.watchlist };
-    if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: req.body.poster ? String(req.body.poster) : undefined, addedAt: new Date().toISOString() };
+    if (wanted) all[key] = { type, id, name: String(req.body.name ?? id), poster: posterOf(req.body.poster), addedAt: new Date().toISOString() };
     else delete all[key];
     state.watchlist = all;
   });
@@ -656,14 +701,14 @@ const PROGRESS_DONE = 0.94;
 app.get("/api/progress", (_req, res) => {
   const all = store.progress();
   const items = Object.entries(all)
-    .map(([key, value]) => ({ key, ...value }))
+    .map(([key, value]) => ({ key, ...value, poster: images.proxied(value.poster) }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, 40);
   res.json(items);
 });
 app.get("/api/progress/:key", (req, res) => {
   const found = store.progress()[String(req.params.key)];
-  res.json(found ?? null);
+  res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
 });
 app.post("/api/progress", asyncRoute(async (req, res) => {
   // Když je sledování vypnuté, pozice se nikam nezapisuje.
@@ -680,7 +725,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
       position, duration,
       title: String(req.body.title ?? all[key]?.title ?? "Video"),
       path: req.body.path ? String(req.body.path) : all[key]?.path,
-      poster: req.body.poster ? String(req.body.poster) : all[key]?.poster,
+      poster: posterOf(req.body.poster) ?? all[key]?.poster,
       updatedAt: new Date().toISOString(),
     };
     // Seznam nesmí růst donekonečna.
@@ -861,7 +906,7 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
   }
   if (!art) return res.status(404).end();
   res.setHeader("cache-control", "private, no-store");
-  res.sendFile(art, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+  res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 // Ruční přiřazení titulu ke složce, když soubor nepřišel přes frontu.
 /** Sváže složku, do které soubor půjde, s titulem z katalogu. Metadata se pak nemusí hádat. */
@@ -964,7 +1009,7 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
     if (!stream?.url || stream.url.startsWith("file://")) throw new AppError("Only a direct HTTP stream can be saved to a device.", "err.deviceNeedsHttp");
     await validateRemoteUrl(stream.url);
     const title = String(req.body.title ?? "video");
-    const media = req.body.media as MediaInfo | undefined;
+    const media = mediaSource(req.body.media);
     const addon = store.addons().find((item) => item.key === stream.addonKey);
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
     const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
@@ -1017,17 +1062,20 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
   catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
 }));
-app.get("/api/downloads", (_req, res) => res.json(queue.snapshot()));
+app.get("/api/downloads", (_req, res) => {
+  const snapshot = queue.snapshot();
+  res.json({ ...snapshot, jobs: snapshot.jobs.map(jobView) });
+});
 app.post("/api/downloads", asyncRoute(async (req, res) => {
   const stream = sourceOf(req);
-  const media = req.body.media as MediaInfo | undefined;
+  const media = mediaSource(req.body.media);
   const addon = store.addons().find((item) => item.key === stream.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
   const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
   const job = await queue.add(String(req.body.title ?? "video"), stream, media, targetSettings);
   await rememberTitle(job.target, media, targetSettings.layout === "flat");
   saveCatalogPoster(titleKey(job.target, media, targetSettings.layout === "flat"), media?.poster);
-  res.status(201).json(job);
+  res.status(201).json(jobView(job));
 }));
 // Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.
 app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
@@ -1035,7 +1083,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const type = String(req.body.type ?? "series");
   const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
   const parentId = String(parent.id ?? "").trim() || undefined;
-  const poster = String(parent.poster ?? "").trim() || undefined;
+  const poster = posterOf(parent.poster);
   const metaType = String(parent.metaType ?? type).trim() || type;
   const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
   if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
@@ -1179,6 +1227,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
+    if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.artworkLocation !== undefined) {
       state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";
     }
@@ -1441,6 +1490,6 @@ app.listen(port, "0.0.0.0", () => log("INFO", "Stremio Offline is listening", { 
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });
-    void flushLog().finally(() => process.exit(0));
+    void images.flush().catch(() => undefined).then(flushLog).finally(() => process.exit(0));
   });
 }

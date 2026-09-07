@@ -65,6 +65,7 @@ function parseSettings(value: unknown): Settings {
     artworkLocation: source.artworkLocation === "media" ? "media" : "data",
     trackProgress: boolean("trackProgress"),
     showResumeRow: boolean("showResumeRow"),
+    secureMode: boolean("secureMode"),
     catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
     realDebridToken: typeof source.realDebridToken === "string" ? source.realDebridToken.trim() : fallback.realDebridToken,

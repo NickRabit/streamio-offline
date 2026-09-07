@@ -394,6 +394,13 @@ export const cs: Catalog = {
   "addons.storageSaved": "Pravidla ukládání pro {addon} uložena.",
 
   // Settings.
+  "settings.privacyTitle": "Soukromí",
+  "settings.privacyText": "Co všechno smí prohlížeč načítat mimo tento server.",
+  "settings.secureMode": "Obrázky stahovat přes server",
+  "settings.secureModeHint": "Plakáty, pozadí, náhledy epizod a loga doplňků stáhne a uloží server. Po vypnutí je prohlížeč načítá přímo od poskytovatele, který tak vidí adresu každého diváka i tituly, které si otevře.",
+  "settings.secureModeLabel": "Zdroj obrázků",
+  "settings.secureModeOn": "Přes server",
+  "settings.secureModeOff": "Přímo od poskytovatele",
   "settings.appearanceTitle": "Vzhled",
   "settings.eyebrow": "NASTAVENÍ",
   "settings.title": "Nastavení aplikace",

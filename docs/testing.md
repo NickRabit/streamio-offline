@@ -96,7 +96,9 @@ Covered today: first-run account creation, adding an addon, sign-in and its
 refusal, the open and closed API endpoints, browsing a catalog, search with and
 without a match, a movie detail, a series episode list, source ordering and
 language filtering, queueing a download through to a finished job, a setting
-that survives a reload, and diagnostics.
+that survives a reload, diagnostics, and secure mode -- that catalogue payloads
+carry no provider address, that a page load touches nothing but the app's own
+origin, and that the Content-Security-Policy is served.
 
 Restricted mode has a **separate Playwright config** (`playwright.restricted.config.ts`).
 It must not share `e2e/.tmp` or the unlocked session cookie. The fixture
