@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -10,7 +10,7 @@ import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
 import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
  * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
@@ -67,7 +67,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium" });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -293,8 +293,9 @@ export function App() {
     api.inspect(selectedStream).then((value) => { if (!stale) setInspection(value); }).catch(() => undefined);
     return () => { stale = true; };
   }, [selectedStream]);
-  const saveSettings = async (patch: Partial<AppSettings>) => {
-    setSettings((current: AppSettings) => ({ ...current, ...patch }));
+  const saveSettings = async (patch: SettingsPatch) => {
+    const { realDebridToken: _token, ...rest } = patch;
+    if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
   const loadBrowse = async (target = browsePath, skip = 0) => {
@@ -936,7 +937,42 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
 
-function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function RealDebridSettings({ configured, onSave, onError }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const value = token.trim();
+    if (!value) return;
+    setBusy(true);
+    try { await onSave({ realDebridToken: value }); setToken(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  const clear = async () => {
+    if (!confirm("Odebrat uložený token Real-Debrid?")) return;
+    setBusy(true);
+    try { await onSave({ realDebridToken: "" }); setToken(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel settings-section debrid-section">
+    <SettingsSectionHead icon={<KeyRound/>} title="Real-Debrid" text="Token, kterým server požádá debrid o stažení torrentu. Doplňky s už vyřešenou HTTPS adresou ho nepotřebují."/>
+    {configured
+      ? <p className="debrid-status" role="status">Token je uložený. Nový zápis ho nahradí až po ověření u Real-Debrid.</p>
+      : <p className="debrid-status muted">Bez tokenu zůstanou surové torrenty skryté. HTTP zdroje z doplňků fungují dál.</p>}
+    <label className="debrid-field">
+      <span>{configured ? "Nahradit token" : "API token"}</span>
+      <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)}
+        aria-label="API token Real-Debrid" placeholder={configured ? "••••••••" : "vložit token z real-debrid.com"}/>
+    </label>
+    <div className="setting-actions">
+      <button className="primary" disabled={busy || !token.trim()} onClick={() => void submit()}>{configured ? "Nahradit token" : "Uložit token"}</button>
+      {configured && <button className="danger" disabled={busy} onClick={() => void clear()}>Odebrat</button>}
+    </div>
+  </section>;
+}
+
+function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
@@ -972,6 +1008,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Kolik souborů se smí stahovat najednou dohromady."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title="Souběžně z jednoho zdroje" text="Poskytovatelé omezují počet souběžných spojení a přebytečné přenosy utnou nebo nechají hladovět. Jednička je nejbezpečnější."><select aria-label="Souběžně z jednoho zdroje" value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
+      <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError}/>
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Sledovat, kde jste skončil" text="Ukládá pozici přehrávání, aby šlo navázat. Vypnutím se nic nového nezaznamená.">
           <select aria-label="Sledovat pozici" value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">Ukládat</option><option value="0">Neukládat</option>
@@ -993,7 +1030,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
         <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
         <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
-      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků mohou obsahovat přístupové tokeny. Soubor zálohy proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
+      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků a token Real-Debrid jsou v souboru v čitelné podobě. Zálohu proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
       <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>
     </div>
   </section>;

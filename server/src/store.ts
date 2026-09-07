@@ -5,7 +5,19 @@ import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 
 export type TileSize = "compact" | "small" | "medium" | "large";
-export interface Settings { concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }
+export interface Settings {
+  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
+  catalogTileSize: TileSize; libraryTileSize: TileSize;
+  /** Stored locally; never returned by GET /api/settings. */
+  realDebridToken: string;
+}
+export type PublicSettings = Omit<Settings, "realDebridToken"> & { realDebridConfigured: boolean };
+
+export function publicSettings(settings: Settings): PublicSettings {
+  const { realDebridToken: token, ...rest } = settings;
+  return { ...rest, realDebridConfigured: Boolean(token) };
+}
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState; libraryMeta?: Record<string, { type: string; id: string }>;
   /** Cesty označené jako oblíbené. Nic se nepřesouvá, je to jen příznak. */
   favorites?: string[];
@@ -14,7 +26,7 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** Rozkoukané: klíč titulu na pozici v sekundách. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
 
 export const defaultSettings = (): Settings => structuredClone(initialState.settings);
 

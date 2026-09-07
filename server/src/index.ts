@@ -13,7 +13,8 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { guardedFetch, outbound } from "./outbound.js";
-import { Store } from "./store.js";
+import { publicSettings, Store } from "./store.js";
+import { normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
@@ -1034,7 +1035,7 @@ app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queu
 app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
-app.get("/api/settings", (_req, res) => res.json(store.settings()));
+app.get("/api/settings", (_req, res) => res.json(publicSettings(store.settings())));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 app.get("/api/logs", asyncRoute(async (req, res) => {
   const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
@@ -1135,9 +1136,14 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
   streamCache.clear();
   queue.changed();
   log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version });
-  res.json({ settings: store.settings(), addons: store.addons().map(publicAddon) });
+  res.json({ settings: publicSettings(store.settings()), addons: store.addons().map(publicAddon) });
 }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
+  let realDebridToken: string | undefined;
+  if (req.body.realDebridToken !== undefined) {
+    realDebridToken = normalizeToken(req.body.realDebridToken);
+    if (realDebridToken) await verifyRealDebridToken(realDebridToken);
+  }
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
@@ -1161,8 +1167,9 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       const value = String(req.body.libraryTileSize);
       state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
+    if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
   });
-  queue.changed(); res.json(store.settings());
+  queue.changed(); res.json(publicSettings(store.settings()));
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
 app.post("/api/inspect", asyncRoute(async (req, res) => {

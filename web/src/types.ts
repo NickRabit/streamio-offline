@@ -62,7 +62,12 @@ export interface StatsSummary {
   byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
 }
-export interface Settings { concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }
+export interface Settings {
+  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
+  catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
+}
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured">> & { realDebridToken?: string };
 export interface SettingsBackup {
   format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; addedAt: string; downloadSettings: AddonDownloadSettings }>;

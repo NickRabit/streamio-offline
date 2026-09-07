@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { Store } from "./store.js";
+import { publicSettings, Store } from "./store.js";
 import type { AddonRecord } from "./types.js";
 
 const legacyAddon = () => ({
@@ -25,6 +25,7 @@ test("starý stav doplňku se migruje na výchozí ukládání", async () => {
     });
     assert.equal(store.settings().catalogTileSize, "medium");
     assert.equal(store.settings().libraryTileSize, "medium");
+    assert.equal(store.settings().realDebridToken, "");
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
@@ -41,5 +42,18 @@ test("vlastní pravidla doplňku přežijí uložení a nové načtení", async 
       movie: { subfolder: "Webshare/Filmy", layout: "flat" },
       series: { subfolder: "Webshare/Seriály", layout: "structured" },
     });
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the Real-Debrid token stays on disk and is stripped from the public view", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const first = new Store(directory); await first.load();
+    await first.update((state) => { state.settings.realDebridToken = "rd-secret"; });
+    const second = new Store(directory); await second.load();
+    assert.equal(second.settings().realDebridToken, "rd-secret");
+    const published = publicSettings(second.settings());
+    assert.equal(published.realDebridConfigured, true);
+    assert.equal("realDebridToken" in published, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
