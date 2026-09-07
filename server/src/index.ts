@@ -14,7 +14,7 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { publicSettings, Store } from "./store.js";
-import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
+import { advanceTorrent, normalizeToken, resolveIfReady, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
@@ -122,6 +122,19 @@ const ownerOf = (req: express.Request): ResourceOwner => {
 const sourceOf = (req: express.Request): StreamItem => {
   if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   return mediaResources.get(String(req.body?.sourceId ?? ""), ownerOf(req).sid, "source").stream;
+};
+const httpSourceOf = async (req: express.Request): Promise<StreamItem> => {
+  const stream = sourceOf(req);
+  if (stream.url) return stream;
+  const token = store.settings().realDebridToken;
+  if (!stream.infoHash || !token) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
+  const ready = await resolveIfReady(token, stream.infoHash, stream.fileIdx);
+  if (!ready) {
+    throw Object.assign(new Error("Torrent ještě není na Real-Debrid. Přidejte ho do fronty tlačítkem Do knihovny."), { status: 409 });
+  }
+  stream.url = ready.download;
+  if (ready.filename) stream.behaviorHints = { ...stream.behaviorHints, filename: ready.filename };
+  return stream;
 };
 const internalMediaRequest = (req: express.Request) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
@@ -927,7 +940,7 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
   pruneDeviceDownloadTickets();
   let ticket: DeviceDownloadTicket;
   const owner = ownerOf(req);
-  const stream = sourceOf(req);
+  const stream = await httpSourceOf(req);
   if (stream.url?.startsWith("file://")) {
     const relative = stream.url.slice(7);
     const target = relative && resolveInside(DOWNLOAD_DIR, relative);
@@ -1177,7 +1190,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
 app.post("/api/inspect", asyncRoute(async (req, res) => {
-  const stream = sourceOf(req);
+  const stream = await httpSourceOf(req);
   const info = await playback.inspect(stream);
   res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
 }));
@@ -1189,7 +1202,7 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
   if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
   const owner = ownerOf(req);
-  const prepared = mediaResources.mediaStream(sourceOf(req), owner);
+  const prepared = mediaResources.mediaStream(await httpSourceOf(req), owner);
   let started;
   const subtitleIds: Record<string, string> = {};
   try {

@@ -266,10 +266,25 @@ export function App() {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
+  const downloadsSeen = useRef(false);
+  const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
   const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null } | DownloadJob[]) => {
-    if (Array.isArray(snapshot)) { setDownloads(snapshot); setQueueHalt(null); return; }
-    setDownloads(snapshot.jobs ?? []);
-    setQueueHalt(snapshot.halt ?? null);
+    const jobs = Array.isArray(snapshot) ? snapshot : snapshot.jobs ?? [];
+    if (downloadsSeen.current) {
+      for (const job of jobs) {
+        const previous = jobStatus.current.get(job.id);
+        if (previous === "waiting" && job.status !== "waiting" && job.status !== "paused" && job.status !== "failed") {
+          notify(`${job.title} je na Real-Debrid, stahuji do knihovny.`);
+        }
+        if (previous && previous !== "completed" && job.status === "completed") {
+          notify(`${job.title} je v knihovně.`);
+        }
+      }
+    }
+    downloadsSeen.current = true;
+    jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
+    setDownloads(jobs);
+    setQueueHalt(Array.isArray(snapshot) ? null : snapshot.halt ?? null);
   };
   const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
   const [setupNeeded, setSetupNeeded] = useState(false);
@@ -637,15 +652,20 @@ export function App() {
   const selectedMedia = () => selectedVideo
     ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
     : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
+  const canPlay = Boolean(selectedStream?.playable || (selectedStream?.kind === "torrent" && settings.realDebridConfigured));
   const enqueue = async () => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
     const media = selectedMedia();
-    try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); return true; } catch (e) { fail(e); return false; }
+    try {
+      const job = await api.download(videoTitle, selectedStream, media);
+      notify(job.status === "waiting" ? "Čeká na Real-Debrid." : "Přidáno do stahovací fronty.");
+      await loadDownloads(); return true;
+    } catch (e) { fail(e); return false; }
   };
 
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.playable) return false;
+    if (!selectedStream?.playable && !(selectedStream?.kind === "torrent" && settings.realDebridConfigured)) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(`Stahování ${filename} spuštěno přes server.`);
@@ -791,7 +811,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.playable} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.playable} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
+                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> Do knihovny</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
