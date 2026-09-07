@@ -390,13 +390,14 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
     res.end(payload);
   });
   let calls = 0;
+  let ready = false;
   const { directory, queue, downloads } = await tempQueue({
     debridPollMs: 20,
     debrid: {
       configured: () => true,
       advance: async () => {
         calls += 1;
-        if (calls === 1) return { ready: false, torrentId: "rd1", progress: 40, status: "downloading" };
+        if (!ready) return { ready: false, torrentId: "rd1", progress: 40, status: "downloading" };
         return { ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/movie.mp4`, filename: "Movie.mkv" };
       },
     },
@@ -407,6 +408,7 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
     await queue.add("Http", { url: `http://127.0.0.1:${port}/other.mp4` });
     await waitFor(queue, () => queue.list().some((job) => job.title === "Http" && job.status === "completed"));
     assert.equal(queue.list().find((job) => job.title === "Film")?.status, "waiting");
+    ready = true;
     await waitFor(queue, () => queue.list().every((job) => job.status === "completed"));
     const torrent = queue.list().find((job) => job.title === "Film")!;
     assert.equal(torrent.status, "completed");
@@ -416,7 +418,7 @@ test("a torrent waits on Real-Debrid then downloads over HTTP without taking a s
   } finally {
     queue.stop();
     server.close();
-    await rm(directory, { recursive: true, force: true });
+    await rm(directory, { recursive: true, force: true }).catch(() => undefined);
   }
 });
 

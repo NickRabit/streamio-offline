@@ -28,10 +28,7 @@ These used to be open notes. They are in `main` now.
 - GHCR image plus manual and tag-driven build workflows (`ghcr.io/nickrabit/streamio-offline`).
 - Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
 - Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
-
-Shipped debrid path: addons that already return HTTPS (Torrentio configured
-with Real-Debrid, and similar) play and download as any other HTTP stream.
-There is still no built-in Real-Debrid client; a raw `infoHash` is unusable.
+- Real-Debrid client: API token in Settings, torrent rows no longer look like HTTP, waiting queue jobs that do not take an HTTP slot, play only when an HTTPS URL exists now, in-app toasts for the two hand-offs.
 
 ## Next (daily friction)
 
@@ -58,44 +55,8 @@ Do not keep a single number that pretends to be watch time.
 
 ### Torrents and Real-Debrid
 
-The app does not download torrents. It never runs a torrent engine on the NAS.
-A source is either HTTP(S) already, or it is a magnet/`infoHash` that Real-Debrid
-must fetch on its servers first. After that, the existing HTTP pipeline
-(proxy, Range resume, FFmpeg, library) takes over.
-
-**Today.** Cached `[RD+]` streams from a debrid-configured addon already have a
-URL and work. Uncached `[RD download]` streams often have a Torrentio resolve
-URL too, but the first request hangs until Real-Debrid finishes — the proxy
-can kill that. A raw `infoHash` with no URL shows up as **EXT**, looks
-pickable, and is not. Hide or separate those, and if every source is a torrent
-say so and point at Settings.
-
-**Planned client.** One Real-Debrid API token in **Settings**, verified with
-`GET /user`, stored and backed up as a secret — the same rule as tokens in
-addon URLs. Do not scrape the token out of a Torrentio manifest. Day one is
-Real-Debrid only.
-
-The download queue is the source of truth. **To library** on an `infoHash`
-creates a job in a new waiting state (`čeká na debrid`): `addMagnet` →
-`selectFiles` → poll `torrents/info` until `downloaded` → `unrestrict` → the
-job becomes a normal HTTP download. Waiting jobs must not occupy an HTTP
-concurrency slot; they only poll. Dedupe by `infoHash` + `fileIdx`. Map RD
-errors in the job (`509` slots full → retry, `503` infringing → fail, premium
-required → fail). When RD reports downloaded, the app starts the HTTP
-transfer itself — no second click.
-
-**Play** only when an HTTPS URL exists *now*. Cached: unrestrict and play
-through the proxy, same as today. Uncached: do not open the player; the
-action is **To library**. After RD has the file, play-from-RD is allowed
-without waiting for the NAS copy. Once the file is in the library, play that.
-The player itself does not change.
-
-**Notify.** In-app first: toast plus the Stahování badge, two events that
-must not be collapsed — “ready on Real-Debrid” (HTTP download starting) and
-“in the library” (the offline copy). Web Push / ntfy / Telegram wait until
-that is boring.
-
-Follow-show can later enqueue torrent sources the same way. Not in this slice.
+Shipped. Remaining: follow-show can later enqueue torrent sources the same way;
+push / ntfy out of the browser.
 
 ## Later
 

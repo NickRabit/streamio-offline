@@ -72,5 +72,5 @@ would hold a slot, and stopping playback would look like an outage.
 | Transcode pegs the CPU | [Hardware acceleration](hardware-acceleration.md) |
 | The NAS freezes during playback | [Keeping the NAS responsive](install-synology.md#keeping-the-nas-responsive) |
 | `unknown libva error` | [When the driver does not start](hardware-acceleration.md#when-the-driver-does-not-start) |
-| A stream is listed but will not play | It may be a raw `infoHash`; see [Real-Debrid](downloads.md#real-debrid-and-other-debrid-services) |
+| A stream is listed but will not play | A raw torrent needs a Real-Debrid token, or it is still leeching on their side; see [Real-Debrid](downloads.md#real-debrid-and-other-debrid-services) |
 | Locked out of the account | [Security → Forgotten password](../README.md#security) |

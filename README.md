@@ -33,8 +33,8 @@ used from a browser on the home network.
   playback actually failed on.
 
 Personalized addon URLs that already resolve through a debrid service work.
-Raw `infoHash` torrent streams do not: there is no torrent engine and no
-built-in debrid client.
+A raw torrent needs a Real-Debrid API token in Settings; the app never runs a
+torrent engine. See [Addons and downloads](docs/downloads.md#real-debrid-and-other-debrid-services).
 
 ## Quick start
 
