@@ -142,7 +142,8 @@ across four of the five projects. They live in
 `e2e/tests/layout/__screenshots__/<project>/`.
 
 They are only comparable when every one of them is produced in the same place,
-so they are always generated inside `mcr.microsoft.com/playwright:v1.56.1-noble`:
+so they are always generated inside the image in `e2e/Dockerfile`, based on
+`mcr.microsoft.com/playwright:v1.56.1-noble`:
 
 ```
 npm run test:e2e:snapshots
@@ -238,6 +239,13 @@ npm run test:e2e:snapshots  # regenerate the screenshot baselines
 ```
 
 `npm run test:e2e` needs the browser on the machine
-(`npx playwright install chromium`). `npm run test:e2e:docker` needs nothing but
+(`npx playwright install chromium`) and FFmpeg/ffprobe on PATH. `npm run test:e2e:docker` needs nothing but
 Docker, builds first, and matches CI exactly -- use it when a result has to be
 comparable, and always once screenshot baselines exist.
+
+Media ownership tests require FFmpeg and ffprobe. The Docker commands build
+`e2e/Dockerfile`, which adds FFmpeg to the pinned Playwright image; native runs
+need FFmpeg on PATH. The fake addon generates a small VP9/Opus WebM from the
+existing MP4 fixture for browser playback on Chromium builds without H.264.
+The proxy tests also use the original MP4 for actual probing, direct descriptors,
+range requests, HLS resource rewriting, subtitle and download ownership checks.

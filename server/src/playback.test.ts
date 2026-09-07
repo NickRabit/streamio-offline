@@ -400,3 +400,13 @@ test("a conversion FFmpeg could not open is told apart from one the viewer walke
   assert.equal(describeFailure("[http @ 0x1] HTTP error 404 Not Found\nError opening input: Server returned 404 Not Found\n", 8), SOURCE_UNREACHABLE);
   assert.match(describeFailure("[libx264 @ 0x1] height not divisible by 2\n", 1), /height not divisible by 2/);
 });
+
+test("probe caching separates credentials for the same source URL", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  let probes = 0;
+  manager.probeSource = async () => { probes++; return undefined; };
+  for (const authorization of ["first", "second", "first"]) {
+    await manager.inspect({ url: "https://provider.test/media", behaviorHints: { proxyHeaders: { request: { authorization } } } });
+  }
+  assert.equal(probes, 2);
+});

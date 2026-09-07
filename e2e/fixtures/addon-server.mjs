@@ -1,5 +1,7 @@
 // A Stremio addon that answers from memory, so the end-to-end tests never reach
 // the internet and always get the same catalog back.
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
@@ -9,6 +11,8 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.ADDON_PORT ?? 8098);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const videoFile = path.join(here, "media", "sample.mp4");
+const browserVideo = path.join(os.tmpdir(), `stremio-e2e-${process.pid}.webm`);
+execFileSync("ffmpeg", ["-v", "error", "-i", videoFile, "-c:v", "libvpx-vp9", "-c:a", "libopus", "-y", browserVideo]);
 
 export const MOVIE = {
   id: "tt-e2e-movie",
@@ -52,7 +56,12 @@ const MANIFEST = {
 
 // Two sizes and two languages, so ordering and the language filter have something
 // to actually order and filter.
-const streamsFor = (id) => [
+const streamsFor = (id) => id === "tt-e2e-proxy" ? [{
+  name: "Proxy fixture", title: "Movie query-canary", url: `http://127.0.0.1:${port}/proxy-fixture.mp4?token=query-canary`,
+  behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } },
+  subtitles: [{ url: `http://127.0.0.1:${port}/proxy-subtitle?token=subtitle-canary`, lang: "cs" }],
+  extra: { url: "https://unknown-canary.test/secret" },
+}] : proxyMode === "browser" ? [{ name: "E2E WebM", url: `http://127.0.0.1:${port}/browser-video.webm` }] : [
   { name: "E2E 1080p", title: `Czech \u{1F1E8}\u{1F1FF} 2.4 GB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4` },
   { name: "E2E 720p", title: `English \u{1F1EC}\u{1F1E7} 900 MB\n${id}`, url: `http://127.0.0.1:${port}/video/${encodeURIComponent(id)}.mp4` },
 ];
@@ -69,27 +78,53 @@ const json = (res, body) => {
 // The catalog id may be followed by an extras segment, e.g. catalog/movie/id/search=x.json
 const route = (pathname) => decodeURIComponent(pathname).replace(/\.json$/, "").split("/").filter(Boolean);
 
-async function serveVideo(req, res) {
+async function serveVideo(req, res, file = videoFile) {
   let info;
-  try { info = await stat(videoFile); }
+  try { info = await stat(file); }
   catch { res.writeHead(404).end(); return; }
 
   const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
-  const headers = { "content-type": "video/mp4", "accept-ranges": "bytes" };
+  const headers = { "content-type": file.endsWith(".webm") ? "video/webm" : "video/mp4", "accept-ranges": "bytes" };
   if (!range) {
     res.writeHead(200, { ...headers, "content-length": info.size });
-    return req.method === "HEAD" ? res.end() : createReadStream(videoFile).pipe(res);
+    return req.method === "HEAD" ? res.end() : createReadStream(file).pipe(res);
   }
   const start = range[1] ? Number(range[1]) : 0;
   const end = range[2] ? Number(range[2]) : info.size - 1;
   res.writeHead(206, { ...headers, "content-length": end - start + 1, "content-range": `bytes ${start}-${end}/${info.size}` });
-  return req.method === "HEAD" ? res.end() : createReadStream(videoFile, { start, end }).pipe(res);
+  return req.method === "HEAD" ? res.end() : createReadStream(file, { start, end }).pipe(res);
 }
 
+let proxyMode = "video";
 const server = createServer((req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
 
+  if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
+  if (pathname === "/proxy-control") { proxyMode = searchParams.get("mode") ?? "video"; return json(res, { ok: true }); }
+  if (pathname === "/proxy-subtitle") { res.writeHead(200, { "content-type": "text/vtt" }); return res.end("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"); }
+  if (pathname === "/proxy-fixture.mp4") {
+    if (req.headers.authorization !== "Bearer header-canary") return res.writeHead(403).end("header-canary");
+    if (proxyMode === "video") return void serveVideo(req, res);
+    if (proxyMode === "head") { res.writeHead(req.method === "HEAD" ? 200 : 405); return res.end(); }
+    if (proxyMode === "playlist") {
+      res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
+      return res.end('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="/proxy-key"\n#EXT-X-MAP:URI="/proxy-init"\n#EXTINF:2,query-canary\n/proxy-segment\n');
+    }
+    const status = Number(proxyMode);
+    res.writeHead(status, {
+      "content-type": "application/octet-stream", "cache-control": "public, max-age=3600",
+      "set-cookie": "provider-canary=secret", "link": "<https://provider-canary.test/secret>",
+      "www-authenticate": "Bearer provider-canary",
+      ...(status === 416 ? { "content-range": "bytes */123" } : {}),
+      ...(status === 302 ? { location: "/proxy-fixture?status=403" } : {}),
+    });
+    return res.end(status === 200 ? "media" : "provider-canary-secret");
+  }
+  if (["/proxy-key", "/proxy-init", "/proxy-segment"].includes(pathname)) {
+    res.writeHead(req.headers.authorization === "Bearer header-canary" ? 200 : 403);
+    return res.end("media");
+  }
   if (pathname === "/proxy-playlist.m3u8") {
     res.writeHead(200, { "content-type": "application/vnd.apple.mpegurl" });
     return res.end('#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.test/key"\nsegment.ts\nhttps://cdn.test/segment.ts\n');

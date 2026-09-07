@@ -1,6 +1,8 @@
 import express from "express";
+import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
+import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import path from "node:path";
-import { access, mkdir, readdir, readFile, rename, rm, stat, statfs } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
@@ -29,7 +31,15 @@ const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
 await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
-const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager();
+const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
+const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager(undefined, (id) => {
+  const owned = playbackOwners.get(id);
+  if (owned) {
+    mediaResources.remove(owned.resourceId);
+    for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
+  }
+  playbackOwners.delete(id);
+});
 const stats = new StatsLog();
 
 /** Poskytovatele bereme z adresy zdroje; doplněk ji může mít u každého streamu jiný. */
@@ -103,6 +113,45 @@ const currentSession = (req: express.Request) => {
 };
 const currentUser = (req: express.Request) => currentSession(req)?.username;
 
+const ownerOf = (req: express.Request): ResourceOwner => {
+  const session = currentSession(req);
+  if (!session) throw new ResourceError(401, "AUTH_REQUIRED");
+  return { sid: session.sid, expiresAt: session.expiresAt };
+};
+const sourceOf = (req: express.Request): StreamItem => {
+  if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
+  return mediaResources.get(String(req.body?.sourceId ?? ""), ownerOf(req).sid, "source").stream;
+};
+const internalMediaRequest = (req: express.Request) =>
+  /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
+  ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") &&
+  req.query.token === INTERNAL_TOKEN;
+const activeMedia = new Set<{ owner: ResourceOwner; res: express.Response; resourceId?: string }>();
+const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: string) => {
+  const active = { owner, res, resourceId };
+  activeMedia.add(active);
+  res.once("close", () => activeMedia.delete(active));
+};
+const libraryTarget = async (relative: string) => {
+  const target = resolveInside(DOWNLOAD_DIR, relative);
+  if (!target || relative.split(/[\\/]/).some((part) => part.startsWith("."))) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  const [root, resolved] = await Promise.all([realpath(DOWNLOAD_DIR), realpath(target)]);
+  if (!isPathWithin(resolved, root)) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  return resolved;
+};
+const safeInspection = (info: Awaited<ReturnType<PlaybackManager["inspect"]>>, stream: StreamItem) => ({
+  duration: info?.duration,
+  video: info?.video ? { codec: safeSourceText(info.video.codec, stream), width: info.video.width, height: info.video.height } : undefined,
+  audioTracks: (info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, stream), language: safeSourceText(track.language, stream), codec: safeSourceText(track.codec, stream) })),
+  subtitleTracks: (info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, stream), language: safeSourceText(track.language, stream), codec: safeSourceText(track.codec, stream) })),
+});
+const stopOwnedPlayback = async (sid?: string) => {
+  mediaResources.revoke(sid);
+  for (const active of activeMedia) if (!sid || active.owner.sid === sid) active.res.destroy();
+  for (const [id, owned] of playbackOwners) if (!sid || owned.owner.sid === sid) await playback.stop(id);
+  for (const [id, ticket] of deviceDownloadTickets) if (!sid || ticket.owner.sid === sid) deviceDownloadTickets.delete(id);
+};
+
 app.use(express.json({ limit: "256kb" }));
 
 // Každý požadavek dostane krátkou značku. Chyba nahlášená z prohlížeče a její příčina
@@ -142,10 +191,15 @@ const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: e
 const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
-  if (typeof req.query.token === "string" && req.query.token === INTERNAL_TOKEN) return next();
+  if (internalMediaRequest(req)) return next();
   if (!currentUser(req)) return res.status(401).json({ error: "Nepřihlášeno." });
   next();
 });
+
+setInterval(() => {
+  for (const active of activeMedia) if (active.owner.expiresAt <= Date.now()) active.res.destroy();
+  for (const [id, owned] of playbackOwners) if (owned.owner.expiresAt <= Date.now()) void playback.stop(id);
+}, 1000).unref();
 
 app.get("/api/auth/me", (req, res) => {
   if (needsSetup()) return res.json({ setup: true });
@@ -197,6 +251,7 @@ app.post("/api/auth/logout", asyncRoute(async (req, res) => {
     });
     log("INFO", "Sign-out", { username: info.username });
   }
+  await stopOwnedPlayback(req.body?.everywhere ? undefined : info.sid);
   res.status(204).end();
 }));
 app.patch("/api/auth/password", asyncRoute(async (req, res) => {
@@ -212,6 +267,7 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   const nextSecret = randomBytes(32).toString("hex");
   await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
+  await stopOwnedPlayback();
   log("INFO", "Credentials changed", { username });
   res.json({ username });
 }));
@@ -282,19 +338,39 @@ app.get("/api/searchable", (_req, res) => res.json(searchableCatalogs(store.addo
 app.get("/api/meta/:type/:id", asyncRoute(async (req, res) => { const meta = await metadata(store.addons(), String(req.params.type), String(req.params.id)); if (!meta) return res.status(404).json({ error: "Metadata nebyla nalezena." }); res.json(meta); }));
 app.get("/api/stream-sources/:type/:id", (req, res) => res.json(
   streamCandidates(store.addons(), String(req.params.type), String(req.params.id)).map((addon) => ({ key: addon.key, name: addon.manifest.name }))));
-app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => res.json(
-  await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined))));
-app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => res.json(await subtitles(store.addons(), String(req.params.type), String(req.params.id)))));
-app.get("/api/subtitle", asyncRoute(async (req, res) => {
+app.get("/api/streams/:type/:id", asyncRoute(async (req, res) => {
+  const owner = ownerOf(req);
+  const items = await streams(store.addons(), String(req.params.type), String(req.params.id), req.query.addon ? String(req.query.addon) : undefined);
+  if (ownerOf(req).sid !== owner.sid) throw new ResourceError(401, "AUTH_REQUIRED");
+  res.setHeader("cache-control", "private, no-store").json(items.map((item) => mediaResources.publicStream(item, owner)));
+}));
+app.get("/api/subtitles/:type/:id", asyncRoute(async (req, res) => {
+  const owner = ownerOf(req);
+  const items = await subtitles(store.addons(), String(req.params.type), String(req.params.id));
+  res.setHeader("cache-control", "private, no-store").json(items.map((item) => ({
+    subtitleId: mediaResources.add({ url: item.url }, owner, "subtitle"),
+    lang: safeSourceText(item.lang, { url: item.url }), addonName: safeSourceText(item.addonName, { url: item.url }),
+  })));
+}));
+app.get("/api/subtitle/:subtitleId", asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store");
-  const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw); const response = await guardedFetch(raw, { signal: AbortSignal.timeout(20_000) }); if (!response.ok) throw new Error(`Titulky odpověděly HTTP ${response.status}.`);
-  let text = await response.text(); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+  if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
+  const owner = ownerOf(req);
+  const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
+  trackMedia(owner, res, resource.parent);
+  const raw = resource.stream.url!;
+  const controller = new AbortController();
+  res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+  const response = await guardedFetch(raw, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
+  if (!response.ok) { await response.body?.cancel(); throw new Error("Subtitle source unavailable."); }
+  let text = await readMediaText(response); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
   const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
-  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, max-age=3600").send(text);
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").send(text);
 }));
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
 type DeviceDownloadTicket = {
+  owner: ResourceOwner;
   expiresAt: number;
   filename: string;
   source: { kind: "local"; path: string } | { kind: "remote"; stream: StreamItem; title: string; media?: MediaInfo };
@@ -744,7 +820,7 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
     art = entry && await locateArtwork(entry);
   }
   if (!art) return res.status(404).end();
-  res.setHeader("cache-control", "private, max-age=3600");
+  res.setHeader("cache-control", "private, no-store");
   res.sendFile(art, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 // Ruční přiřazení titulu ke složce, když soubor nepřišel přes frontu.
@@ -817,36 +893,30 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   });
   res.json({ key, type, id: id || null });
 }));
-// Stažený soubor jako HTTP zdroj. sendFile umí Range, takže se v něm dá plynule
-// posouvat a stejnou cestou si ho bere i FFmpeg, když je potřeba převod.
-app.get("/api/library/file", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "");
-  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target) return res.status(400).json({ error: "Neplatná cesta k souboru." });
-  // Tudy tečou všechny bajty přehrávání z knihovny -- přímo do prohlížeče i do
-  // FFmpeg, když se převádí. Disk ale není linka ven, takže jdou do vlastní kategorie.
-  countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" });
-  res.sendFile(target, { acceptRanges: true, dotfiles: "deny" }, (error) => {
-    if (error && !res.headersSent) res.status(404).json({ error: "Soubor nebyl nalezen." });
-  });
+app.post("/api/library/source", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "");
+  const target = relative && await libraryTarget(relative);
+  if (!target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+  res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${relative}`, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
 }));
 
 /** Keep the external address out of the download link by exchanging it for a short-lived ticket. */
 app.post("/api/device-download", asyncRoute(async (req, res) => {
   pruneDeviceDownloadTickets();
   let ticket: DeviceDownloadTicket;
-  if (req.body.path !== undefined) {
-    const relative = String(req.body.path ?? "");
+  const owner = ownerOf(req);
+  const stream = sourceOf(req);
+  if (stream.url?.startsWith("file://")) {
+    const relative = stream.url.slice(7);
     const target = relative && resolveInside(DOWNLOAD_DIR, relative);
     const info = target ? await stat(target).catch(() => undefined) : undefined;
-    if (!target || !info?.isFile()) throw new Error("Soubor v knihovně nebyl nalezen.");
+    if (!target || !info?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     ticket = {
-      expiresAt: Date.now() + DEVICE_TICKET_TTL,
+      owner, expiresAt: Math.min(owner.expiresAt, Date.now() + DEVICE_TICKET_TTL),
       filename: path.basename(relative),
       source: { kind: "local", path: relative },
     };
   } else {
-    const stream = req.body.stream as StreamItem;
     if (!stream?.url || stream.url.startsWith("file://")) throw new Error("Stáhnout do zařízení lze pouze přímý HTTP stream.");
     await validateRemoteUrl(stream.url);
     const title = String(req.body.title ?? "video");
@@ -855,7 +925,7 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
     const settings = addon?.downloadSettings ?? defaultDownloadSettings();
     const targetSettings = media?.kind === "episode" ? settings.series : settings.movie;
     ticket = {
-      expiresAt: Date.now() + DEVICE_TICKET_TTL,
+      owner, expiresAt: Math.min(owner.expiresAt, Date.now() + DEVICE_TICKET_TTL),
       filename: deviceFilename(stream, media, title, targetSettings),
       source: { kind: "remote", stream, title, media },
     };
@@ -868,13 +938,15 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
 app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   pruneDeviceDownloadTickets();
   const ticket = deviceDownloadTickets.get(String(req.params.id));
-  if (!ticket) return res.status(404).json({ error: "Odkaz ke stažení vypršel. Spusťte stažení znovu." });
+  if (!ticket || ticket.owner.sid !== ownerOf(req).sid) return res.status(404).json({ error: "Odkaz ke stažení vypršel. Spusťte stažení znovu." });
 
+  res.setHeader("cache-control", "private, no-store");
+  trackMedia(ticket.owner, res);
   if (ticket.source.kind === "local") {
-    const target = resolveInside(DOWNLOAD_DIR, ticket.source.path);
+    const target = await libraryTarget(ticket.source.path);
     if (!target) return res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
     countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
-    return void res.download(target, ticket.filename, { acceptRanges: true, dotfiles: "deny" }, (error) => {
+    return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
       if (error && !res.headersSent) res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
     });
   }
@@ -887,22 +959,23 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   const headerTimeout = setTimeout(() => controller.abort(), 30_000);
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
   let upstream: Response;
-  try { upstream = await safeFetch(stream.url!, { headers, signal: controller.signal }); }
+  try { upstream = await safeFetch(stream.url!, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); }
   finally { clearTimeout(headerTimeout); }
-  if (!upstream.ok || !upstream.body) throw new Error(`Zdroj odpověděl HTTP ${upstream.status}.`);
+  if (!upstream.ok) { await upstream.body?.cancel(); throw new Error("Download source unavailable."); }
 
   countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
   res.status(upstream.status).attachment(ticket.filename).setHeader("cache-control", "private, no-store");
   for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) {
     const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
   }
+  if (!upstream.body) return void res.end();
   const { Readable } = await import("node:stream");
   try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
   catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
 }));
 app.get("/api/downloads", (_req, res) => res.json(queue.list()));
 app.post("/api/downloads", asyncRoute(async (req, res) => {
-  const stream = req.body.stream as StreamItem;
+  const stream = sourceOf(req);
   const media = req.body.media as MediaInfo | undefined;
   const addon = store.addons().find((item) => item.key === stream.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
@@ -1075,8 +1148,9 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
 app.post("/api/inspect", asyncRoute(async (req, res) => {
-  const info = await playback.inspect(req.body.stream as StreamItem);
-  res.json({ duration: info?.duration, video: info?.video, audioTracks: info?.audioTracks ?? [], subtitleTracks: info?.subtitleTracks ?? [] });
+  const stream = sourceOf(req);
+  const info = await playback.inspect(stream);
+  res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
 }));
 app.post("/api/playback", asyncRoute(async (req, res) => {
   const settings = store.settings();
@@ -1085,12 +1159,37 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   if (req.body.subtitleTrack !== undefined) options.subtitleTrack = req.body.subtitleTrack === null ? null : Number(req.body.subtitleTrack);
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
   if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
-  const started = await playback.start(req.body.stream as StreamItem, req.body.capabilities as ClientCapabilities, options);
+  const owner = ownerOf(req);
+  const prepared = mediaResources.mediaStream(sourceOf(req), owner);
+  let started;
+  const subtitleIds: Record<string, string> = {};
+  try {
+    if (req.body.subtitleIds !== undefined && (!Array.isArray(req.body.subtitleIds) || req.body.subtitleIds.length > 100)) throw new ResourceError(400, "INVALID_SUBTITLES");
+    for (const id of req.body.subtitleIds ?? []) {
+      if (typeof id !== "string") throw new ResourceError(400, "INVALID_SUBTITLES");
+      const subtitle = mediaResources.get(id, owner.sid, "subtitle");
+      subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
+    }
+    started = await playback.start(prepared.stream, req.body.capabilities as ClientCapabilities, options);
+    if (currentSession(req)?.sid !== owner.sid) {
+      await playback.stop(started.id);
+      throw new ResourceError(401, "AUTH_REQUIRED");
+    }
+    playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
+  } catch (error) { mediaResources.remove(prepared.resourceId); throw error; }
   // Bajty počítá proxy, respektive knihovna; tady se přidává jen samotná položka,
   // aby "kolik toho bylo" nezůstalo jen u stahování.
-  void stats.complete(playbackMeta(req.body.stream as StreamItem));
-  res.status(201).json(started);
+  void stats.complete(playbackMeta(prepared.stream));
+  res.status(201).setHeader("cache-control", "private, no-store").json({ ...started, subtitleIds });
 }));
+app.use("/api/playback/:id", (req, res, next) => {
+  const owned = playbackOwners.get(String(req.params.id));
+  if (!owned || owned.owner.sid !== currentSession(req)?.sid) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
+  res.setHeader("cache-control", "private, no-store");
+  playback.touch(String(req.params.id));
+  next();
+});
+app.post("/api/playback/:id/ping", (_req, res) => res.status(204).end());
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(await playback.escalate(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
@@ -1103,7 +1202,7 @@ app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
   const file = playback.sidecarFile(String(req.params.id));
   if (!file) return res.status(404).end();
-  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").sendFile(file, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").sendFile(path.basename(file), { root: path.dirname(file), dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));
@@ -1131,21 +1230,34 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   }
   if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
   else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "private, no-store"); }
-  res.sendFile(path.join(directory, file), (error) => { if (error && !res.headersSent) res.status(404).end(); });
+  res.sendFile(file, { root: directory, dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 
-app.get("/api/proxy", asyncRoute(async (req, res) => {
+app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store");
-  const raw = String(req.query.url ?? ""); await validateRemoteUrl(raw);
-  // Both browser playback and FFmpeg read through this proxy.
-  const meta = statMeta({
-    source: "catalog", url: raw, title: String(req.query.title ?? "") || providerOf(raw),
-    addonKey: typeof req.query.addonKey === "string" ? req.query.addonKey : undefined,
-    addonName: typeof req.query.addonName === "string" ? req.query.addonName : undefined,
-  });
-  countBytes(res, meta);
-  const streamHeaders = typeof req.query.headers === "string" ? JSON.parse(Buffer.from(req.query.headers, "base64url").toString()) : {};
-  const headers: Record<string, string> = { ...streamHeaders };
+  if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
+  const internal = internalMediaRequest(req);
+  const resource = mediaResources.get(String(req.params.resourceId), currentSession(req)?.sid, "media", internal);
+  trackMedia(resource.owner, res, resource.parent ?? resource.id);
+  const stream = resource.stream;
+  const raw = stream.url!;
+  const ownedSession = [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
+  if (ownedSession) {
+    playback.touch(ownedSession);
+    const heartbeat = setInterval(() => playback.touch(ownedSession), 30_000);
+    res.once("close", () => clearInterval(heartbeat));
+  }
+  if (raw.startsWith("file://")) {
+    const relative = raw.slice(7);
+    const target = await libraryTarget(relative);
+    countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" });
+    return void res.sendFile(path.basename(target), { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
+      if (error && !res.headersSent) res.status(404).end();
+    });
+  }
+  await validateRemoteUrl(raw);
+  countBytes(res, playbackMeta(stream));
+  const headers: Record<string, string> = { ...stream.behaviorHints?.proxyHeaders?.request };
   if (req.headers.range) headers.range = req.headers.range;
   const controller = new AbortController();
   let headerTimedOut = false;
@@ -1182,24 +1294,22 @@ app.get("/api/proxy", asyncRoute(async (req, res) => {
     return void res.status(502).json({ error: "Media source request failed." });
   }
   const contentType = upstream.headers.get("content-type") ?? "";
+  if (contentType.includes("dash+xml") || new URL(upstream.url).pathname.toLowerCase().endsWith(".mpd")) {
+    await upstream.body?.cancel();
+    throw new Error("DASH playlists are not supported by the media proxy.");
+  }
   if (req.method !== "HEAD" && (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8"))) {
     const finalHeaders = upstreamRequestHeaders(upstream);
     finalHeaders.delete("range");
     finalHeaders.delete("if-range");
     const proxied = (value: string) => {
       const child = new URL(value, upstream.url);
-      if (!["http:", "https:"].includes(child.protocol)) throw new Error("Unsupported playlist resource.");
-      const params = new URLSearchParams({ url: child.toString() });
+      if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
       const childHeaders = redirectedHeaders(finalHeaders, new URL(upstream.url), child);
-      if ([...childHeaders].length) params.set("headers", Buffer.from(JSON.stringify(Object.fromEntries(childHeaders))).toString("base64url"));
-      for (const name of ["addonKey", "addonName", "title"]) { const carried = req.query[name]; if (typeof carried === "string") params.set(name, carried); }
-      return `/api/proxy?${params}`;
+      const id = mediaResources.add({ ...stream, url: child.toString(), behaviorHints: { proxyHeaders: { request: Object.fromEntries(childHeaders) } } }, resource.owner, "media", resource.parent ?? resource.id);
+      return `/api/media/${id}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
     };
-    const playlist = (await upstream.text()).split(/\r?\n/).map((line) => {
-      if (!line) return line;
-      if (!line.startsWith("#")) return proxied(line);
-      return line.replace(/URI="([^"]+)"/g, (_match, uri: string) => `URI="${proxied(uri)}"`);
-    }).join("\n");
+    const playlist = rewritePlaylist(await readMediaText(upstream), proxied, (text) => safeSourceText(text, stream) ?? "");
     if (res.destroyed || res.writableEnded) return;
     res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(playlist);
     return;
@@ -1231,6 +1341,10 @@ function shiftVtt(text: string, offset: number) {
   }).filter(Boolean).join("\n\n");
 }
 
+app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
+  res.status(410).setHeader("cache-control", "private, no-store").json({ error: "This media API has been retired.", code: "UNSAFE_SOURCE_INPUT" });
+});
+
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../web");
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
 app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
@@ -1244,7 +1358,11 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     user: currentUser(req), reason: message,
     stack: error instanceof Error ? error.stack : undefined,
   });
-  res.status(req.route?.path === "/api/proxy" ? 502 : status).json({ error: req.route?.path === "/api/proxy" ? "Media source request failed." : message });
+  const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
+  res.status(error instanceof ResourceError ? error.status : mediaRoute ? 502 : status).json({
+    error: error instanceof ResourceError ? error.message : mediaRoute ? "Media source request failed." : message,
+    code: error instanceof ResourceError ? error.code : undefined,
+  });
 });
 process.on("unhandledRejection", (reason) => {
   log("ERROR", "Unhandled promise rejection", { reason: reason instanceof Error ? reason.stack ?? reason.message : String(reason) });

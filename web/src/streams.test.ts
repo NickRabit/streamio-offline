@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { arrangeStreams, streamSize, streamText, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
-const stream = (parts: Partial<Stream>): Stream => ({ ...parts });
+const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
 const names = (list: Stream[]) => list.map((item) => item.name);
 const filters = (overrides: Partial<StreamFilters> = {}): StreamFilters =>
   ({ addon: "", language: "", sort: "recommended", ...overrides });

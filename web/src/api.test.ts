@@ -92,3 +92,16 @@ describe("query building", () => {
     expect(url(1)).toBe("/api/streams/movie/tt1?addon=alpha");
   });
 });
+
+describe("opaque media contracts", () => {
+  it("sends only the source ID for inspection and downloads", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({})));
+    const stream = { sourceId: "opaque", kind: "remote" as const, playable: true, title: "Movie" };
+    await api.inspect(stream);
+    await api.download("Movie", stream);
+    await api.prepareDeviceDownload({ stream, path: "old-input" });
+    expect(JSON.parse(String(optionsOf(0).body))).toEqual({ sourceId: "opaque" });
+    expect(JSON.parse(String(optionsOf(1).body))).toEqual({ title: "Movie", sourceId: "opaque" });
+    expect(JSON.parse(String(optionsOf(2).body))).toEqual({ sourceId: "opaque" });
+  });
+});

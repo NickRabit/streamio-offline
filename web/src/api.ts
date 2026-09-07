@@ -51,9 +51,9 @@ export const api = {
   streams: (type: string, id: string, addon?: string) => request<Stream[]>(`/api/streams/${encodeURIComponent(type)}/${encodeURIComponent(id)}${addon ? `?addon=${encodeURIComponent(addon)}` : ""}`),
   subtitles: (type: string, id: string) => request<Subtitle[]>(`/api/subtitles/${encodeURIComponent(type)}/${encodeURIComponent(id)}`),
   downloads: (timeoutMs?: number) => request<Download[]>("/api/downloads", { timeoutMs }),
-  download: (title: string, stream: Stream, media?: Record<string, unknown>) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, stream, media }) }),
+  download: (title: string, stream: Stream, media?: Record<string, unknown>) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media }) }),
   prepareDeviceDownload: (payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) =>
-    request<{ url: string; filename: string }>("/api/device-download", { method: "POST", body: JSON.stringify(payload) }),
+    request<{ url: string; filename: string }>("/api/device-download", { method: "POST", body: JSON.stringify({ title: payload.title, sourceId: payload.stream?.sourceId, media: payload.media }) }),
   downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, media?: { id?: string; metaType?: string; poster?: string }) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, media }) }),
   downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
@@ -64,7 +64,7 @@ export const api = {
   exportSettings: () => request<SettingsBackup>("/api/settings/export"),
   importSettings: (backup: unknown) => request<{ settings: Settings; addons: Addon[] }>("/api/settings/import", { method: "POST", body: JSON.stringify(backup), timeoutMs: 120_000 }),
   languages: () => request<Array<{ code: string; name: string }>>("/api/languages"),
-  inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ stream }) }),
+  inspect: (stream: Stream) => request<Inspection>("/api/inspect", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId }) }),
   logs: (options: { tail?: number; level?: string; hours?: number; search?: string; inline?: boolean } = {}) =>
     fetch(`/api/logs?${q({ tail: options.tail, level: options.level || undefined, hours: options.hours || undefined, q: options.search || undefined, inline: options.inline ? 1 : undefined })}`)
       .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
@@ -72,12 +72,14 @@ export const api = {
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
   // Start čeká na sondu zdroje (až 20 s rychlá a 45 s hloubková) a pak na první segmenty
   // FFmpeg (až 40 s). Kratší lhůta relaci nezruší, jen ji nechá běžet bez diváka.
-  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ stream, capabilities, time }), timeoutMs: PLAYBACK_START_MS }),
+  startPlayback: (stream: Stream, capabilities: Capabilities, time = 0, subtitleIds: string[] = []) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId, capabilities, time, subtitleIds }), timeoutMs: PLAYBACK_START_MS }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   /** The browser refused the stream: the server stops copying and really transcodes. */
   escalatePlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/escalate`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
+  pingPlayback: (id: string) => request<void>(`/api/playback/${id}/ping`, { method: "POST" }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
+  librarySource: (path: string) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }) }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
@@ -114,7 +116,8 @@ export const api = {
 
 /** Hand the same-origin ticket to the browser so large files never pass through JavaScript memory. */
 export async function saveToDevice(payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) {
-  const prepared = await api.prepareDeviceDownload(payload);
+  const stream = payload.stream ?? (payload.path ? await api.librarySource(payload.path) : undefined);
+  const prepared = await api.prepareDeviceDownload({ ...payload, stream });
   const link = document.createElement("a");
   link.href = prepared.url;
   link.download = prepared.filename;
@@ -125,4 +128,4 @@ export async function saveToDevice(payload: { title?: string; stream?: Stream; m
   return prepared.filename;
 }
 
-export const subtitleUrl = (url: string, offset = 0) => `/api/subtitle?${new URLSearchParams(offset ? { url, offset: offset.toFixed(3) } : { url })}`;
+export const subtitleUrl = (subtitleId: string, offset = 0) => `/api/subtitle/${encodeURIComponent(subtitleId)}${offset ? `?offset=${offset.toFixed(3)}` : ""}`;
