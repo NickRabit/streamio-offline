@@ -990,7 +990,7 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
   catch (error) { if (!res.destroyed && !res.writableEnded) throw error; }
 }));
-app.get("/api/downloads", (_req, res) => res.json(queue.list()));
+app.get("/api/downloads", (_req, res) => res.json(queue.snapshot()));
 app.post("/api/downloads", asyncRoute(async (req, res) => {
   const stream = sourceOf(req);
   const media = req.body.media as MediaInfo | undefined;
@@ -1093,6 +1093,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     playback: playback.diagnostics(),
     downloads: {
       total: jobs.length, byStatus,
+      halt: queue.haltInfo(),
       failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error })),
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),

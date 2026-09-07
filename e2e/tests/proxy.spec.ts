@@ -130,8 +130,8 @@ test("converted generations retain playback ownership", async ({ request, playwr
 });
 
 test("local playback and device downloads use opaque resources", async ({ request }) => {
-  await expect.poll(async () => (await (await request.get("/api/downloads")).json()).some((job: { status: string }) => job.status === "completed")).toBe(true);
-  const jobs = await (await request.get("/api/downloads")).json();
+  await expect.poll(async () => (await (await request.get("/api/downloads")).json()).jobs.some((job: { status: string }) => job.status === "completed")).toBe(true);
+  const jobs = (await (await request.get("/api/downloads")).json()).jobs;
   const job = jobs.find((item: { status: string }) => item.status === "completed");
   const sourceResponse = await request.post("/api/library/source", { data: { path: job.target } });
   expect(sourceResponse.status()).toBe(200);

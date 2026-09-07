@@ -256,7 +256,9 @@ expected.
 
 The queue survives a restart, resumes a `.part` file with HTTP Range, and
 supports pause, resume, retry, reorder, remove, and 1–8 concurrent downloads.
-Removing a finished job from history does not delete the file.
+Removing a finished job from history does not delete the file. A source that
+dies mid-transfer is retried from the partial file; a full disk pauses the
+whole queue and starts it again when space is free.
 
 The selected source and the player offer two destinations: **To library**
 (`Do knihovny`) adds the file to the server queue, while **To device**
