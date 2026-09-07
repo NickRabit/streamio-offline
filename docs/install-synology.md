@@ -5,12 +5,21 @@ to be rewritten. The steps work with or without SSH.
 
 ## Without SSH, through Container Manager
 
-1. On GitHub, **Code → Download ZIP** from
-   `https://github.com/NickRabit/streamio-offline`.
-2. In **File Station**, upload the ZIP to `/volume1/docker/` (or similar) and
-   extract it (right-click → Extract).
-3. In File Station, create a `.env` file in that folder (Create → Text file)
-   and put this in it:
+The NAS only needs two files, and nothing is built there — the image comes
+ready from GHCR.
+
+1. In **File Station**, create a folder for the project, for example
+   `/volume1/docker/stremio-offline`.
+2. Download [`compose.pull.yml`](../compose.pull.yml) from the repository and
+   upload it into that folder **renamed to `docker-compose.yml`**. Container
+   Manager looks for that name; under any other one it will not find the
+   project. Keep it the only compose file there.
+
+   Do not use `compose.yml` on the NAS. It builds the image locally, which is
+   slow, and Container Manager's classic builder silently leaves the VAAPI
+   drivers out.
+3. In the same folder, create a `.env` file (Create → Text file) with at least
+   this:
 
    ```dotenv
    DOWNLOAD_PATH=/volume1/video/downloads
@@ -20,14 +29,17 @@ to be rewritten. The steps work with or without SSH.
    PGID=100
    ```
 
-4. In **Container Manager → Project → Create**, pick that folder and set
-   `compose.yml` as the compose source.
+   The rest is optional and defaults sensibly — the full list with comments is
+   in [`.env.example`](../.env.example) and
+   [Configuration reference](configuration.md).
+4. In **Container Manager → Project → Create**, pick that folder. The compose
+   file is detected; the wizard offers to start the project right away.
 
    **Container Manager accepts only one compose file**, so the
-   `compose.synology.yml` override is ignored there. Hardware acceleration then
-   has to be turned on by hand — see
+   `compose.synology.yml` override is ignored there. The pull file already maps
+   `/dev/dri`; for hardware acceleration add `VAAPI_DEVICE=/dev/dri/renderD128`
+   and `RENDER_GID` to `.env` — see
    [Hardware acceleration](hardware-acceleration.md).
-
 5. After the first start, open the container **Terminal** in Container Manager
    and see who owns the download folder:
 
@@ -38,9 +50,13 @@ to be rewritten. The steps work with or without SSH.
    The first two numbers are uid and gid. Write them into `.env` as `PUID` and
    `PGID` and restart the project. For this purpose the Container Manager
    terminal is a full substitute for SSH.
-
 6. Open `http://NAS:8090`. A fresh install has no account and asks you to choose
    a name and password; until then the server serves nothing else.
+
+To update later, use **Action → Build** on the project. With no `build:` section
+in the file, that only pulls a newer image. Note that `:latest` is the last
+*released* image, not the last commit; to pin a version, append a commit SHA to
+the image name, for example `:a1b2c3d`.
 
 ## With SSH
 
@@ -51,11 +67,20 @@ cd streamio-offline
 cp .env.example .env
 # set DOWNLOAD_PATH, ALLOW_ADDON_HOSTS, and PUID/PGID from:
 stat -c '%u %g' /volume1/video/downloads
-docker compose -f compose.yml -f compose.synology.yml up -d --build
+docker compose -f compose.pull.yml pull
+docker compose -f compose.pull.yml up -d
 ```
 
-The `compose.synology.yml` override adds the `/dev/dri` device and the render
-group, so hardware acceleration works without further edits.
+`compose.pull.yml` already maps `/dev/dri`, so hardware acceleration needs only
+`VAAPI_DEVICE` and `RENDER_GID` in `.env`, no override file. Update later with
+the same two commands.
+
+To build on the NAS instead — rarely worth it, and slow — use `compose.yml`
+with the Synology override, which adds the device and the render group:
+
+```bash
+docker compose -f compose.yml -f compose.synology.yml up -d --build
+```
 
 ## When writes fail
 
