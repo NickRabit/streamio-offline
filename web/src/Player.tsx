@@ -1,7 +1,7 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, SlidersHorizontal, Volume2, X } from "lucide-react";
-import { ApiError, api, subtitleUrl } from "./api";
+import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
@@ -410,7 +410,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     }).catch((value) => {
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Playback did not start: ${message}`, { ...context(), phase: "start", capabilities: capabilities() });
-      setError(message);
+      setError(describeError(value));
     }).finally(() => { if (!disposed) setBuffering(false); });
     return () => {
       disposed = true; detach();
@@ -479,8 +479,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         const escalating = escalateRef.current; escalateRef.current = false;
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
-          const message = value instanceof Error ? value.message : String(value);
-          if (!(value instanceof ApiError) || !["RESOURCE_NOT_FOUND", "PLAYBACK_SESSION_GONE"].includes(value.code ?? "")) throw value;
+          if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
           next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId));
@@ -501,7 +500,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     catch (value) {
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Seek failed: ${message}`, { ...context(), phase: "seek", target: Math.round(bounded) });
-      if (epoch === seekEpochRef.current) setError(message);
+      if (epoch === seekEpochRef.current) setError(describeError(value));
     }
     finally {
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
@@ -545,7 +544,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     catch (value) {
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Track switch failed: ${message}`, { ...context(), phase: "track", changes });
-      setError(message);
+      setError(describeError(value));
     }
     finally { seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
   };

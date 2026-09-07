@@ -49,6 +49,13 @@ export function t(key: Key, vars?: Vars): string {
   return fill(text, vars);
 }
 
+/** A message the server produced: the key is translated when we ship it, and the
+ *  server's own English text stands in for anything this build does not know -- a
+ *  message added after it, or one that only exists in a log. */
+export function serverText(key: string | undefined, fallback: string, vars?: Vars): string {
+  return key && key in en ? t(key as Key, vars) : fallback;
+}
+
 const subscribe = (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; };
 
 export function useI18n() {

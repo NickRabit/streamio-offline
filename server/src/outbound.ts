@@ -137,7 +137,7 @@ export class OutboundGuard {
 
   private async acquire(entry: HostState) {
     if (entry.active >= this.config.maxConcurrent) {
-      if (entry.queue.length >= this.config.maxQueue) throw new Error("Fronta požadavků na doplněk je plná.");
+      if (entry.queue.length >= this.config.maxQueue) throw new Error("The request queue for this addon is full.");
       await new Promise<void>((resolve) => entry.queue.push(resolve));
     }
     entry.active += 1;

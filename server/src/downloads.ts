@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,7 +26,12 @@ export interface DownloadJob {
   id: string; title: string; stream?: StreamItem; media?: MediaInfo;
   source?: { type: string; videoId: string; tried: string[] };
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
-  error?: string; retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
+  error?: string;
+  /** Catalogue key for `error`, so the interface can show it in the reader's language.
+   *  A failure whose text is built from a source's own words carries none. */
+  errorKey?: string;
+  errorVars?: Record<string, string | number>;
+  retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
   debrid?: { torrentId?: string; progress?: number; status?: string };
   createdAt: string; updatedAt: string;
 }
@@ -149,7 +155,7 @@ export class DownloadQueue {
       job.notBefore = undefined;
     }
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "storage")) {
-      this.halt = { reason: "storage", at: new Date().toISOString(), message: "Na disku není místo." };
+      this.halt = { reason: "storage", at: new Date().toISOString(), message: "There is no space left on the disk.", messageKey: "err.noSpace" };
       this.ensureSpaceWatch();
     }
     await this.save();
@@ -162,12 +168,12 @@ export class DownloadQueue {
 
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings);
-    if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
+    if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
     // Bez téhle kontroly vznikne z dvojkliku na Stáhnout tentýž film dvakrát,
     // protože uniqueTarget té druhé úloze ochotně přidělí jméno s "(2)".
     const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new Error("Tenhle zdroj už ve frontě je.");
-    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new Error("Tenhle zdroj už je stažený v knihovně.");
+    if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
+    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new AppError("This source is already downloaded in the library.", "err.sourceDownloaded");
     const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
@@ -181,9 +187,9 @@ export class DownloadQueue {
   }
 
   private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings) {
-    if (!this.debrid?.configured()) throw new Error("Nejdřív nastavte Real-Debrid v Nastavení.");
+    if (!this.debrid?.configured()) throw new AppError("Set up Real-Debrid in Settings first.", "err.debridNotConfigured");
     const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
-    if (duplicate && duplicate.status !== "completed") throw new Error("Tenhle torrent už ve frontě je.");
+    if (duplicate && duplicate.status !== "completed") throw new AppError("This torrent is already in the queue.", "err.torrentQueued");
     const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
@@ -216,12 +222,12 @@ export class DownloadQueue {
       if (await exists(full) || await exists(`${full}.part`)) continue;
       return relative;
     }
-    throw new Error("Nepodařilo se najít volné jméno souboru.");
+    throw new AppError("No free file name could be found.", "err.noFreeName");
   }
 
   async pause(id: string) {
     const job = this.require(id);
-    if (job.status === "completed") throw new Error("Dokončené stahování nelze pozastavit.");
+    if (job.status === "completed") throw new AppError("A finished download cannot be paused.", "err.cannotPauseCompleted");
     this.clearDebrid(id);
     if (this.active.has(id)) this.pauseRequested.add(id);
     job.status = "paused";
@@ -236,17 +242,17 @@ export class DownloadQueue {
 
   async resume(id: string) {
     const job = this.require(id);
-    if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new Error("Tuto položku nelze obnovit.");
+    if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     if (this.halt || job.pauseReason === "storage") {
       const space = await this.freeSpace(this.downloadDir);
-      if (!this.hasRoom(space)) throw new Error(this.halt?.message ?? "Na disku není místo.");
+      if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "There is no space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
       this.releaseStorageHalt();
     }
     this.pauseRequested.delete(id);
     if (job.status === "paused" || job.status === "failed") {
       const waiting = Boolean(job.stream?.infoHash && !job.stream.url);
       job.status = waiting ? "waiting" : "queued";
-      job.error = undefined;
+      this.setError(job);
       job.pauseReason = undefined;
       job.notBefore = undefined;
       job.updatedAt = new Date().toISOString();
@@ -258,7 +264,7 @@ export class DownloadQueue {
 
   async retry(id: string) {
     const job = this.require(id);
-    if (job.status !== "failed") throw new Error("Opakovat lze pouze chybné stahování.");
+    if (job.status !== "failed") throw new AppError("Only a failed download can be retried.", "err.retryOnlyFailed");
     job.retryCount = 0;
     job.notBefore = undefined;
     if (job.source) {
@@ -287,18 +293,18 @@ export class DownloadQueue {
     this.debridBusy.add(id);
     try {
       if (this.now() - Date.parse(job.createdAt) > this.debridTimeoutMs) {
-        job.status = "failed"; job.error = "Real-Debrid torrent nedohrál včas."; job.updatedAt = new Date().toISOString();
+        job.status = "failed"; this.setError(job, "The Real-Debrid torrent did not finish in time.", "err.debridTimeout"); job.updatedAt = new Date().toISOString();
         await this.save();
         return;
       }
       if (!this.debrid?.configured()) {
-        job.status = "failed"; job.error = "Chybí token Real-Debrid."; job.updatedAt = new Date().toISOString();
+        job.status = "failed"; this.setError(job, "The Real-Debrid token is missing.", "err.debridTokenMissing"); job.updatedAt = new Date().toISOString();
         await this.save();
         return;
       }
       const infoHash = job.stream?.infoHash;
       if (!infoHash) {
-        job.status = "failed"; job.error = "Úloha nemá infoHash."; job.updatedAt = new Date().toISOString();
+        job.status = "failed"; this.setError(job, "The job has no infoHash.", "err.jobNoInfoHash"); job.updatedAt = new Date().toISOString();
         await this.save();
         return;
       }
@@ -312,7 +318,7 @@ export class DownloadQueue {
           behaviorHints: { ...job.stream?.behaviorHints, filename: result.filename ?? job.stream?.behaviorHints?.filename },
         };
         job.status = "queued";
-        job.error = undefined;
+        this.setError(job);
         log("INFO", "Real-Debrid finished, HTTP download will start", { id: job.id, title: job.title });
         await this.save();
         this.pump();
@@ -321,7 +327,7 @@ export class DownloadQueue {
       await this.saveSoon();
       this.scheduleDebrid(job.id, this.debridPollMs);
     } catch (error) {
-      job.error = error instanceof Error ? error.message : String(error);
+      this.setError(job, error instanceof Error ? error.message : String(error));
       job.updatedAt = new Date().toISOString();
       if (isRetryableDebridFailure(error)) {
         log("WARN", "Real-Debrid is busy, will retry", { id: job.id, title: job.title, reason: job.error });
@@ -339,7 +345,7 @@ export class DownloadQueue {
 
   async remove(id: string) {
     const index = this.jobs.findIndex((job) => job.id === id);
-    if (index < 0) throw new Error("Položka nebyla nalezena.");
+    if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
     const [job] = this.jobs.splice(index, 1);
     this.active.get(id)?.abort();
     if (job.status !== "completed" && job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
@@ -349,7 +355,7 @@ export class DownloadQueue {
 
   async move(id: string, direction: -1 | 1) {
     const index = this.jobs.findIndex((job) => job.id === id);
-    if (index < 0) throw new Error("Položka nebyla nalezena.");
+    if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
     const next = Math.max(0, Math.min(this.jobs.length - 1, index + direction));
     if (next !== index) { const [job] = this.jobs.splice(index, 1); this.jobs.splice(next, 0, job); await this.save(); }
     this.pump();
@@ -364,7 +370,13 @@ export class DownloadQueue {
   }
   async clearCompleted() { this.jobs = this.jobs.filter((job) => job.status !== "completed"); await this.save(); }
   changed() { this.pump(); }
-  private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new Error("Položka nebyla nalezena."); return job; }
+  /** The key travels with the text so the interface can render a stored failure in
+   *  whatever language is set now, not the one that was set when it failed. */
+  private setError(job: DownloadJob, message?: string, key?: string, vars?: Record<string, string | number>) {
+    job.error = message; job.errorKey = key; job.errorVars = vars;
+  }
+
+  private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Adresy zdrojů (často s tokeny) nesmí do rozhraní; ven jde jen příznak líné úlohy. */
   private publicJob({ stream, source, notBefore: _notBefore, debrid, ...job }: DownloadJob) {
     return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress };
@@ -405,7 +417,7 @@ export class DownloadQueue {
     const space = await this.freeSpace(this.downloadDir);
     if (space.freeBytes == null) return;
     if (space.freeBytes < needed + storageHeadroom(space.totalBytes)) {
-      throw new StorageError("Na disku není místo.", "ENOSPC");
+      throw new StorageError("There is no space left on the disk.", "ENOSPC");
     }
   }
 
@@ -416,26 +428,26 @@ export class DownloadQueue {
       if (job.status === "paused" && job.pauseReason === "storage") {
         job.status = "queued";
         job.pauseReason = undefined;
-        job.error = undefined;
+        this.setError(job);
         job.notBefore = undefined;
         job.updatedAt = new Date().toISOString();
       }
     }
   }
 
-  private async haltForStorage(message: string) {
-    this.halt = { reason: "storage", at: new Date().toISOString(), message };
+  private async haltForStorage(reason: { message: string; key: string }) {
+    this.halt = { reason: "storage", at: new Date().toISOString(), message: reason.message, messageKey: reason.key };
     for (const job of this.jobs) {
       if (!this.active.has(job.id) && job.status !== "downloading") continue;
       this.pauseRequested.add(job.id);
       job.status = "paused";
       job.pauseReason = "storage";
-      job.error = message;
+      this.setError(job, reason.message, reason.key);
       job.speed = 0;
       this.active.get(job.id)?.abort();
     }
     this.ensureSpaceWatch();
-    log("ERROR", "The download queue halted because storage is unavailable", { reason: message });
+    log("ERROR", "The download queue halted because storage is unavailable", { reason: reason.message });
   }
 
   private ensureSpaceWatch() {
@@ -486,13 +498,13 @@ export class DownloadQueue {
   /** Doplňky se na streamy ptáme až tady, těsně před stahováním jedné konkrétní epizody.
    *  Hromadné přidání celé série tak nevyvolá lavinu dotazů najednou. */
   private async resolve(job: DownloadJob) {
-    if (!job.source) throw new SourceError("Úloha nemá zdroj ani předpis, jak ho najít.");
-    if (!this.resolver) throw new SourceError("Výběr zdroje není k dispozici.");
+    if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
+    if (!this.resolver) throw new SourceError("Source selection is unavailable.");
     const resolved = await this.resolver(job.source.type, job.source.videoId, job.source.tried);
     if (!resolved?.stream.url) {
       throw new SourceError(job.source.tried.length
-        ? `Všechny dostupné zdroje selhaly (${job.source.tried.length}).`
-        : "Nenašel se žádný přímo stažitelný zdroj.");
+        ? `Every available source failed (${job.source.tried.length}).`
+        : "No directly downloadable source was found.");
     }
     job.stream = resolved.stream;
     const settings = job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie;
@@ -504,7 +516,7 @@ export class DownloadQueue {
   }
 
   private async download(job: DownloadJob) {
-    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.error = undefined; job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(vybere se)", previousBytes: job.received }); await this.save();
+    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
@@ -518,7 +530,7 @@ export class DownloadQueue {
         return;
       }
       const stream = job.stream!;
-      if (!stream.url) throw new SourceError("Stáhnout lze pouze přímý HTTP stream.");
+      if (!stream.url) throw new SourceError("Only a direct HTTP stream can be downloaded.");
       const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
       await mkdir(path.dirname(target), { recursive: true });
       let offset = 0; try { offset = (await stat(partial)).size; } catch { /* new download */ }
@@ -544,7 +556,7 @@ export class DownloadQueue {
       job.total = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined, hinted);
       job.received = offset;
       if (job.total) await this.admitStorage(job.total - offset);
-      // Tři pokusy mají znamenat "třikrát po sobě to nešlo", ne "třikrát za celou dobu".
+      // Three attempts should mean "it failed three times in a row", not "three times ever".
       // Jakmile se přenos po navázání pořádně rozjede, je předchozí výpadek vyřízený
       // a rozpočet se vrací; jinak by velký soubor umřel na pár škytnutí za hodinu.
       const recoveredAt = 50 * MiB; let recovered = false; let firstByte = false;
@@ -580,13 +592,13 @@ export class DownloadQueue {
       const handle = await open(partial, "r+");
       try { await handle.sync(); } finally { await handle.close(); }
       await rename(partial, target);
-      job.status = "completed"; job.speed = 0; job.retryCount = 0; job.error = undefined;
+      job.status = "completed"; job.speed = 0; job.retryCount = 0; this.setError(job);
       log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
       try { await this.onCompleted?.(job); }
       catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
     } catch (error) {
       job.speed = 0;
-      const message = stalled ? "Přenos bez dat." : (error instanceof Error ? error.message : String(error));
+      const message = stalled ? "The transfer carried no data." : (error instanceof Error ? error.message : String(error));
       const kind = this.pauseRequested.has(job.id) ? "pause" as const : classifyFailure(error, { stalled });
       if (kind === "pause") {
         job.status = "paused";
@@ -602,7 +614,7 @@ export class DownloadQueue {
         const wait = this.retryDelay(job.retryCount, error instanceof HttpSourceError ? error.retryAfterMs : undefined);
         job.notBefore = this.now() + wait;
         job.status = "queued";
-        job.error = `Přerušené spojení, opakuji (${job.retryCount}/3)…`;
+        this.setError(job, `Connection dropped, retrying (${job.retryCount}/3)\u2026`, "err.retryingAfterDrop", { attempt: job.retryCount, of: 3 });
         retryScheduled = true;
         log("WARN", "The transfer broke off, it will be retried", { id: job.id, reason: message, retry: job.retryCount, waitMs: wait });
         if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -612,12 +624,12 @@ export class DownloadQueue {
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
         job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.retryCount = 0; job.notBefore = undefined;
-        job.status = "queued"; job.error = `Zdroj selhal (${message}), zkusím další…`;
+        job.status = "queued"; this.setError(job, `The source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, 2000);
       } else {
-        job.status = "failed"; job.error = message;
+        job.status = "failed"; this.setError(job, message);
         log("ERROR", "Download failed", { id: job.id, reason: message, received: job.received, total: job.total });
       }
     } finally {

@@ -1,10 +1,18 @@
-import { t } from "./i18n";
+import { serverText, t } from "./i18n";
 import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSnapshot, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
+  constructor(message: string, readonly status: number, readonly code?: string,
+    /** Catalogue key for the message, so it can be shown in the reader's language. */
+    readonly messageKey?: string, readonly vars?: Record<string, string | number>) { super(message); }
 }
+
+/** Every failure the interface shows goes through here: a known key wins, the
+ *  server's English text is the fallback. */
+export const describeError = (error: unknown): string => error instanceof ApiError
+  ? serverText(error.messageKey, error.message, error.vars)
+  : error instanceof Error ? error.message : String(error);
 
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
@@ -23,8 +31,8 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
     throw error;
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({} as { error?: string; code?: string }));
-    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code);
+    const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number> }));
+    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars);
   }
   return response.status === 204 ? undefined as T : response.json();
 }

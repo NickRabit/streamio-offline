@@ -1,11 +1,9 @@
 import { FormEvent, useState } from "react";
 import { CirclePlay, KeyRound, Languages, LogOut, ShieldAlert } from "lucide-react";
-import { api } from "./api";
+import { api, describeError } from "./api";
 import type { Session } from "./types";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES, useI18n, type Locale } from "./i18n";
-
-const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (session: Session) => void }) {
   const { t, locale, setLocale } = useI18n();
@@ -28,7 +26,7 @@ export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (
       } else {
         onSession(await api.login(username.trim(), password, remember));
       }
-    } catch (value) { setError(message(value)); }
+    } catch (value) { setError(describeError(value)); }
     finally { setBusy(false); }
   };
 

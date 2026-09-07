@@ -20,10 +20,11 @@ export interface Stream {
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }
-export interface QueueHalt { reason: "storage"; at: string; message: string }
+export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 export interface Download {
   id: string; title: string; status: "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
-  target: string; received: number; total?: number; speed: number; error?: string; order: number;
+  target: string; received: number; total?: number; speed: number; order: number;
+  error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
   pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   createdAt: string; updatedAt: string;
 }
@@ -47,7 +48,7 @@ export interface Diagnostics {
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     sessions: DiagnosticsSession[];
   };
-  downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string }> };
+  downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string; errorKey?: string }> };
   addons: Array<{ name: string; role: string; enabled: boolean }>;
   outbound: Array<{ host: string; state: "closed" | "open" | "half-open"; active: number; queued: number; failures: number; rejected: number; opened: number; opensInSeconds?: number }>;
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;

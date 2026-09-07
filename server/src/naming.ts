@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import path from "node:path";
 import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings, StreamItem } from "./types.js";
 
@@ -40,10 +41,10 @@ export const defaultDownloadSettings = (): AddonDownloadSettings => ({
 export function safeSubfolder(value: unknown): string {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
-  if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new Error("Podsložka musí být relativní k /downloads.");
+  if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new AppError("The subfolder has to be relative to /downloads.", "err.subfolderRelative");
   const segments = raw.split(/[\\/]+/).filter(Boolean);
-  if (segments.length > 8) throw new Error("Podsložka může mít nejvýše 8 úrovní.");
-  if (segments.some((segment) => segment === "." || segment === "..")) throw new Error("Podsložka nesmí obsahovat segment . ani segment ..");
+  if (segments.length > 8) throw new AppError("The subfolder may be at most 8 levels deep.", "err.subfolderDepth");
+  if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder must contain neither a . nor a .. segment.", "err.subfolderDots");
   return segments.map(safeName).join(path.sep);
 }
 

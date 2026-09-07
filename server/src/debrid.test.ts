@@ -19,14 +19,14 @@ test("a premium token is accepted", async () => {
 test("a free account is rejected", async () => {
   await assert.rejects(
     verifyRealDebridToken("free", async () => json({ username: "free", type: "free", premium: 0 })),
-    (error: unknown) => error instanceof DebridError && /není premium/.test(error.message) && error.status === 400,
+    (error: unknown) => error instanceof DebridError && /not premium/.test(error.message) && error.status === 400,
   );
 });
 
 test("an invalid token is rejected without storing a guess", async () => {
   await assert.rejects(
     verifyRealDebridToken("nope", async () => json({ error: "bad_token" }, 401)),
-    (error: unknown) => error instanceof DebridError && error.status === 401 && /není platný/.test(error.message),
+    (error: unknown) => error instanceof DebridError && error.status === 401 && /token is not valid/.test(error.message),
   );
 });
 
@@ -105,14 +105,14 @@ test("a full slot is a retryable error", async () => {
 test("a generic 503 is unavailable, not an infringing torrent", async () => {
   await assert.rejects(
     addMagnet("token", magnetFromHash(HASH), async () => json({ error: "service_unavailable" }, 503)),
-    (error: unknown) => error instanceof DebridError && error.status === 503 && /neodpovídá/.test(error.message) && isRetryableDebridFailure(error),
+    (error: unknown) => error instanceof DebridError && error.status === 503 && /not answering/.test(error.message) && isRetryableDebridFailure(error),
   );
 });
 
 test("an infringing torrent is a fatal rejection", async () => {
   await assert.rejects(
     addMagnet("token", magnetFromHash(HASH), async () => json({ error: "infringing_file", error_code: 16 }, 503)),
-    (error: unknown) => error instanceof DebridError && error.code === "infringing_file" && /odmítl/.test(error.message) && !isRetryableDebridFailure(error),
+    (error: unknown) => error instanceof DebridError && error.code === "infringing_file" && /refused this torrent/.test(error.message) && !isRetryableDebridFailure(error),
   );
 });
 

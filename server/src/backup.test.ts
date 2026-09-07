@@ -20,7 +20,7 @@ test("záloha zachová nastavení, pořadí a citlivou URL doplňku", () => {
 });
 
 test("import odmítne cizí formát a normalizuje hodnoty", () => {
-  assert.throws(() => parseSettingsBackup({ format: "other", version: 1, settings: {}, addons: [] }), /podporovaná záloha/);
+  assert.throws(() => parseSettingsBackup({ format: "other", version: 1, settings: {}, addons: [] }), /supported Stremio Offline settings backup/);
   const parsed = parseSettingsBackup({
     format: "stremio-offline-settings", version: 1, settings: { concurrentDownloads: 99, artworkLocation: "elsewhere" },
     addons: [{ manifestUrl: "https://example.com/manifest.json", role: "both", enabled: true, downloadSettings: {} }],

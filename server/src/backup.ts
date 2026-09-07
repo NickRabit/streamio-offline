@@ -2,6 +2,7 @@ import type { AddonDownloadSettings, AddonRecord, AddonRole } from "./types.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import { defaultSettings, type Settings } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
+import { AppError } from "./errors.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 export const BACKUP_VERSION = 1;
@@ -26,7 +27,7 @@ export interface SettingsBackup {
 }
 
 const object = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Soubor zálohy nemá platný formát.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new AppError("The backup file has an invalid format.", "err.backupFormat");
   return value as Record<string, unknown>;
 };
 
@@ -72,14 +73,14 @@ function parseSettings(value: unknown): Settings {
 
 export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "exportedAt"> & { exportedAt?: string } {
   const root = object(value);
-  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new Error("Soubor není podporovaná záloha nastavení Stremio Offline.");
-  if (!Array.isArray(root.addons) || root.addons.length > 100) throw new Error("Seznam doplňků v záloze není platný.");
+  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new AppError("The file is not a supported Stremio Offline settings backup.", "err.backupUnsupported");
+  if (!Array.isArray(root.addons) || root.addons.length > 100) throw new AppError("The addon list in the backup is not valid.", "err.backupAddons");
   const addons = root.addons.map((raw, index): BackupAddon => {
     const item = object(raw);
     const manifestUrl = typeof item.manifestUrl === "string" ? item.manifestUrl.trim() : "";
-    if (!manifestUrl) throw new Error(`Doplněk č. ${index + 1} nemá adresu manifestu.`);
+    if (!manifestUrl) throw new AppError(`Addon no. ${index + 1} has no manifest address.`, "err.backupAddonUrl");
     const role = item.role as AddonRole;
-    if (!ROLES.has(role)) throw new Error(`Doplněk č. ${index + 1} má neplatnou úlohu.`);
+    if (!ROLES.has(role)) throw new AppError(`Addon no. ${index + 1} has an invalid role.`, "err.backupAddonRole");
     return {
       manifestUrl,
       role,

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import type { StatsSeries, StatsSummary } from "./types";
-import { localeTag, t, useI18n } from "./i18n";
+import { localeTag, serverText, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
   : value >= 1e12 ? `${(value / 1e12).toFixed(2)} TB`
@@ -10,6 +10,10 @@ const size = (value: number) => !value ? "0 B"
   : `${Math.round(value / 1e3)} kB`;
 
 const files = (count: number) => t("stats.items", { count });
+
+/** Providers and addons are named by the outside world, the kinds of traffic by us. */
+const seriesLabel = (kind: string, key: string, fallback: string) =>
+  kind === "source" ? serverText(`stats.source.${key}`, fallback) : fallback;
 
 const PERIODS = [
   { hours: 1, key: "stats.period.hour" },
@@ -109,7 +113,7 @@ function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
           <button className={`stats-pick${chosen.has(id) ? " chosen" : ""}`} onClick={() => onToggle(id)}
             aria-pressed={chosen.has(id)} title={chosen.has(id) ? t("stats.removeFromChart") : t("stats.addToChart")}>
             <span className="stats-dot" style={color ? { background: color } : undefined}/>
-            <span className="stats-name">{item.label}</span>
+            <span className="stats-name">{seriesLabel(kind, item.key, item.label)}</span>
             <b>{size(item.bytes)}</b>
           </button>
           <div className="stats-track"><span style={{ width: `${total ? (item.bytes / total) * 100 : 0}%`, background: color || undefined }}/></div>
