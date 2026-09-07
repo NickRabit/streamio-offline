@@ -11,8 +11,10 @@ e2e/.tmp/
 test-results/
 playwright-report/
 
-# Local-only working documents: an unfinished security/perf spec and a
-# speculative desktop-distribution note. Neither describes shipped behaviour.
+# Local-only working documents: an in-progress i18n spec, an unfinished
+# security/perf spec and a speculative desktop-distribution note. None of them
+# describes shipped behaviour.
+I18N_SPEC.md
 PLAYER_SPEC.md
 FOLLOW_UP_MULTIPLATFORM.md
 DEBRID_CHECKLIST.md
