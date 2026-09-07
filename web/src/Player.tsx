@@ -372,7 +372,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   };
 
   useEffect(() => {
-    if (!open || (!stream?.playable && stream?.kind !== "torrent") || !videoRef.current) return;
+    if (!open || !stream?.playable || !videoRef.current) return;
     let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;

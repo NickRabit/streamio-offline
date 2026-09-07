@@ -142,4 +142,9 @@ describe("torrent listing", () => {
     expect(canQueue(torrent, true)).toBe(true);
     expect(canQueue(http, false)).toBe(true);
   });
+
+  it("does not treat a torrent as playable", () => {
+    expect(http.playable).toBe(true);
+    expect(torrent.playable).toBe(false);
+  });
 });

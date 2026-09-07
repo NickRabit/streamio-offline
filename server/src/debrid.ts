@@ -26,7 +26,7 @@ const rdError = (status: number, code?: string, errorCode?: number) => {
   if (status === 401 || code === "bad_token" || errorCode === 8) return new DebridError("Token Real-Debrid není platný.", 401, code ?? "bad_token");
   if (status === 403 && code !== "traffic_exhausted") return new DebridError("Real-Debrid tento účet k API nepustil.", 403, code);
   if (INFRINGING.has(code ?? "") || errorCode === 16) {
-    return new DebridError("Real-Debrid tenhle torrent odmítl.", 503, "infringing_file");
+    return new DebridError("Real-Debrid tenhle torrent odmítl.", 451, "infringing_file");
   }
   if (code === "traffic_exhausted" || errorCode === 29) return new DebridError("Na účtu Real-Debrid došel traffic.", 403, "traffic_exhausted");
   if (code === "too_many_torrents" || errorCode === 21) {

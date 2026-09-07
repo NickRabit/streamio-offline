@@ -652,7 +652,7 @@ export function App() {
   const selectedMedia = () => selectedVideo
     ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
     : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
-  const canPlay = Boolean(selectedStream?.playable || (selectedStream?.kind === "torrent" && settings.realDebridConfigured));
+  const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async () => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
@@ -665,7 +665,7 @@ export function App() {
   };
 
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.playable && !(selectedStream?.kind === "torrent" && settings.realDebridConfigured)) return false;
+    if (!selectedStream?.playable) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(`Stahování ${filename} spuštěno přes server.`);
@@ -807,7 +807,7 @@ export function App() {
               {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">Doplňky vrátily jen torrenty. Bez tokenu Real-Debrid v <button className="link-button" onClick={() => openView("settings")}>Nastavení</button> je nelze stáhnout ani přehrát.</div>}
               {Boolean(streams.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
               {selectedStream?.kind === "unsupported" && <p className="notice">Tento zdroj nelze bezpečně přehrát přes server. Vyberte jiný zdroj.</p>}
-              {selectedStream?.kind === "torrent" && <p className="notice">Real-Debrid torrent nejdřív stáhne k sobě. Přehrát půjde, až bude soubor na debridu nebo v knihovně.</p>}
+              {selectedStream?.kind === "torrent" && <p className="notice">Tenhle zdroj je torrent. Dejte ho Do knihovny — Real-Debrid ho nejdřív stáhne k sobě a appka ho pak uloží. Přehrát jde až z knihovny.</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}

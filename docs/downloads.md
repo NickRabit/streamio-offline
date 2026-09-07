@@ -24,10 +24,11 @@ servers; this app then pulls the unrestricted HTTPS file through the existing
 queue.
 
 - **To library** on a torrent creates a waiting job (`Čeká na Real-Debrid`).
-  When Real-Debrid reports the file downloaded, the job becomes a normal HTTP
-  download — no second click. Waiting jobs do not take an HTTP slot.
-- **Play** and **To device** work when Real-Debrid already has the file
-  (cached). If it is still leeching, add it to the library queue instead.
+  That is what starts caching on Real-Debrid. When they report the file
+  downloaded, the job becomes a normal HTTP download — no second click.
+  Waiting jobs do not take an HTTP slot.
+- **Play** and **To device** stay off for a raw torrent. They would only kick
+  off caching and then fail. Play the file from the library once it has landed.
 - Without a token, torrent rows are hidden and the empty list points at
   Settings.
 
