@@ -1,4 +1,3 @@
-import { pageNearBottom, pageScrollTop, scrollPageTo } from "./page-scroll";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, saveToDevice } from "./api";
@@ -192,9 +191,9 @@ export function App() {
   };
 
   useEffect(() => {
-    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = pageScrollTop(); };
-    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
-    return () => window.removeEventListener("scroll", onScroll, true);
+    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = window.scrollY; };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
   // A section's content arrives asynchronously, so the saved position is chased for a moment.
   useEffect(() => {
@@ -204,8 +203,8 @@ export function App() {
     const deadline = performance.now() + 1500;
     let handle = 0;
     const apply = () => {
-      scrollPageTo(wanted);
-      if (Math.abs(pageScrollTop() - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
+      window.scrollTo(0, wanted);
+      if (Math.abs(window.scrollY - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
       else restoringScroll.current = false;
     };
     handle = requestAnimationFrame(apply);
@@ -264,7 +263,7 @@ export function App() {
     if (target === "catalog") resetCatalog();
     else if (target === "library") resetLibrary();
     else if (target === "stats") setStatsReset((value) => value + 1);
-    scrollPageTo(0);
+    window.scrollTo(0, 0);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
@@ -397,11 +396,11 @@ export function App() {
     if (nactenych >= browse.total) return;
     const onScroll = () => {
       if (browseBusy) return;
-      if (pageNearBottom(500)) void loadBrowse(browsePath, nactenych);
+      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) void loadBrowse(browsePath, nactenych);
     };
-    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    window.addEventListener("scroll", onScroll, { passive: true });
     onScroll();
-    return () => window.removeEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll);
   }, [view, browse, browseBusy, browsePath]);
 
   // The wanted entry need not be on the first page, so pages load until it turns up.
@@ -444,7 +443,7 @@ export function App() {
     focusScrolled.current = null;
     setBrowseFocus(target);
     setView("library");
-    scrollPageTo(0);
+    window.scrollTo(0, 0);
   };
 
   const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);

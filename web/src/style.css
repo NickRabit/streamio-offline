@@ -559,11 +559,3 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 img.broken{visibility:hidden}
 
 .timeline-preview{display:grid;gap:4px;text-align:center;max-width:160px;white-space:normal}.timeline-preview img{display:block;width:144px;max-height:90px;object-fit:contain;border-radius:3px}
-
-@supports (-webkit-touch-callout:none) or (-webkit-hyphens:none){
-  @media (orientation:landscape) and (pointer:coarse){
-    html:has(.app-shell),body:has(.app-shell){height:100%;min-height:0;overflow:hidden;overscroll-behavior-y:none}
-    .app-shell{height:100dvh;overflow:hidden}
-    .app-shell>main{height:100%;overflow-x:hidden;overflow-y:auto;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
-  }
-}

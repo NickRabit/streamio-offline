@@ -196,7 +196,7 @@ control could not be reached at all; the catalog filters lost their accessible
 names in landscape, where the CSS hides the label text; and the download queue
 scrolled sideways without being reachable from the keyboard.
 
-The `safari-landscape` WebKit project verifies inner page scrolling and section
+The `safari-landscape` WebKit project verifies document scrolling and section
 scroll restoration. Playwright's WebKit is not iOS Safari: it does not reproduce the
 mobile browser chrome, the collapsing URL bar, or the safe-area behaviour that
 caused several of the landscape fixes. Those still need a real device.
