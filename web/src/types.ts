@@ -3,8 +3,8 @@ export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 export interface Addon {
-  key: string; role: "catalog" | "source" | "both"; enabled: boolean; displayUrl: string;
-  configurable: boolean; downloadSettings: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
+  key: string; role: "catalog" | "source" | "both"; enabled: boolean; displayUrl?: string;
+  configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
 }
 export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }> }
 export interface Meta {
@@ -34,7 +34,7 @@ export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Track { index: number; codec: string; language?: string; title?: string; channels?: number; default?: boolean; forced?: boolean }
 export interface Inspection { duration?: number; video?: { codec: string; width?: number; height?: number }; audioTracks: Track[]; subtitleTracks: Track[] }
-export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string }
+export interface BuildInfo { status: string; version: string; builtAt?: string; commit?: string; restricted?: boolean }
 export interface DiagnosticsSession {
   id: string; mode: string; hardware: boolean; generation: number; title?: string;
   video?: string; audio?: string; audioTrack: number; subtitleTrack: number | null; quality: number | null;

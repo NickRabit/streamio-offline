@@ -60,6 +60,12 @@ Details in [Playback](playback.md) and
 | `RENDER_GID` | *(unset)* | GID owning the render node. Without it the process cannot open the device. |
 | `LIBVA_DRIVER_NAME` | *(auto)* | Force `iHD` (Gemini Lake and newer) or `i965` (older Braswell). |
 
+## Restricted / demo mode
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `RESTRICTED_MODE` | `0` | `1` locks the instance for a shared demo. Addons, settings, password and secret export become read-only. Guests can still browse, play, download to the library and save to their own device. Create the account (or inject `ADMIN_USERNAME` / `ADMIN_PASSWORD`) and confirm sign-in, then set `1` and recreate the container — not merely restart. This is not a second user. |
+
 ## Account fallback
 
 | Variable | Default | Meaning |

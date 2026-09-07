@@ -98,6 +98,13 @@ without a match, a movie detail, a series episode list, source ordering and
 language filtering, queueing a download through to a finished job, a setting
 that survives a reload, and diagnostics.
 
+Restricted mode has a **separate Playwright config** (`playwright.restricted.config.ts`).
+It must not share `e2e/.tmp` or the unlocked session cookie. The fixture
+`e2e/fixtures/restricted-server.mjs` uses `e2e/.tmp-restricted`, app port 8199,
+seeds an addon against the fake addon process and a stored account
+`restricted-admin` / `restricted-password`. Run it with `npm run test:e2e:restricted`. `test:e2e:docker`
+runs the unlocked suite and then the restricted config sequentially.
+
 The Playwright image has no ffmpeg, so the server logs a warning when it cannot
 inspect the sample file. That is expected and does not affect the tests --
 transcoding itself belongs to the server suite, not here.

@@ -122,6 +122,13 @@ describe("describeError", () => {
     expect(describeError(error)).toBe("The addon was not found.");
   });
 
+  it("translates a restricted-mode 403", async () => {
+    fetchMock.mockResolvedValue(json({ error: "This instance is in restricted mode.", messageKey: "err.restricted" }, 403));
+    const error = await api.exportSettings().catch((value) => value);
+    expect(error).toMatchObject({ status: 403, messageKey: "err.restricted" });
+    expect(describeError(error)).toBe("This instance is in restricted mode.");
+  });
+
   it("falls back to the server's own text for a key it does not know", async () => {
     fetchMock.mockResolvedValue(json({ error: "Something new broke.", messageKey: "err.notShippedYet" }, 400));
     const error = await api.addons().catch((value) => value);

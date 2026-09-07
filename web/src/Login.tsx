@@ -63,9 +63,9 @@ export function LoginScreen({ setup, onSession }: { setup: boolean; onSession: (
   </div>;
 }
 
-export function AccountSettings({ session, onSession, onNotify, onError }: {
+export function AccountSettings({ session, onSession, onNotify, onError, restricted = false }: {
   session: Session; onSession: (session: Session) => void;
-  onNotify: (text: string) => void; onError: (error: unknown) => void;
+  onNotify: (text: string) => void; onError: (error: unknown) => void; restricted?: boolean;
 }) {
   const { t } = useI18n();
   const [username, setUsername] = useState(session.username);
@@ -92,20 +92,22 @@ export function AccountSettings({ session, onSession, onNotify, onError }: {
 
   return <form className="panel settings-section" onSubmit={submit}>
     <SettingsSectionHead icon={<KeyRound/>} title={t("auth.sectionTitle")} text={t("auth.signedInAs", { username: session.username })}/>
-    <SettingControl title={t("auth.username")} text={t("auth.usernameHint")}>
-      <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/>
-    </SettingControl>
-    <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
-      <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/>
-    </SettingControl>
-    <SettingControl title={t("auth.newPassword")} text={t("auth.newPasswordHint")}>
-      <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/>
-    </SettingControl>
+    {!restricted && <>
+      <SettingControl title={t("auth.username")} text={t("auth.usernameHint")}>
+        <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" required/>
+      </SettingControl>
+      <SettingControl title={t("auth.currentPassword")} text={t("auth.currentPasswordHint")}>
+        <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} autoComplete="current-password" required/>
+      </SettingControl>
+      <SettingControl title={t("auth.newPassword")} text={t("auth.newPasswordHint")}>
+        <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} autoComplete="new-password" required/>
+      </SettingControl>
+    </>}
     <div className="setting-actions">
-      <button className="primary" disabled={busy}><KeyRound/> {t("auth.changeCredentials")}</button>
+      {!restricted && <button className="primary" disabled={busy}><KeyRound/> {t("auth.changeCredentials")}</button>}
       <button type="button" onClick={() => void signOut(false)}><LogOut/> {t("auth.signOut")}</button>
-      <button type="button" className="danger" onClick={() => void signOut(true)}><ShieldAlert/> {t("auth.signOutEverywhere")}</button>
+      {!restricted && <button type="button" className="danger" onClick={() => void signOut(true)}><ShieldAlert/> {t("auth.signOutEverywhere")}</button>}
     </div>
-    <small className="setting-note">{t("auth.sessionNote")}</small>
+    {!restricted && <small className="setting-note">{t("auth.sessionNote")}</small>}
   </form>;
 }

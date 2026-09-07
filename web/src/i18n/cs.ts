@@ -92,6 +92,8 @@ export const cs: Catalog = {
   // Kostra aplikace.
   "app.goToCleanCatalog": "Zpět na čistý katalog",
   "app.serverOnline": "Server online",
+  "restricted.chip": "Demo režim",
+  "restricted.notice": "Tato instance běží v omezeném režimu. Doplňky, nastavení a heslo nelze měnit.",
   "app.signOut": "Odhlásit",
   "app.expandMenu": "Rozbalit menu",
   "app.collapseMenu": "Sbalit menu",
@@ -536,6 +538,7 @@ export const cs: Catalog = {
   "diag.periodAll": "Vše",
 
   // Chyby ze serveru.
+  "err.restricted": "Tato instance běží v omezeném režimu.",
   "err.notSignedIn": "Nepřihlášeno.",
   "err.setupDone": "Účet už existuje.",
   "err.badCredentials": "Nesprávné jméno nebo heslo.",
