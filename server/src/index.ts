@@ -595,6 +595,30 @@ app.post("/api/library/favorite", asyncRoute(async (req, res) => {
   res.json({ path: relative, favorite: wanted });
 }));
 
+app.get("/api/library/resume", asyncRoute(async (req, res) => {
+  const favorites = new Set(store.favorites());
+  const query = String(req.query.query ?? "").trim().toLocaleLowerCase();
+  const entries = Object.entries(store.progress()).filter(([key, entry]) => key.startsWith("file:") && entry.path);
+  const described = await Promise.all(entries.map(async ([, entry]) => {
+    const item = await describePath(DOWNLOAD_DIR, entry.path!);
+    if (!item || item.kind !== "file") return [];
+    return [{ ...item, label: entry.title || item.label, modified: entry.updatedAt,
+      progress: { position: entry.position, duration: entry.duration }, favorite: favorites.has(item.path) }];
+  }));
+  const items = described.flat().filter((item) => (!query || item.label.toLocaleLowerCase().includes(query)) && (req.query.favorites !== "1" || item.favorite));
+  const sorts = new Set(["name", "added", "size", "random"]);
+  const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "added";
+  const ordered = sortFiles(items, sort, req.query.order !== "asc", String(req.query.seed ?? ""));
+  const skip = Math.max(0, Number(req.query.skip) || 0);
+  const limit = Math.max(1, Math.min(120, Number(req.query.limit) || 60));
+  const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
+    const art = await locateFileArtwork(item.path);
+    if (!art) scheduleFileArtwork(item.path);
+    return { ...item, poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined };
+  }));
+  res.json({ path: ":resume", items: page, total: ordered.length, pending: page.some((item) => !item.poster) });
+}));
+
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";

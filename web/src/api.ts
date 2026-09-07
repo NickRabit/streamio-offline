@@ -91,6 +91,8 @@ export const api = {
   clearProgress: () => request<void>("/api/progress", { method: "DELETE" }),
   forgetProgress: (key: string) => request<void>(`/api/progress/${encodeURIComponent(key)}`, { method: "DELETE" }),
   setFavorite: (path: string, favorite: boolean) => request<{ path: string; favorite: boolean }>("/api/library/favorite", { method: "POST", body: JSON.stringify({ path, favorite }) }),
+  resumeLibrary: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string; query?: string; favorites?: boolean }) =>
+    request<BrowseResult>(`/api/library/resume?${q({ ...options, favorites: options.favorites ? 1 : undefined })}`),
   favorites: (options: { skip?: number; limit?: number; sort?: string; order?: string; seed?: string }) =>
     request<BrowseResult>(`/api/library/favorites?${q({ skip: options.skip || undefined, limit: options.limit ?? 60, sort: options.sort || undefined, order: options.order || undefined, seed: options.seed || undefined })}`),
   browse: (options: { path?: string; query?: string; skip?: number; limit?: number; sort?: string; order?: string; seed?: string; favorites?: boolean }) =>
