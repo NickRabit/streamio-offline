@@ -29,13 +29,13 @@ These used to be open notes. They are in `main` now.
 - Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
 - Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
 - Download queue on a phone: stacked layout so the page is usable.
+- iPhone landscape: the left menu clears the notch with a safe-area layout.
 - Real-Debrid client: API token in Settings, torrent rows no longer look like HTTP, waiting queue jobs that do not take an HTTP slot, play only when an HTTPS URL exists now, in-app toasts for the two hand-offs.
 
 ## Next (daily friction)
 
 ### Player and mobile chrome
 
-- iPhone landscape: the left menu sits under the notch. It needs a safe-area layout, not just smaller buttons.
 - Catalog actions **To library** / **To device** are clipped at the bottom of the sheet.
 
 ### Stats
