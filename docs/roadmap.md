@@ -39,6 +39,12 @@ These used to be open notes. They are in `main` now.
 
 ### Player and mobile chrome
 
+- [x] Compact direct/transcoded playback labels with HW/SW for transcoding.
+- [x] On-demand timeline image previews for mouse hover and touch scrubbing, with bounded server work and cache.
+- [x] Next-episode button for naturally sorted video files in the same library folder.
+- [x] Inner page scrolling in touch WebKit landscape, including scroll restoration and library paging.
+- [ ] Verify Safari's browser-tab-bar behavior on a physical iPhone/iPad; WebKit automation cannot emulate browser chrome.
+
 - Catalog actions **To library** / **To device** are clipped at the bottom of the sheet.
 
 ### Stats

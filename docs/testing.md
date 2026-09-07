@@ -107,9 +107,9 @@ seeds an addon against the fake addon process and a stored account
 `restricted-admin` / `restricted-password`. Run it with `npm run test:e2e:restricted`. `test:e2e:docker`
 runs the unlocked suite and then the restricted config sequentially.
 
-The Playwright image has no ffmpeg, so the server logs a warning when it cannot
-inspect the sample file. That is expected and does not affect the tests --
-transcoding itself belongs to the server suite, not here.
+The test image includes FFmpeg for media inspection and real JPEG timeline previews.
+Local playback tests cover mouse and touch previews, natural next-file ordering,
+and the last file hiding the next-episode button across the viewport matrix.
 
 ### L3 -- responsive, visual, accessibility
 
@@ -196,8 +196,8 @@ control could not be reached at all; the catalog filters lost their accessible
 names in landscape, where the CSS hides the label text; and the download queue
 scrolled sideways without being reachable from the keyboard.
 
-Chromium is enough to start. WebKit is worth adding for Safari-shaped bugs, but
-note that Playwright's WebKit is not iOS Safari -- it does not reproduce the
+The `safari-landscape` WebKit project verifies inner page scrolling and section
+scroll restoration. Playwright's WebKit is not iOS Safari: it does not reproduce the
 mobile browser chrome, the collapsing URL bar, or the safe-area behaviour that
 caused several of the landscape fixes. Those still need a real device.
 

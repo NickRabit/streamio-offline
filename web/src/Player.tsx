@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
@@ -9,7 +9,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<void>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -30,12 +30,47 @@ const timeFromDelta = (clientX: number, track: HTMLElement, startX: number, star
   return Math.min(max, Math.max(0, startValue + ((clientX - startX) / width) * max));
 };
 
-function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
-  value: number; max: number; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
+function PreviewFrame({ sessionId, time }: { sessionId: string; time: number }) {
+  const [image, setImage] = useState<string>();
+  const bucket = useRef(0);
+  bucket.current = Math.floor(time / 5) * 5;
+  useEffect(() => {
+    const controller = new AbortController();
+    let objectUrl: string | undefined;
+    let previous: number | undefined;
+    let timer: ReturnType<typeof setTimeout>;
+    setImage(undefined);
+    const refresh = async () => {
+      let delay = 250;
+      try {
+        const at = bucket.current;
+        if (at !== previous) {
+          const response = await fetch(`/api/playback/${encodeURIComponent(sessionId)}/preview?time=${at}`, { signal: controller.signal });
+          if (response.status === 200) {
+            const blob = await response.blob();
+            if (controller.signal.aborted) return;
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            objectUrl = URL.createObjectURL(blob);
+            setImage(objectUrl);
+            previous = at;
+          } else delay = 1000;
+        }
+      } catch { delay = 1000; }
+      if (!controller.signal.aborted) timer = setTimeout(() => void refresh(), delay);
+    };
+    timer = setTimeout(() => void refresh(), 250);
+    return () => { clearTimeout(timer); controller.abort(); if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [sessionId]);
+  return image ? <img src={image} alt="" /> : null;
+}
+
+function TimelineBar({ value, max, sessionId, onScrub, onSeek, onReveal }: {
+  value: number; max: number; sessionId?: string; onScrub: (value: number | null) => void; onSeek: (value: number) => void; onReveal: () => void;
 }) {
   const trackRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; startX: number; startValue: number; moved: boolean } | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [hover, setHover] = useState<number | null>(null);
   const maxRef = useRef(max);
   const valueRef = useRef(value);
   const onScrubRef = useRef(onScrub);
@@ -91,8 +126,11 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
     aria-valuemax={Math.round(max)}
     aria-valuenow={Math.round(Math.min(value, max))}
     aria-valuetext={fmt(value)}
+    onPointerMove={(event) => { if (!dragRef.current && event.pointerType === "mouse") setHover(timeAtClientX(event.clientX, event.currentTarget, max)); }}
+    onPointerLeave={() => setHover(null)}
     onPointerDown={(event) => {
       if (event.button !== 0) return;
+      setHover(null);
       event.preventDefault();
       try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* pointer already gone */ }
       dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startValue: valueRef.current, moved: false };
@@ -104,7 +142,10 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
       <i className="timeline-fill" style={{ width: `${percent}%` }} />
       <b className="timeline-thumb" style={{ left: `${percent}%` }} />
     </div>
-    {dragging && <span className="timeline-preview" style={{ left: `${percent}%` }}>{fmt(value)}</span>}
+    {(dragging || hover !== null) && <span className="timeline-preview" style={{ left: `clamp(80px, ${max > 0 ? (dragging ? value : hover ?? 0) / max * 100 : 0}%, calc(100% - 80px))` }}>
+      {sessionId && <PreviewFrame sessionId={sessionId} time={dragging ? value : hover ?? 0} />}
+      <span>{fmt(dragging ? value : hover ?? 0)}</span>
+    </span>}
   </div>;
 }
 
@@ -116,7 +157,7 @@ const capabilities = (): Capabilities => detectCapabilities(supports, navigator.
 
 const MODE_KEY: Record<PlaybackMode, Key> = {
   direct: "player.mode.direct",
-  remux: "player.mode.remux",
+  remux: "player.mode.direct",
   transcode: "player.mode.transcode",
 };
 
@@ -146,7 +187,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -784,7 +825,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
-      <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
+      <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong></div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
         <Star/> <span>{favorite ? t("favorite.on") : t("favorite.off")}</span>
       </button>}
@@ -827,7 +868,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     <div ref={bottomRef} className="player-bottom">
       <div className="timeline">
         <span>{fmt(position)}</span>
-        <TimelineBar value={Math.min(position, seekable)} max={seekable}
+        <TimelineBar sessionId={session?.id} value={Math.min(position, seekable)} max={seekable}
           onScrub={(next) => { revealControls(); setScrub(next); }}
           onSeek={(next) => void seekTo(next)}
           onReveal={revealControls} />
@@ -837,6 +878,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
         <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
         <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
+        {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         <Volume2 />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 

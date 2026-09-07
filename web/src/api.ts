@@ -89,6 +89,7 @@ export const api = {
   escalatePlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/escalate`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
   pingPlayback: (id: string) => request<void>(`/api/playback/${id}/ping`, { method: "POST" }),
   stopPlayback: (id: string) => request<void>(`/api/playback/${id}`, { method: "DELETE" }),
+  nextLibraryFile: (sourceId: string) => request<{ path: string; title: string } | null>(`/api/library/next/${encodeURIComponent(sourceId)}`),
   librarySource: (path: string) => request<Stream>("/api/library/source", { method: "POST", body: JSON.stringify({ path }) }),
   library: () => request<LibrarySummary[]>("/api/library"),
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),

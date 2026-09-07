@@ -1,3 +1,4 @@
+import { pageNearBottom, pageScrollTop, scrollPageTo } from "./page-scroll";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, saveToDevice } from "./api";
@@ -191,9 +192,9 @@ export function App() {
   };
 
   useEffect(() => {
-    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = window.scrollY; };
-    window.addEventListener("scroll", onScroll, { passive: true });
-    return () => window.removeEventListener("scroll", onScroll);
+    const onScroll = () => { if (!restoringScroll.current) scrollByView.current[viewRef.current] = pageScrollTop(); };
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    return () => window.removeEventListener("scroll", onScroll, true);
   }, []);
   // A section's content arrives asynchronously, so the saved position is chased for a moment.
   useEffect(() => {
@@ -203,8 +204,8 @@ export function App() {
     const deadline = performance.now() + 1500;
     let handle = 0;
     const apply = () => {
-      window.scrollTo(0, wanted);
-      if (Math.abs(window.scrollY - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
+      scrollPageTo(wanted);
+      if (Math.abs(pageScrollTop() - wanted) > 1 && performance.now() < deadline) handle = requestAnimationFrame(apply);
       else restoringScroll.current = false;
     };
     handle = requestAnimationFrame(apply);
@@ -263,7 +264,7 @@ export function App() {
     if (target === "catalog") resetCatalog();
     else if (target === "library") resetLibrary();
     else if (target === "stats") setStatsReset((value) => value + 1);
-    window.scrollTo(0, 0);
+    scrollPageTo(0);
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
@@ -396,11 +397,11 @@ export function App() {
     if (nactenych >= browse.total) return;
     const onScroll = () => {
       if (browseBusy) return;
-      if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) void loadBrowse(browsePath, nactenych);
+      if (pageNearBottom(500)) void loadBrowse(browsePath, nactenych);
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
     onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
+    return () => window.removeEventListener("scroll", onScroll, true);
   }, [view, browse, browseBusy, browsePath]);
 
   // The wanted entry need not be on the first page, so pages load until it turns up.
@@ -443,10 +444,25 @@ export function App() {
     focusScrolled.current = null;
     setBrowseFocus(target);
     setView("library");
-    window.scrollTo(0, 0);
+    scrollPageTo(0);
   };
 
-  /** A downloaded file plays down the same path as a stream, only the source is the disk. */
+  const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);
+  const [nextBusy, setNextBusy] = useState(false);
+  const nextBusyRef = useRef(false);
+  useEffect(() => {
+    setNextFile(null);
+    if (!playerOpen || !localStream) return;
+    let stale = false;
+    void api.nextLibraryFile(localStream.sourceId).then((file) => { if (!stale) setNextFile(file); }).catch(() => undefined);
+    return () => { stale = true; };
+  }, [playerOpen, localStream]);
+  const playNext = async () => {
+    if (!nextFile || nextBusyRef.current) return;
+    nextBusyRef.current = true; setNextBusy(true);
+    try { await playLocal(nextFile.title, nextFile.path, localPoster); }
+    finally { nextBusyRef.current = false; setNextBusy(false); }
+  };
   const playLocal = async (title: string, path: string, poster?: string) => {
     try {
       const source = await api.librarySource(path);
@@ -952,7 +968,7 @@ export function App() {
         await refresh(true);
       }} onNotify={notify} onError={fail}/>}
     </main>
-    <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
+    <Player nextTitle={nextFile?.title} nextBusy={nextBusy} onNext={nextFile ? playNext : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}

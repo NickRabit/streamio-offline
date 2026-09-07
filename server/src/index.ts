@@ -1,4 +1,5 @@
 import express from "express";
+import { nextVideoFile } from "./next-file.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import path from "node:path";
@@ -982,6 +983,16 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   });
   res.json({ key, type, id: id || null });
 }));
+app.get("/api/library/next/:sourceId", asyncRoute(async (req, res) => {
+  const source = mediaResources.get(String(req.params.sourceId), ownerOf(req).sid, "source").stream;
+  res.setHeader("cache-control", "private, no-store");
+  if (!source.url?.startsWith("file://")) return void res.json(null);
+  const relative = source.url.slice(7);
+  await libraryTarget(relative);
+  const next = await nextVideoFile(resolveInside(DOWNLOAD_DIR, relative)!);
+  res.json(next ? { path: path.posix.join(path.posix.dirname(relative), next), title: next } : null);
+}));
+
 app.post("/api/library/source", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "");
   const target = relative && await libraryTarget(relative);
@@ -1290,6 +1301,14 @@ app.use("/api/playback/:id", (req, res, next) => {
   playback.touch(String(req.params.id));
   next();
 });
+app.get("/api/playback/:id/preview", asyncRoute(async (req, res) => {
+  const controller = new AbortController();
+  res.once("close", () => { if (!res.writableEnded) controller.abort(); });
+  const image = await playback.preview(String(req.params.id), Number(req.query.time), controller.signal);
+  if (res.destroyed) return;
+  if (!image) return void res.status(204).end();
+  res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
+}));
 app.post("/api/playback/:id/ping", (_req, res) => res.status(204).end());
 app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
 app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(await playback.escalate(String(req.params.id), Number(req.body.time) || 0))));

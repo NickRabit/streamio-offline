@@ -69,7 +69,7 @@ test("sources, playback, subtitles and downloads enforce session ownership and r
   expect((await request.get(ticket.url)).status()).toBe(200);
   const foreign = await playwright.request.newContext({ baseURL: test.info().project.use.baseURL });
   await foreign.post("/api/auth/login", { data: { username: "e2e-admin", password: "e2e-password" } });
-  for (const url of [playback.url, subtitle, ticket.url]) expect((await foreign.get(url)).status()).toBe(404);
+  for (const url of [playback.url, subtitle, ticket.url, `/api/playback/${playback.id}/preview?time=0`, `/api/library/next/${playback.source.sourceId}`]) expect((await foreign.get(url)).status()).toBe(404);
   expect((await foreign.post(`/api/playback/${playback.id}/seek`, { data: { time: 1 } })).status()).toBe(404);
   expect((await foreign.post("/api/inspect", { data: { sourceId: playback.source.sourceId } })).status()).toBe(404);
   expect((await request.post("/api/downloads", { data: { sourceId: playback.url.split("/").pop() } })).status()).toBe(404);
@@ -150,4 +150,19 @@ test("local playback and device downloads use opaque resources", async ({ reques
   expect((await request.get((await prepared.json()).url)).status()).toBe(200);
   expect((await request.post("/api/library/source", { data: { path: "../../etc/passwd" } })).status()).toBe(404);
   await request.delete(`/api/playback/${playback.id}`);
+});
+
+
+test("timeline previews return private JPEG frames and expire with playback", async ({ request }) => {
+  const playback = await start(request);
+  const url = `/api/playback/${playback.id}/preview?time=0`;
+  const frame = await request.get(url);
+  expect(frame.status()).toBe(200);
+  expect(frame.headers()["content-type"]).toContain("image/jpeg");
+  expect(frame.headers()["cache-control"]).toContain("no-store");
+  expect((await frame.body()).subarray(0, 3)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  expect(await (await request.get(url)).body()).toEqual(await frame.body());
+  expect((await request.get(`/api/playback/${playback.id}/preview?time=-1`)).status()).toBe(204);
+  await request.delete(`/api/playback/${playback.id}`);
+  expect((await request.get(url)).status()).toBe(404);
 });
