@@ -1,5 +1,6 @@
 # Deploy on a NAS from a ready-made image: nothing is built here, only pulled.
-# In Container Manager, pick this file instead of compose.yml.
+# In Container Manager, upload this file as docker-compose.yml -- it looks for
+# that name -- and keep it the only compose file in the project folder.
 #
 #   docker compose -f compose.pull.yml pull
 #   docker compose -f compose.pull.yml up -d

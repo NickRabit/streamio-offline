@@ -66,11 +66,15 @@ The usual target, and the one case with real setup work — folder ownership,
 QuickSync, and Container Manager's single-compose-file limit. It works with or
 without SSH: **[Install on a Synology NAS](docs/install-synology.md)**.
 
-Point the paths at shared folders:
+Nothing is built on the NAS: upload `compose.pull.yml` to the project folder as
+`docker-compose.yml`, which is the name Container Manager looks for, and point
+the paths at shared folders in `.env` beside it:
 
 ```dotenv
 DOWNLOAD_PATH=/volume1/video/downloads
 DATA_PATH=/volume1/docker/stremio-offline/data
+PUID=1000
+PGID=100
 ```
 
 ### Adding addons
