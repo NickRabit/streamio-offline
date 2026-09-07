@@ -5,6 +5,30 @@ import { MediaResources, ResourceError } from "./media-resources.js";
 const owner = { sid: "owner-a", expiresAt: 10_000_000 };
 const source = { url: "https://provider-canary.test/private-canary?token=query-canary", title: "Movie query-canary", behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } }, subtitles: [{ url: "https://subtitle-canary.test/sub?secret=sub-canary", lang: "cs" }] };
 
+test("a raw infoHash is a torrent, not a playable HTTP source", () => {
+  const registry = new MediaResources(() => 0);
+  const publicSource = registry.publicStream({
+    infoHash: "59e11cef8c2152ac73681092844ebd3db19025bc", fileIdx: 0,
+    name: "1080p WEB", title: "Movie 2 GB",
+  }, owner);
+  assert.equal(publicSource.kind, "torrent");
+  assert.equal(publicSource.playable, false);
+  const stored = registry.get(publicSource.sourceId, owner.sid, "source").stream;
+  assert.equal(stored.infoHash, "59e11cef8c2152ac73681092844ebd3db19025bc");
+  assert.equal(stored.fileIdx, 0);
+  assert.equal("url" in publicSource, false);
+  assert.equal(JSON.stringify(publicSource).includes("59e11cef"), false);
+});
+
+test("a magnet URL is stored as an infoHash and shown as a torrent", () => {
+  const registry = new MediaResources(() => 0);
+  const publicSource = registry.publicStream({ url: "magnet:?xt=urn:btih:59e11cef8c2152ac73681092844ebd3db19025bc&dn=Movie" }, owner);
+  assert.equal(publicSource.kind, "torrent");
+  assert.equal(publicSource.playable, false);
+  assert.equal(registry.get(publicSource.sourceId, owner.sid, "source").stream.infoHash, "59e11cef8c2152ac73681092844ebd3db19025bc");
+  assert.equal(registry.get(publicSource.sourceId, owner.sid, "source").stream.url, undefined);
+});
+
 test("public sources allowlist fields and never contain provider addresses or encoded credentials", () => {
   const registry = new MediaResources(() => 0);
   const publicSource = registry.publicStream({ ...source, unknown: { secret: source.url }, externalUrl: source.url, name: encodeURIComponent(source.url), description: Buffer.from(source.url).toString("base64url") }, owner);

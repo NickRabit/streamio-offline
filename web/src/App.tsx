@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -9,8 +9,8 @@ import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
-import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
-import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, Stream, Subtitle, Video } from "./types";
+import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
  * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
@@ -67,7 +67,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium" });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -266,10 +266,25 @@ export function App() {
     const [nextAddons, nextCatalogs] = await Promise.all([api.addons(), api.catalogs()]); setAddons(nextAddons); setCatalogs(nextCatalogs);
     if ((selectFirst || !selectedCatalog) && nextCatalogs[0]) setSelectedCatalog(`${nextCatalogs[0].addonKey}:${nextCatalogs[0].type}:${nextCatalogs[0].id}`);
   };
+  const downloadsSeen = useRef(false);
+  const jobStatus = useRef(new Map<string, DownloadJob["status"]>());
   const applyDownloads = (snapshot: { jobs?: DownloadJob[]; halt?: QueueHalt | null } | DownloadJob[]) => {
-    if (Array.isArray(snapshot)) { setDownloads(snapshot); setQueueHalt(null); return; }
-    setDownloads(snapshot.jobs ?? []);
-    setQueueHalt(snapshot.halt ?? null);
+    const jobs = Array.isArray(snapshot) ? snapshot : snapshot.jobs ?? [];
+    if (downloadsSeen.current) {
+      for (const job of jobs) {
+        const previous = jobStatus.current.get(job.id);
+        if (previous === "waiting" && job.status !== "waiting" && job.status !== "paused" && job.status !== "failed") {
+          notify(`${job.title} je na Real-Debrid, stahuji do knihovny.`);
+        }
+        if (previous && previous !== "completed" && job.status === "completed") {
+          notify(`${job.title} je v knihovně.`);
+        }
+      }
+    }
+    downloadsSeen.current = true;
+    jobStatus.current = new Map(jobs.map((job) => [job.id, job.status]));
+    setDownloads(jobs);
+    setQueueHalt(Array.isArray(snapshot) ? null : snapshot.halt ?? null);
   };
   const loadDownloads = () => api.downloads().then(applyDownloads).catch(fail);
   const [setupNeeded, setSetupNeeded] = useState(false);
@@ -293,8 +308,9 @@ export function App() {
     api.inspect(selectedStream).then((value) => { if (!stale) setInspection(value); }).catch(() => undefined);
     return () => { stale = true; };
   }, [selectedStream]);
-  const saveSettings = async (patch: Partial<AppSettings>) => {
-    setSettings((current: AppSettings) => ({ ...current, ...patch }));
+  const saveSettings = async (patch: SettingsPatch) => {
+    const { realDebridToken: _token, ...rest } = patch;
+    if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
     try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
   };
   const loadBrowse = async (target = browsePath, skip = 0) => {
@@ -521,16 +537,20 @@ export function App() {
 
   // Priorita doplňku je jeho pořadí v seznamu; nastavuje se šipkami na kartě doplňku.
   const addonPriority = useMemo(() => new Map(addons.map((addon, index) => [addon.manifest.name, index])), [addons]);
+  const listedStreams = useMemo(
+    () => settings.realDebridConfigured ? streams : streams.filter((stream) => stream.kind !== "torrent"),
+    [streams, settings.realDebridConfigured]);
+  const hiddenTorrents = listedStreams.length < streams.length;
   const visibleStreams = useMemo(
-    () => arrangeStreams(streams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority),
-    [streams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
+    () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true),
+    [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
   // Počty v každé nabídce platí pro to, co projde tím druhým filtrem, jinak by si odporovaly.
   const byLanguage = useMemo(
-    () => streamLanguage ? streams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : streams,
-    [streams, streamLanguage]);
+    () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : listedStreams,
+    [listedStreams, streamLanguage]);
   const byAddon = useMemo(
-    () => streamAddon ? streams.filter((stream) => stream.addonName === streamAddon) : streams,
-    [streams, streamAddon]);
+    () => streamAddon ? listedStreams.filter((stream) => stream.addonName === streamAddon) : listedStreams,
+    [listedStreams, streamAddon]);
 
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
@@ -549,9 +569,10 @@ export function App() {
   // Když filtr odstraní vybraný zdroj, výběr se posune na první zbylý.
   useEffect(() => {
     if (!visibleStreams.length) { if (selectedStream) setSelectedStream(null); return; }
-    if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(visibleStreams[0]); return; }
+    const preferred = pickDefaultStream(visibleStreams);
+    if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(preferred ?? null); return; }
     // Během donačítání může přijít lepší zdroj; vlastní volbu uživatele ale nepřebíjíme.
-    if (!pickedRef.current && pendingSources > 0 && selectedStream !== visibleStreams[0]) setSelectedStream(visibleStreams[0]);
+    if (!pickedRef.current && pendingSources > 0 && preferred && selectedStream !== preferred) setSelectedStream(preferred);
   }, [visibleStreams, pendingSources]);
 
   /** Obsah vlastních seznamů se počítá z paměti; nesmí procházet plným načtením,
@@ -631,11 +652,16 @@ export function App() {
   const selectedMedia = () => selectedVideo
     ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
     : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
+  const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async () => {
-    if (!selectedStream) return false;
+    if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
     const media = selectedMedia();
-    try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); return true; } catch (e) { fail(e); return false; }
+    try {
+      const job = await api.download(videoTitle, selectedStream, media);
+      notify(job.status === "waiting" ? "Čeká na Real-Debrid." : "Přidáno do stahovací fronty.");
+      await loadDownloads(); return true;
+    } catch (e) { fail(e); return false; }
   };
 
   const downloadStreamToDevice = async () => {
@@ -690,7 +716,7 @@ export function App() {
     <aside className="sidebar"><nav>
       <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => openView("catalog")}/>
       <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => openView("library")}/>
-      <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((job) => job.status === "downloading" || job.status === "queued").length} onClick={() => openView("downloads")}/>
+      <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((job) => job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
       <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
       <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => openView("settings")}/>
       <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => openView("stats")}/>
@@ -775,15 +801,17 @@ export function App() {
                   <option value="size-asc">Od nejmenšího</option>
                   <option value="addon">Podle priority doplňku</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.playable ? "HTTP" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">Ptám se doplňků…</div>}
-              {Boolean(streams.length) && !visibleStreams.length && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
+              {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">Doplňky vrátily jen torrenty. Bez tokenu Real-Debrid v <button className="link-button" onClick={() => openView("settings")}>Nastavení</button> je nelze stáhnout ani přehrát.</div>}
+              {Boolean(streams.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
               {selectedStream?.kind === "unsupported" && <p className="notice">Tento zdroj nelze bezpečně přehrát přes server. Vyberte jiný zdroj.</p>}
+              {selectedStream?.kind === "torrent" && <p className="notice">Tenhle zdroj je torrent. Dejte ho Do knihovny — Real-Debrid ho nejdřív stáhne k sobě a appka ho pak uloží. Přehrát jde až z knihovny.</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.playable} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.playable} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.playable} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
+                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> Do knihovny</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
@@ -936,7 +964,42 @@ function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { retur
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
 function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
 
-function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: Partial<AppSettings>) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
+function RealDebridSettings({ configured, onSave, onError }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void }) {
+  const [token, setToken] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const value = token.trim();
+    if (!value) return;
+    setBusy(true);
+    try { await onSave({ realDebridToken: value }); setToken(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  const clear = async () => {
+    if (!confirm("Odebrat uložený token Real-Debrid?")) return;
+    setBusy(true);
+    try { await onSave({ realDebridToken: "" }); setToken(""); }
+    catch (error) { onError(error); }
+    finally { setBusy(false); }
+  };
+  return <section className="panel settings-section debrid-section">
+    <SettingsSectionHead icon={<KeyRound/>} title="Real-Debrid" text="Token, kterým server požádá debrid o stažení torrentu. Doplňky s už vyřešenou HTTPS adresou ho nepotřebují."/>
+    {configured
+      ? <p className="debrid-status" role="status">Token je uložený. Nový zápis ho nahradí až po ověření u Real-Debrid.</p>
+      : <p className="debrid-status muted">Bez tokenu zůstanou surové torrenty skryté. HTTP zdroje z doplňků fungují dál.</p>}
+    <label className="debrid-field">
+      <span>{configured ? "Nahradit token" : "API token"}</span>
+      <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)}
+        aria-label="API token Real-Debrid" placeholder={configured ? "••••••••" : "vložit token z real-debrid.com"}/>
+    </label>
+    <div className="setting-actions">
+      <button className="primary" disabled={busy || !token.trim()} onClick={() => void submit()}>{configured ? "Nahradit token" : "Uložit token"}</button>
+      {configured && <button className="danger" disabled={busy} onClick={() => void clear()}>Odebrat</button>}
+    </div>
+  </section>;
+}
+
+function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
   const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
@@ -972,6 +1035,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
       <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
       <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Kolik souborů se smí stahovat najednou dohromady."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title="Souběžně z jednoho zdroje" text="Poskytovatelé omezují počet souběžných spojení a přebytečné přenosy utnou nebo nechají hladovět. Jednička je nejbezpečnější."><select aria-label="Souběžně z jednoho zdroje" value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
+      <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError}/>
       <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Sledovat, kde jste skončil" text="Ukládá pozici přehrávání, aby šlo navázat. Vypnutím se nic nového nezaznamená.">
           <select aria-label="Sledovat pozici" value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
             <option value="1">Ukládat</option><option value="0">Neukládat</option>
@@ -993,7 +1057,7 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
         <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
         <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
-      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků mohou obsahovat přístupové tokeny. Soubor zálohy proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
+      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků a token Real-Debrid jsou v souboru v čitelné podobě. Zálohu proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
       <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>
     </div>
   </section>;
@@ -1257,7 +1321,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
 function Downloads({ jobs, halt, refresh, onError, onReveal }: { jobs: DownloadJob[]; halt: QueueHalt | null; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
   const active = jobs.filter((job) => job.status === "downloading"); const totalSpeed = active.reduce((sum, job) => sum + job.speed, 0); const eta = (job: DownloadJob) => job.speed > 0 && job.total ? fmtEta((job.total - job.received) / job.speed) : "—";
   const action = async (operation: () => Promise<void>) => { try { await operation(); await refresh(); } catch (error) { onError(error); } };
-  return <section className="downloads-page"><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div>{halt && <div className="queue-halt" role="status">{halt.message} Po uvolnění místa fronta pokračuje sama.</div>}<div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads" tabIndex={0} role="region" aria-label="Fronta stahování"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}>{job.title}</button> : <strong>{job.title}</strong>}<small>{job.target || (job.pending ? "Zdroj se vybere při stahování" : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{bytes(job.received)} / {bytes(job.total)}</span><div className="progress"><i style={{width:`${job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions">{job.status === "completed" && job.target && <button title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}><HardDrive/></button>}<button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte přímý HTTP stream a použijte tlačítko Stáhnout."/>}</div></section>;
+  return <section className="downloads-page"><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div>{halt && <div className="queue-halt" role="status">{halt.message} Po uvolnění místa fronta pokračuje sama.</div>}<div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads" tabIndex={0} role="region" aria-label="Fronta stahování"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}>{job.title}</button> : <strong>{job.title}</strong>}<small>{job.target || (job.pending ? "Zdroj se vybere při stahování" : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions">{job.status === "completed" && job.target && <button title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}><HardDrive/></button>}<button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte HTTP zdroj nebo torrent s Real-Debrid a použijte tlačítko Do knihovny."/>}</div></section>;
 }
 const fmtEta = (seconds: number) => seconds < 60 ? `${Math.ceil(seconds)} s` : seconds < 3600 ? `${Math.ceil(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.ceil((seconds % 3600) / 60)} min`;
-const statusLabel = (status: DownloadJob["status"]) => ({ queued: "Ve frontě", downloading: "Stahuji", paused: "Pozastaveno", completed: "Dokončeno", failed: "Chyba" })[status];
+const statusLabel = (status: DownloadJob["status"]) => ({ queued: "Ve frontě", waiting: "Čeká na Real-Debrid", downloading: "Stahuji", paused: "Pozastaveno", completed: "Dokončeno", failed: "Chyba" })[status];

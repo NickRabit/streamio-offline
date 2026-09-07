@@ -81,7 +81,7 @@ export interface SubtitleItem {
 export interface PublicSubtitle { subtitleId: string; lang?: string; addonName?: string }
 export interface PublicStream {
   sourceId: string;
-  kind: "remote" | "library" | "unsupported";
+  kind: "remote" | "library" | "torrent" | "unsupported";
   playable: boolean;
   name?: string; title?: string; description?: string;
   addonKey?: string; addonName?: string;

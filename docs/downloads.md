@@ -12,13 +12,28 @@ removed; after a deliberate removal they are not restored on restart.
 
 ### Real-Debrid and other debrid services
 
-Personalized addon URLs configured for Real-Debrid work. The sensitive part of
-the URL is hidden after you save it. If the addon already returns a resolved
-HTTPS address, it can be played and downloaded.
+Personalized addon URLs configured for Real-Debrid still work: if the addon
+already returns HTTPS, the app plays and downloads it like any other HTTP
+stream. The sensitive part of the URL is hidden after you save it.
 
-Resolving a raw `infoHash` through the Real-Debrid API is **not** built in, and
-there is no built-in debrid account setting — configure that in the addon's own
-manifest URL.
+A raw torrent (`infoHash` or magnet, no HTTP URL) needs an API token in
+**Settings → Real-Debrid**. The token is verified against a premium account
+before it is stored, hidden in the UI, and treated as a secret in the backup.
+The app never runs a torrent engine. Real-Debrid fetches the torrent on its
+servers; this app then pulls the unrestricted HTTPS file through the existing
+queue.
+
+- **To library** on a torrent creates a waiting job (`Čeká na Real-Debrid`).
+  That is what starts caching on Real-Debrid. When they report the file
+  downloaded, the job becomes a normal HTTP download — no second click.
+  Waiting jobs do not take an HTTP slot.
+- **Play** and **To device** stay off for a raw torrent. They would only kick
+  off caching and then fail. Play the file from the library once it has landed.
+- Without a token, torrent rows are hidden and the empty list points at
+  Settings.
+
+AllDebrid, Premiumize, and scraping the token out of a Torrentio URL are out
+of scope.
 
 ## The download queue
 
@@ -68,6 +83,6 @@ The change applies to newly queued items.
 holds app settings, installed addon order and state, and their save rules. It
 does **not** hold the account, the library, or watch history.
 
-Personalized addon URLs may contain access tokens — treat the file as a
-password. Import replaces the current configuration and re-checks every manifest
-before saving.
+Personalized addon URLs and the Real-Debrid API token are stored in the file in
+the clear — treat it as a password. Import replaces the current configuration
+and re-checks every manifest before saving.

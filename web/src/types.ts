@@ -15,15 +15,15 @@ export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean;
 export interface Video { id?: string; title?: string; name?: string; season?: number; episode?: number; released?: string; overview?: string; thumbnail?: string; [key: string]: unknown }
 export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
 export interface Stream {
-  sourceId: string; kind: "remote" | "library" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
+  sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string }
 export interface Download {
-  id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed";
+  id: string; title: string; status: "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
   target: string; received: number; total?: number; speed: number; error?: string; order: number;
-  pauseReason?: "user" | "storage"; pending?: boolean;
+  pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   createdAt: string; updatedAt: string;
 }
 export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
@@ -62,7 +62,12 @@ export interface StatsSummary {
   byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
 }
-export interface Settings { concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string; mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; catalogTileSize: TileSize; libraryTileSize: TileSize }
+export interface Settings {
+  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
+  catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
+}
+export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured">> & { realDebridToken?: string };
 export interface SettingsBackup {
   format: "stremio-offline-settings"; version: 1; exportedAt: string; settings: Settings;
   addons: Array<{ manifestUrl: string; role: Addon["role"]; enabled: boolean; addedAt: string; downloadSettings: AddonDownloadSettings }>;

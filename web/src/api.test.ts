@@ -105,3 +105,12 @@ describe("opaque media contracts", () => {
     expect(JSON.parse(String(optionsOf(2).body))).toEqual({ sourceId: "opaque" });
   });
 });
+
+describe("settings", () => {
+  it("sends a Real-Debrid token without putting it on the query string", async () => {
+    fetchMock.mockResolvedValue(json({ realDebridConfigured: true }));
+    await api.updateSettings({ realDebridToken: "rd-secret" });
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/settings");
+    expect(JSON.parse(String(optionsOf().body))).toEqual({ realDebridToken: "rd-secret" });
+  });
+});

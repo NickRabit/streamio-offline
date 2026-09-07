@@ -63,6 +63,7 @@ function parseSettings(value: unknown): Settings {
     showResumeRow: boolean("showResumeRow"),
     catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
+    realDebridToken: typeof source.realDebridToken === "string" ? source.realDebridToken.trim() : fallback.realDebridToken,
   };
 }
 

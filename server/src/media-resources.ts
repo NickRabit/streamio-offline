@@ -35,11 +35,31 @@ export function safeSourceText(value: unknown, stream: StreamItem): string | und
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "");
 }
 
+const INFO_HASH = /^(?:[a-f0-9]{40}|[a-z2-7]{32})$/i;
+const MAGNET_HASH = /xt=urn:btih:([a-z0-9]+)/i;
+
+export function infoHashOf(stream: StreamItem): string | undefined {
+  const direct = typeof stream.infoHash === "string" ? stream.infoHash.trim() : "";
+  if (INFO_HASH.test(direct)) return direct.toLowerCase();
+  const fromMagnet = typeof stream.url === "string" ? MAGNET_HASH.exec(stream.url)?.[1] : undefined;
+  return fromMagnet && INFO_HASH.test(fromMagnet) ? fromMagnet.toLowerCase() : undefined;
+}
+
+export function streamKind(stream: StreamItem): PublicStream["kind"] {
+  if (stream.url?.startsWith("file://")) return "library";
+  if (/^https?:\/\//i.test(stream.url ?? "")) return "remote";
+  if (infoHashOf(stream) || /^magnet:/i.test(stream.url ?? "")) return "torrent";
+  return "unsupported";
+}
+
 function normalizedStream(input: StreamItem): StreamItem {
   const headers = new Headers(input.behaviorHints?.proxyHeaders?.request);
   for (const name of ["host", "connection", "content-length", "transfer-encoding", "x-forwarded-for", "forwarded"]) headers.delete(name);
+  const infoHash = infoHashOf(input);
+  const fileIdx = Number.isInteger(input.fileIdx) && (input.fileIdx as number) >= 0 ? input.fileIdx : undefined;
   return {
-    url: typeof input.url === "string" ? input.url : undefined,
+    url: typeof input.url === "string" && !/^magnet:/i.test(input.url) ? input.url : undefined,
+    infoHash, fileIdx,
     name: safeSourceText(input.name, input), title: safeSourceText(input.title, input),
     description: safeSourceText(input.description, input), addonKey: input.addonKey,
     addonName: safeSourceText(input.addonName, input),
@@ -172,11 +192,11 @@ export class MediaResources {
   }
 
   publicStream(stream: StreamItem, owner: ResourceOwner): PublicStream {
-    const kind = stream.url?.startsWith("file://") ? "library" : /^https?:\/\//i.test(stream.url ?? "") ? "remote" : "unsupported";
+    const kind = streamKind(stream);
     const sourceId = this.add(stream, owner, "source");
     const record = this.get(sourceId, owner.sid, "source").stream;
     return {
-      sourceId, kind, playable: kind !== "unsupported",
+      sourceId, kind, playable: kind === "remote" || kind === "library",
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize },

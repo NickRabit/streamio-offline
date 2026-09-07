@@ -5,13 +5,14 @@ import { defaultDownloadSettings } from "./naming.js";
 import { defaultSettings } from "./store.js";
 
 test("záloha zachová nastavení, pořadí a citlivou URL doplňku", () => {
-  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk" };
+  const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret" };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false,
     addedAt: "2026-01-01T00:00:00.000Z", downloadSettings: defaultDownloadSettings(),
     manifest: { id: "one", name: "One", version: "1" },
   }]);
   assert.equal(backup.settings.concurrentDownloads, 4);
+  assert.equal(backup.settings.realDebridToken, "rd-secret");
   assert.equal(backup.addons[0].manifestUrl, "https://example.com/token/abc/manifest.json");
   assert.equal("key" in backup.addons[0], false);
   assert.equal("manifest" in backup.addons[0], false);
@@ -26,5 +27,6 @@ test("import odmítne cizí formát a normalizuje hodnoty", () => {
   });
   assert.equal(parsed.settings.concurrentDownloads, 8);
   assert.equal(parsed.settings.artworkLocation, "data");
+  assert.equal(parsed.settings.realDebridToken, "");
   assert.deepEqual(parsed.addons[0].downloadSettings, defaultDownloadSettings());
 });

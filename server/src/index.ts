@@ -13,7 +13,8 @@ import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { guardedFetch, outbound } from "./outbound.js";
-import { Store } from "./store.js";
+import { publicSettings, Store } from "./store.js";
+import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
@@ -121,6 +122,11 @@ const ownerOf = (req: express.Request): ResourceOwner => {
 const sourceOf = (req: express.Request): StreamItem => {
   if (["stream", "url", "headers", "path"].some((key) => key in (req.body ?? {}))) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   return mediaResources.get(String(req.body?.sourceId ?? ""), ownerOf(req).sid, "source").stream;
+};
+const httpSourceOf = async (req: express.Request): Promise<StreamItem> => {
+  const stream = sourceOf(req);
+  if (stream.url) return stream;
+  throw Object.assign(new Error("Torrent nelze přehrát přímo. Přidejte ho do fronty tlačítkem Do knihovny."), { status: 409 });
 };
 const internalMediaRequest = (req: express.Request) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
@@ -891,6 +897,10 @@ queue.onCompleted = async (job) => {
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
   saveCatalogPoster(titleKey(job.target, job.media, targetSettings.layout === "flat"), job.media.poster);
 };
+queue.setDebrid({
+  configured: () => Boolean(store.settings().realDebridToken),
+  advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
+});
 await queue.load();
 await stats.load();
 // Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
@@ -922,7 +932,7 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
   pruneDeviceDownloadTickets();
   let ticket: DeviceDownloadTicket;
   const owner = ownerOf(req);
-  const stream = sourceOf(req);
+  const stream = await httpSourceOf(req);
   if (stream.url?.startsWith("file://")) {
     const relative = stream.url.slice(7);
     const target = relative && resolveInside(DOWNLOAD_DIR, relative);
@@ -1034,7 +1044,7 @@ app.post("/api/downloads/:id/retry", asyncRoute(async (req, res) => { await queu
 app.post("/api/downloads/:id/move", asyncRoute(async (req, res) => { await queue.move(String(req.params.id), Number(req.body.direction) < 0 ? -1 : 1); res.status(204).end(); }));
 app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.remove(String(req.params.id)); res.status(204).end(); }));
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
-app.get("/api/settings", (_req, res) => res.json(store.settings()));
+app.get("/api/settings", (_req, res) => res.json(publicSettings(store.settings())));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
 app.get("/api/logs", asyncRoute(async (req, res) => {
   const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
@@ -1135,9 +1145,14 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
   streamCache.clear();
   queue.changed();
   log("INFO", "Settings backup imported", { addons: loaded.length, version: backup.version });
-  res.json({ settings: store.settings(), addons: store.addons().map(publicAddon) });
+  res.json({ settings: publicSettings(store.settings()), addons: store.addons().map(publicAddon) });
 }));
 app.patch("/api/settings", asyncRoute(async (req, res) => {
+  let realDebridToken: string | undefined;
+  if (req.body.realDebridToken !== undefined) {
+    realDebridToken = normalizeToken(req.body.realDebridToken);
+    if (realDebridToken) await verifyRealDebridToken(realDebridToken);
+  }
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
@@ -1161,12 +1176,13 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
       const value = String(req.body.libraryTileSize);
       state.settings.libraryTileSize = value === "compact" || value === "small" || value === "large" ? value : "medium";
     }
+    if (realDebridToken !== undefined) state.settings.realDebridToken = realDebridToken;
   });
-  queue.changed(); res.json(store.settings());
+  queue.changed(); res.json(publicSettings(store.settings()));
 }));
 app.get("/api/languages", (_req, res) => res.json(Object.entries(LANGUAGE_NAMES).map(([code, name]) => ({ code, name }))));
 app.post("/api/inspect", asyncRoute(async (req, res) => {
-  const stream = sourceOf(req);
+  const stream = await httpSourceOf(req);
   const info = await playback.inspect(stream);
   res.setHeader("cache-control", "private, no-store").json(safeInspection(info, stream));
 }));
@@ -1178,7 +1194,7 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
   if (req.body.time !== undefined) options.startTime = Math.max(0, Number(req.body.time) || 0);
   if (req.body.quality !== undefined) options.quality = req.body.quality === null ? null : Number(req.body.quality);
   const owner = ownerOf(req);
-  const prepared = mediaResources.mediaStream(sourceOf(req), owner);
+  const prepared = mediaResources.mediaStream(await httpSourceOf(req), owner);
   let started;
   const subtitleIds: Record<string, string> = {};
   try {
@@ -1377,8 +1393,9 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
     stack: error instanceof Error ? error.stack : undefined,
   });
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
-  res.status(error instanceof ResourceError ? error.status : mediaRoute ? 502 : status).json({
-    error: error instanceof ResourceError ? error.message : mediaRoute ? "Media source request failed." : message,
+  const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
+  res.status(hideDetails ? 502 : status).json({
+    error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,
   });
 });
