@@ -14,9 +14,10 @@ import {
   retryDelayMs, SourceError, StorageError, storageHeadroom, storageMessage, storageResumeNeed,
   type QueueHalt,
 } from "./download-policy.js";
+import { DebridError, type DebridAdvance } from "./debrid.js";
 
 export type { QueueHalt };
-export type DownloadStatus = "queued" | "downloading" | "paused" | "completed" | "failed";
+export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
 export type PauseReason = "user" | "storage";
 /** Úloha bez `stream` je líná: zdroj pro ni vybere resolver až v okamžiku, kdy na ni
  *  ve frontě dojde řada. `tried` chrání před opakováním už selhaných adres. */
@@ -25,9 +26,14 @@ export interface DownloadJob {
   source?: { type: string; videoId: string; tried: string[] };
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
   error?: string; retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
+  debrid?: { torrentId?: string; progress?: number; status?: string };
   createdAt: string; updatedAt: string;
 }
 export type StreamResolver = (type: string, videoId: string, tried: string[]) => Promise<{ stream: StreamItem; settings: AddonDownloadSettings } | undefined>;
+export interface DebridEngine {
+  configured: () => boolean;
+  advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
+}
 export interface QueueHooks {
   now?: () => number;
   freeSpace?: (dir: string) => Promise<{ freeBytes?: number; totalBytes?: number }>;
@@ -36,6 +42,9 @@ export interface QueueHooks {
   stallTransferMs?: number;
   spaceCheckMs?: number;
   retryDelay?: (retryCount: number, retryAfterMs?: number) => number;
+  debrid?: DebridEngine;
+  debridPollMs?: number;
+  debridTimeoutMs?: number;
 }
 
 const exists = async (file: string) => { try { await stat(file); return true; } catch { return false; } };
@@ -70,6 +79,11 @@ export class DownloadQueue {
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
+  private debrid?: DebridEngine;
+  private readonly debridPollMs: number;
+  private readonly debridTimeoutMs: number;
+  private debridTimers = new Map<string, NodeJS.Timeout>();
+  private debridBusy = new Set<string>();
   /** Zavolá se po úspěšném dokončení, aby knihovna mohla rovnou vyrobit náhled. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
   /** Přenesené bajty, jak přitékají. Statistiky je tak zapíšou do chvíle, kdy
@@ -92,16 +106,22 @@ export class DownloadQueue {
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
+    this.debrid = hooks.debrid;
+    this.debridPollMs = hooks.debridPollMs ?? 15_000;
+    this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
   }
 
   /** Výběr zdroje pro líné úlohy si drží index.ts, protože potřebuje doplňky a nastavení. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
+  setDebrid(engine: DebridEngine) { this.debrid = engine; }
   haltInfo() { return this.halt ? { ...this.halt } : null; }
   stop() {
     if (this.saveTimer) clearTimeout(this.saveTimer);
     if (this.retryTimer) clearTimeout(this.retryTimer);
     if (this.spaceWatch) clearInterval(this.spaceWatch);
     this.saveTimer = undefined; this.retryTimer = undefined; this.spaceWatch = undefined;
+    for (const timer of this.debridTimers.values()) clearTimeout(timer);
+    this.debridTimers.clear();
     for (const controller of this.active.values()) controller.abort();
   }
 
@@ -131,12 +151,14 @@ export class DownloadQueue {
     }
     await this.save();
     this.pump();
+    for (const job of this.jobs) if (job.status === "waiting") this.scheduleDebrid(job.id);
   }
 
   list() { return this.jobs.map((job, index) => ({ ...this.publicJob(job), order: index })); }
   snapshot() { return { jobs: this.list(), halt: this.haltInfo() }; }
 
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
+    if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings);
     if (!stream.url) throw new Error("Stáhnout lze pouze přímý HTTP stream.");
     // Bez téhle kontroly vznikne z dvojkliku na Stáhnout tentýž film dvakrát,
     // protože uniqueTarget té druhé úloze ochotně přidělí jméno s "(2)".
@@ -147,8 +169,30 @@ export class DownloadQueue {
     const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
     const now = new Date().toISOString();
-    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now };
+    const job: DownloadJob = { id: crypto.randomUUID(), title, stream, media, status: "queued", target, received: 0, speed: 0, createdAt: now, updatedAt: now };
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
+  }
+
+  private sameTorrent(left: StreamItem | undefined, right: StreamItem) {
+    return Boolean(left?.infoHash && left.infoHash === right.infoHash && (left.fileIdx ?? 0) === (right.fileIdx ?? 0));
+  }
+
+  private async addDebrid(title: string, stream: StreamItem, media: MediaInfo | undefined, targetSettings: DownloadTargetSettings) {
+    if (!this.debrid?.configured()) throw new Error("Nejdřív nastavte Real-Debrid v Nastavení.");
+    const duplicate = this.jobs.find((job) => this.sameTorrent(job.stream, stream) && job.status !== "failed");
+    if (duplicate && duplicate.status !== "completed") throw new Error("Tenhle torrent už ve frontě je.");
+    const extension = streamExtension(stream);
+    const { directory, base } = targetPath(media, title, extension, targetSettings);
+    const target = await this.uniqueTarget(directory, base, extension);
+    const now = new Date().toISOString();
+    const job: DownloadJob = {
+      id: crypto.randomUUID(), title, stream, media, status: "waiting", target, received: 0, speed: 0,
+      debrid: {}, createdAt: now, updatedAt: now,
+    };
+    this.jobs.push(job); await this.save();
+    log("INFO", "Waiting for Real-Debrid", { id: job.id, title: job.title, infoHash: stream.infoHash });
+    this.scheduleDebrid(job.id);
+    return this.publicJob(job);
   }
 
   /** Líná úloha: cíl i zdroj se doplní při zahájení stahování. Duplicitní epizoda se nepřidává. */
@@ -175,6 +219,7 @@ export class DownloadQueue {
   async pause(id: string) {
     const job = this.require(id);
     if (job.status === "completed") throw new Error("Dokončené stahování nelze pozastavit.");
+    this.clearDebrid(id);
     if (this.active.has(id)) this.pauseRequested.add(id);
     job.status = "paused";
     job.pauseReason = "user";
@@ -196,11 +241,13 @@ export class DownloadQueue {
     }
     this.pauseRequested.delete(id);
     if (job.status === "paused" || job.status === "failed") {
-      job.status = "queued";
+      const waiting = Boolean(job.stream?.infoHash && !job.stream.url);
+      job.status = waiting ? "waiting" : "queued";
       job.error = undefined;
       job.pauseReason = undefined;
       job.notBefore = undefined;
       job.updatedAt = new Date().toISOString();
+      if (waiting) this.scheduleDebrid(job.id);
     }
     await this.save();
     this.pump();
@@ -216,6 +263,76 @@ export class DownloadQueue {
       if (!job.stream) { job.target = ""; job.received = 0; job.total = undefined; }
     }
     return this.resume(id);
+  }
+
+  private clearDebrid(id: string) {
+    const timer = this.debridTimers.get(id);
+    if (timer) clearTimeout(timer);
+    this.debridTimers.delete(id);
+  }
+
+  private scheduleDebrid(id: string, delay = 0) {
+    this.clearDebrid(id);
+    const timer = setTimeout(() => { this.debridTimers.delete(id); void this.pollDebrid(id); }, delay);
+    timer.unref?.();
+    this.debridTimers.set(id, timer);
+  }
+
+  private async pollDebrid(id: string) {
+    const job = this.jobs.find((item) => item.id === id);
+    if (!job || job.status !== "waiting" || this.debridBusy.has(id)) return;
+    this.debridBusy.add(id);
+    try {
+      if (this.now() - Date.parse(job.createdAt) > this.debridTimeoutMs) {
+        job.status = "failed"; job.error = "Real-Debrid torrent nedohrál včas."; job.updatedAt = new Date().toISOString();
+        await this.save();
+        return;
+      }
+      if (!this.debrid?.configured()) {
+        job.status = "failed"; job.error = "Chybí token Real-Debrid."; job.updatedAt = new Date().toISOString();
+        await this.save();
+        return;
+      }
+      const infoHash = job.stream?.infoHash;
+      if (!infoHash) {
+        job.status = "failed"; job.error = "Úloha nemá infoHash."; job.updatedAt = new Date().toISOString();
+        await this.save();
+        return;
+      }
+      const result = await this.debrid.advance({ infoHash, fileIdx: job.stream?.fileIdx, torrentId: job.debrid?.torrentId });
+      job.debrid = { torrentId: result.torrentId, progress: result.ready ? 100 : result.progress, status: result.ready ? "downloaded" : result.status };
+      job.updatedAt = new Date().toISOString();
+      if (result.ready) {
+        job.stream = {
+          ...job.stream,
+          url: result.url,
+          behaviorHints: { ...job.stream?.behaviorHints, filename: result.filename ?? job.stream?.behaviorHints?.filename },
+        };
+        job.status = "queued";
+        job.error = undefined;
+        log("INFO", "Real-Debrid finished, HTTP download will start", { id: job.id, title: job.title });
+        await this.save();
+        this.pump();
+        return;
+      }
+      await this.saveSoon();
+      this.scheduleDebrid(job.id, this.debridPollMs);
+    } catch (error) {
+      const retryable = error instanceof DebridError && (error.status === 509 || error.status === 429);
+      job.error = error instanceof Error ? error.message : String(error);
+      job.updatedAt = new Date().toISOString();
+      if (retryable) {
+        log("WARN", "Real-Debrid is busy, will retry", { id: job.id, title: job.title, reason: job.error });
+        await this.save();
+        this.scheduleDebrid(job.id, Math.max(this.debridPollMs, 30_000));
+        return;
+      }
+      job.status = "failed";
+      log("ERROR", "Real-Debrid job failed", { id: job.id, title: job.title, reason: job.error });
+      await this.save();
+    } finally {
+      this.debridBusy.delete(id);
+    }
   }
 
   async remove(id: string) {
@@ -247,7 +364,9 @@ export class DownloadQueue {
   changed() { this.pump(); }
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new Error("Položka nebyla nalezena."); return job; }
   /** Adresy zdrojů (často s tokeny) nesmí do rozhraní; ven jde jen příznak líné úlohy. */
-  private publicJob({ stream, source, notBefore: _notBefore, ...job }: DownloadJob) { return { ...job, pending: !stream && Boolean(source) }; }
+  private publicJob({ stream, source, notBefore: _notBefore, debrid, ...job }: DownloadJob) {
+    return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress };
+  }
   /** Uložení musí jít za sebou: souběžné zápisy sdílejí jeden .tmp a druhé přejmenování
    *  pak nemá co přesouvat. Selhání zápisu stavu navíc nesmí shodit celý server. */
   private save() {

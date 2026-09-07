@@ -21,9 +21,9 @@ export interface Stream {
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string }
 export interface Download {
-  id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed";
+  id: string; title: string; status: "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
   target: string; received: number; total?: number; speed: number; error?: string; order: number;
-  pauseReason?: "user" | "storage"; pending?: boolean;
+  pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   createdAt: string; updatedAt: string;
 }
 export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }

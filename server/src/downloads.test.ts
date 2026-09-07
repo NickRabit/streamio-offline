@@ -381,6 +381,68 @@ test("HTTP 404 fails a direct job and moves a lazy job to the next source", asyn
   }
 });
 
+const HASH = "59e11cef8c2152ac73681092844ebd3db19025bc";
+
+test("a torrent waits on Real-Debrid then downloads over HTTP without taking a slot", async () => {
+  const payload = Buffer.alloc(32 * 1024, 7);
+  const { server, port } = await listen((_req, res) => {
+    res.writeHead(200, { "content-length": String(payload.length), "content-type": "video/mp4" });
+    res.end(payload);
+  });
+  let calls = 0;
+  const { directory, queue, downloads } = await tempQueue({
+    debridPollMs: 20,
+    debrid: {
+      configured: () => true,
+      advance: async () => {
+        calls += 1;
+        if (calls === 1) return { ready: false, torrentId: "rd1", progress: 40, status: "downloading" };
+        return { ready: true, torrentId: "rd1", url: `http://127.0.0.1:${port}/movie.mp4`, filename: "Movie.mkv" };
+      },
+    },
+  });
+  try {
+    const waiting = await queue.add("Film", { infoHash: HASH, fileIdx: 0, name: "1080p" });
+    assert.equal(waiting.status, "waiting");
+    await queue.add("Http", { url: `http://127.0.0.1:${port}/other.mp4` });
+    await waitFor(queue, () => queue.list().some((job) => job.title === "Http" && job.status === "completed"));
+    assert.equal(queue.list().find((job) => job.title === "Film")?.status, "waiting");
+    await waitFor(queue, () => queue.list().every((job) => job.status === "completed"));
+    const torrent = queue.list().find((job) => job.title === "Film")!;
+    assert.equal(torrent.status, "completed");
+    assert.equal(torrent.debridProgress, 100);
+    assert.equal((await stat(path.join(downloads, torrent.target))).size, payload.length);
+    assert.ok(calls >= 2);
+  } finally {
+    queue.stop();
+    server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("the same infoHash is not queued twice", async () => {
+  const { directory, queue } = await tempQueue({
+    debrid: { configured: () => true, advance: async () => ({ ready: false, torrentId: "rd1", progress: 1, status: "queued" }) },
+  });
+  try {
+    await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
+    await assert.rejects(queue.add("Film", { infoHash: HASH, fileIdx: 0 }), /už ve frontě/);
+  } finally {
+    queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a torrent without a token is refused", async () => {
+  const { directory, queue } = await tempQueue();
+  try {
+    await assert.rejects(queue.add("Film", { infoHash: HASH }), /Real-Debrid/);
+  } finally {
+    queue.stop();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("a damaged queue file is quarantined and the server still starts", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const data = path.join(directory, "data");

@@ -14,7 +14,7 @@ import { PlaybackManager, sourceTitle } from "./playback.js";
 import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { publicSettings, Store } from "./store.js";
-import { normalizeToken, verifyRealDebridToken } from "./debrid.js";
+import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
@@ -892,6 +892,10 @@ queue.onCompleted = async (job) => {
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
   saveCatalogPoster(titleKey(job.target, job.media, targetSettings.layout === "flat"), job.media.poster);
 };
+queue.setDebrid({
+  configured: () => Boolean(store.settings().realDebridToken),
+  advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
+});
 await queue.load();
 await stats.load();
 // Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
