@@ -573,4 +573,5 @@ export const en = {
   "stats.source.download": "Downloads",
   "stats.source.catalog": "Catalogue playback",
   "stats.source.library": "Library playback",
+  "app.signOut": "Sign out",
 };

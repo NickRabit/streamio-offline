@@ -64,9 +64,13 @@ export function useI18n() {
 }
 
 /** Language names come from the browser, so every UI locale gets them for free and
- *  no hand-written table can go stale. */
+ *  no hand-written table can go stale. Czech writes them lower case in a sentence;
+ *  standing on their own in a menu they read better capitalised. */
 export function languageName(code: string): string {
-  try { return new Intl.DisplayNames([current], { type: "language" }).of(code) ?? code.toUpperCase(); }
+  try {
+    const name = new Intl.DisplayNames([current], { type: "language" }).of(code);
+    return name ? name.charAt(0).toLocaleUpperCase(current) + name.slice(1) : code.toUpperCase();
+  }
   catch { return code.toUpperCase(); }
 }
 

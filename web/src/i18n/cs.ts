@@ -566,4 +566,5 @@ export const cs: Catalog = {
   "stats.source.download": "Stahování",
   "stats.source.catalog": "Přehrávání z katalogu",
   "stats.source.library": "Přehrávání z knihovny",
+  "app.signOut": "Odhlásit",
 };

@@ -3,11 +3,19 @@ import { addonManifest } from "../../playwright.config";
 
 // Runs before every other spec and leaves behind the session the rest reuse.
 // It is a real journey, not scaffolding: a fresh server shows the account form
-// and has no addons until one is added by hand.
-test("first run: create the account and install an addon", async ({ page }) => {
+// and has no addons until one is added by hand. It also pins the language the
+// rest of the suite -- and every screenshot baseline -- is written against.
+test("first run: pick a language, create the account and install an addon", async ({ page }) => {
   await page.goto("/");
 
   const form = page.locator("form.login-card");
+  // A fresh install with no stored language follows the browser, which Playwright
+  // runs in English, so the first screen anyone sees is English.
+  await expect(form).toContainText("This server has no account yet");
+
+  const language = form.getByLabel("Language");
+  await expect(language).toHaveValue("en");
+  await language.selectOption("cs");
   await expect(form).toContainText("Server zatím nemá žádný účet");
 
   await form.getByLabel("Uživatelské jméno").fill("e2e-admin");
