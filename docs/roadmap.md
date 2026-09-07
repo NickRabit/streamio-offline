@@ -32,6 +32,7 @@ These used to be open notes. They are in `main` now.
 - iPhone landscape: the left menu clears the notch with a safe-area layout.
 - Interface in English and Czech: English (or the browser's language when we ship it) on a fresh install, a picker on the first-run screen that also seeds the preferred audio and subtitles, and a Language setting afterwards. An install from before the change keeps Czech. Server messages travel as English text plus a catalogue key, so a stored download error follows the language too.
 - Real-Debrid client: API token in Settings, torrent rows no longer look like HTTP, waiting queue jobs that do not take an HTTP slot, play only when an HTTPS URL exists now, in-app toasts for the two hand-offs.
+- Restricted / demo mode (`RESTRICTED_MODE=1`): process-wide lock so a shared instance cannot change addons, settings or the password, and cannot export tokens. Off by default.
 
 ## Next (daily friction)
 

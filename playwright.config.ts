@@ -42,7 +42,7 @@ export default defineConfig({
     {
       // The journeys are about behaviour, not layout, so one viewport is enough.
       name: "chromium",
-      testIgnore: [/setup\.spec\.ts/, /layout\//],
+      testIgnore: [/setup\.spec\.ts/, /layout\//, /restricted\.spec\.ts/],
       dependencies: ["setup"],
       use: { ...devices["Desktop Chrome"], storageState },
     },

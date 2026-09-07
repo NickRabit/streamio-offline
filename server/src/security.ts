@@ -108,3 +108,23 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     downloadSettings: addon.downloadSettings,
   };
 }
+
+/** Allowlist for a shared demo: names and a logo, never the token-bearing URL or save rules. */
+export function publicAddonRestricted(addon: import("./types.js").AddonRecord) {
+  const resources = (addon.manifest.resources ?? []).map((entry) =>
+    typeof entry === "string" ? entry : { name: entry.name });
+  return {
+    key: addon.key,
+    role: addon.role,
+    enabled: addon.enabled,
+    manifest: {
+      id: addon.manifest.id,
+      name: addon.manifest.name,
+      version: addon.manifest.version,
+      description: addon.manifest.description,
+      logo: addon.manifest.logo,
+      resources,
+      behaviorHints: addon.manifest.behaviorHints?.p2p ? { p2p: true } : undefined,
+    },
+  };
+}

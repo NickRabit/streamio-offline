@@ -11,7 +11,8 @@ import { DownloadQueue } from "./downloads.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
@@ -33,6 +34,7 @@ const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
 await store.load();
 await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
+if (restrictedMode()) log("INFO", "Restricted mode enabled");
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
@@ -202,6 +204,10 @@ app.use("/api", (req, res, next) => {
   if (!currentUser(req)) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn" });
   next();
 });
+app.use("/api", restrictedMiddleware({
+  isOpen: (req) => OPEN_PATHS.has(req.path),
+  isInternal: internalMediaRequest,
+}));
 
 setInterval(() => {
   for (const active of activeMedia) if (active.owner.expiresAt <= Date.now()) active.res.destroy();
@@ -270,6 +276,7 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
   res.json({ username });
 }));
 app.post("/api/auth/logout", asyncRoute(async (req, res) => {
+  if (logoutDenied(req.body)) throw new RestrictedError();
   const info = currentSession(req);
   res.setHeader("set-cookie", clearedCookie());
   if (!info) return res.status(204).end();
@@ -305,8 +312,8 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   res.json({ username });
 }));
 
-app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build }));
-app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)));
+app.get("/api/status", (_req, res) => res.json({ status: "ok", ...build, restricted: restrictedMode() }));
+app.get("/api/addons", (_req, res) => res.json(store.addons().map((addon) => restrictedMode() ? publicAddonRestricted(addon) : publicAddon(addon))));
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
   const addon = await loadAddon(String(req.body.url ?? ""), role);
@@ -1398,11 +1405,17 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   // a měnit to teď by byla změna chování, ne diagnostiky.
   const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
   const message = error instanceof Error ? error.message : String(error);
-  log("ERROR", "Request failed", {
-    req: req.id, method: req.method, path: req.path, status,
-    user: currentUser(req), reason: message,
-    stack: error instanceof Error ? error.stack : undefined,
-  });
+  if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {
+    log("INFO", "Rejected a restricted-mode mutation", {
+      req: req.id, method: req.method, path: req.path, status: 403, user: currentUser(req),
+    });
+  } else {
+    log("ERROR", "Request failed", {
+      req: req.id, method: req.method, path: req.path, status,
+      user: currentUser(req), reason: message,
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+  }
   const mediaRoute = /^(?:\/api)?\/(?:media|playback|inspect|streams|subtitle|subtitles|device-download|library\/source)(?:\/|$)/.test(req.path);
   const hideDetails = mediaRoute && !(error instanceof ResourceError) && status >= 500;
   res.status(hideDetails ? 502 : status).json({

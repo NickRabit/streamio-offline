@@ -8,6 +8,7 @@ downloads/
 .test-addon/
 *.tsbuildinfo
 e2e/.tmp/
+e2e/.tmp-restricted/
 test-results/
 playwright-report/
 

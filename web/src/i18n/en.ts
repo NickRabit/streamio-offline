@@ -96,6 +96,8 @@ export const en = {
   // Application shell.
   "app.goToCleanCatalog": "Back to a clean catalog",
   "app.serverOnline": "Server online",
+  "restricted.chip": "Demo mode",
+  "restricted.notice": "This instance is in restricted mode. Addons, settings and the password cannot be changed.",
   "app.signOut": "Sign out",
   "app.expandMenu": "Expand menu",
   "app.collapseMenu": "Collapse menu",
@@ -541,6 +543,7 @@ export const en = {
 
   // Server failures. The key travels with the response; the server's English text
   // stands in for anything not listed here.
+  "err.restricted": "This instance is in restricted mode.",
   "err.notSignedIn": "Not signed in.",
   "err.setupDone": "An account already exists.",
   "err.badCredentials": "Wrong username or password.",
