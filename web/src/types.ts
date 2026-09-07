@@ -1,3 +1,4 @@
+import type { Locale } from "./i18n";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
@@ -63,7 +64,7 @@ export interface StatsSummary {
   since?: string;
 }
 export interface Settings {
-  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  concurrentDownloads: number; parallelPerProvider: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
 }
@@ -79,9 +80,10 @@ export interface PlaybackSession {
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
 }
 
-export interface Session { username: string }
-/** Čerstvá instalace vrátí místo relace pokyn k založení účtu. */
-export type AuthStatus = Session | { setup: true };
+export interface Session { username: string; language?: Locale }
+/** A fresh install answers with the setup order instead of a session. Both carry the
+ *  stored language: the sign-in and setup screens render before any other call. */
+export type AuthStatus = (Session | { setup: true }) & { language?: Locale };
 
 export interface LibraryFile { path: string; label: string; season: number | null; episode: number | null; size: number; modified: string }
 export interface LibrarySummary {

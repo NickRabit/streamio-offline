@@ -42,6 +42,12 @@ export const LANGUAGE_NAMES: Record<string, string> = {
   hr: "Chorvatština", sr: "Srbština", el: "Řečtina", tr: "Turečtina", ar: "Arabština", he: "Hebrejština", hi: "Hindština",
 };
 
+/** Locales the interface itself is translated into. Everything else is a
+ *  content language: pickable for audio and subtitles, never for the UI. */
+export const UI_LANGUAGES = ["en", "cs"] as const;
+export type UiLanguage = (typeof UI_LANGUAGES)[number];
+export const isUiLanguage = (value: unknown): value is UiLanguage => UI_LANGUAGES.includes(value as UiLanguage);
+
 /** Vrátí dvoupísmenný kód, nebo undefined když jazyk nepoznáme. */
 export function normalizeLanguage(value?: string): string | undefined {
   if (!value) return undefined;

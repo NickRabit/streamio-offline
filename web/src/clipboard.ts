@@ -1,16 +1,18 @@
-/** Schránka přes navigator.clipboard je dostupná jen v zabezpečeném kontextu.
- * Server na NASu běží po HTTP, takže tam objekt vůbec neexistuje a volání spadne;
- * padáme proto zpět na staré označení textu, které funguje i tam. */
+import { t } from "./i18n";
+
+/** navigator.clipboard only exists in a secure context. The server on a NAS runs over
+ * plain HTTP, where the object is simply absent and the call throws, so we fall back to
+ * the old text-selection trick, which works there too. */
 export async function copyText(text: string) {
   if (window.isSecureContext && navigator.clipboard) {
     try { await navigator.clipboard.writeText(text); return; }
-    catch { /* zkusíme náhradní cestu níž */ }
+    catch { /* fall through to the path below */ }
   }
 
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
-  // Mimo obraz, ale ne display:none -- skrytý prvek nejde označit.
+  // Off screen, but not display:none -- a hidden element cannot be selected.
   area.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
   document.body.appendChild(area);
   const selection = document.getSelection();
@@ -23,5 +25,5 @@ export async function copyText(text: string) {
   area.remove();
   if (previous && selection) { selection.removeAllRanges(); selection.addRange(previous); }
 
-  if (!copied) throw new Error("Prohlížeč kopírování nepovolil. Označte text a zkopírujte ho ručně.");
+  if (!copied) throw new Error(t("api.copyRefused"));
 }

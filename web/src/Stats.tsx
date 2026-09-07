@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
 import type { StatsSeries, StatsSummary } from "./types";
+import { localeTag, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
   : value >= 1e12 ? `${(value / 1e12).toFixed(2)} TB`
@@ -8,26 +9,27 @@ const size = (value: number) => !value ? "0 B"
   : value >= 1e6 ? `${Math.round(value / 1e6)} MB`
   : `${Math.round(value / 1e3)} kB`;
 
-const files = (count: number) => count === 1 ? "1 položka" : count >= 2 && count <= 4 ? `${count} položky` : `${count} položek`;
+const files = (count: number) => t("stats.items", { count });
 
 const PERIODS = [
-  { hours: 1, label: "hodina" },
-  { hours: 24, label: "24 hodin" },
-  { hours: 168, label: "7 dní" },
-  { hours: 720, label: "30 dní" },
-  { hours: 2160, label: "90 dní" },
-  { hours: 8760, label: "rok" },
-];
+  { hours: 1, key: "stats.period.hour" },
+  { hours: 24, key: "stats.period.day" },
+  { hours: 168, key: "stats.period.week" },
+  { hours: 720, key: "stats.period.month" },
+  { hours: 2160, key: "stats.period.quarter" },
+  { hours: 8760, key: "stats.period.year" },
+] as const;
 
-/** Barvy vybraných řad. Odstíny jsou ověřené proti tmavému podkladu panelu:
- * drží pásmo světlosti, sytost i odstup pro barvosleposti, takže sousední
- * linky nesplynou. Víc než osm zdrojů naráz stejně rozlišit nejde. */
+/** Colours for the picked series. The shades are checked against the panel's dark
+ * ground: they hold one lightness band, keep their saturation and stay apart under
+ * colour blindness, so neighbouring lines never merge. More than eight sources at
+ * once cannot be told apart anyway. */
 const COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 
-/** Osa Y má pět dílků; hodnoty se odvozují od vrcholu, ať je vidět měřítko. */
+/** Five ticks on the Y axis, derived from the peak so the scale stays readable. */
 const TICKS = [1, 0.75, 0.5, 0.25, 0];
 
-/** Na osu X se vejde jen pár popisků, jinak se přes sebe přeloží. */
+/** Only a few labels fit on the X axis before they overlap. */
 const xTicks = (count: number) => {
   const wanted = Math.min(6, count);
   if (wanted < 2) return [0];
@@ -36,9 +38,8 @@ const xTicks = (count: number) => {
 
 const stamp = (at: string, step: StatsSummary["step"]) => {
   const date = new Date(at);
-  if (step === "day") return date.toLocaleDateString("cs-CZ", { day: "numeric", month: "numeric" });
-  if (step === "hour") return date.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
-  return date.toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" });
+  if (step === "day") return date.toLocaleDateString(localeTag(), { day: "numeric", month: "numeric" });
+  return date.toLocaleTimeString(localeTag(), { hour: "2-digit", minute: "2-digit" });
 };
 
 function Card({ title, window }: { title: string; window: { bytes: number; count: number } }) {
@@ -49,7 +50,8 @@ function Card({ title, window }: { title: string; window: { bytes: number; count
   </div>;
 }
 
-/** Bez výběru kreslíme celkový objem sloupci, s výběrem každou řadu vlastní linkou. */
+/** With nothing picked the total volume is drawn as bars; a pick gives every series
+ * its own line. */
 function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSeries & { color: string; dashed?: boolean }> }) {
   const peak = Math.max(1, ...(lines.length ? lines.flatMap((line) => line.points) : summary.points.map((point) => point.bytes)));
   const width = 1000, height = 200;
@@ -65,18 +67,18 @@ function Chart({ summary, lines }: { summary: StatsSummary; lines: Array<StatsSe
       <div className="stats-grid" aria-hidden="true">{TICKS.map((tick) => <i key={tick} style={{ bottom: `${tick * 100}%` }}/>)}</div>
       {lines.length
         ? <>
-            <svg className="stats-lines" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label="Průběh vybraných zdrojů">
+            <svg className="stats-lines" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none" role="img" aria-label={t("stats.chosenTrend")}>
               {lines.map((line) => <polyline key={line.key} fill="none" stroke={line.color} strokeWidth={2} vectorEffect="non-scaling-stroke"
                 strokeDasharray={line.dashed ? "6 4" : undefined} strokeLinejoin="round" strokeLinecap="round"
                 points={line.points.map((value, index) => `${index * stride},${height - (value / peak) * (height - 6)}`).join(" ")}/>)}
             </svg>
-            {/* Průhledné sloupce nad grafem nesou bublinu s hodnotami všech vybraných řad. */}
+            {/* Transparent columns over the chart carry the tooltip with every picked series. */}
             <div className="stats-hover">
               {summary.points.map((point, index) => <div key={point.at}
                 title={`${stamp(point.at, summary.step)}\n${lines.map((line) => `${line.label}: ${size(line.points[index])}`).join("\n")}`}/>)}
             </div>
           </>
-        : <div className="stats-chart" role="img" aria-label={`Stahování po obdobích, nejvíc ${size(peak)}`}>
+        : <div className="stats-chart" role="img" aria-label={t("stats.chartLabel", { peak: size(peak) })}>
             {summary.points.map((point) => <div key={point.at} className="stats-bar" title={`${stamp(point.at, summary.step)}: ${size(point.bytes)}, ${files(point.count)}`}>
               <span style={{ height: `${Math.max(point.bytes ? 2 : 0, (point.bytes / peak) * 100)}%` }}/>
             </div>)}
@@ -99,13 +101,13 @@ function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
   const total = items.reduce((sum, item) => sum + item.bytes, 0);
   return <section className="panel stats-breakdown">
     <h3>{title}</h3>
-    {!items.length ? <p className="stats-empty">V období není co ukázat.</p> : <ul>
+    {!items.length ? <p className="stats-empty">{t("stats.emptyPeriod")}</p> : <ul>
       {items.map((item) => {
         const id = `${kind}:${item.key}`;
         const color = colors.get(id);
         return <li key={item.key}>
           <button className={`stats-pick${chosen.has(id) ? " chosen" : ""}`} onClick={() => onToggle(id)}
-            aria-pressed={chosen.has(id)} title={chosen.has(id) ? "Odebrat z grafu" : "Přidat do grafu"}>
+            aria-pressed={chosen.has(id)} title={chosen.has(id) ? t("stats.removeFromChart") : t("stats.addToChart")}>
             <span className="stats-dot" style={color ? { background: color } : undefined}/>
             <span className="stats-name">{item.label}</span>
             <b>{size(item.bytes)}</b>
@@ -119,6 +121,7 @@ function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
 }
 
 export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
+  const { t } = useI18n();
   const [hours, setHours] = useState(720);
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,7 +143,7 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
     return next;
   });
 
-  // Barvu dostane jen vybraná řada, ať se odstíny nepřidělují nazdařbůh podle pořadí.
+  // Only a picked series gets a colour, so the shades are not handed out at random by position.
   const { lines, colors } = useMemo(() => {
     const colors = new Map<string, string>();
     if (!summary) return { lines: [], colors };
@@ -160,45 +163,44 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   return <section className="stats-page">
     <div className="stats-head">
       <div>
-        <h2>Statistiky provozu</h2>
+        <h2>{t("stats.title")}</h2>
         <p>{summary?.since
-          ? `Karty a sloupce mluví o externím provozu — stahování a přehrávání z katalogu. Měříme od ${new Date(summary.since).toLocaleDateString("cs-CZ")}.`
-          : "Zatím není co měřit — přehled se plní, jak data tečou."}</p>
+          ? t("stats.lead", { since: new Date(summary.since).toLocaleDateString(localeTag()) })
+          : t("stats.leadEmpty")}</p>
       </div>
-      <div className="stats-periods" role="group" aria-label="Období">
-        {PERIODS.map((period) => <button key={period.hours} className={period.hours === hours ? "active" : ""} onClick={() => setHours(period.hours)}>{period.label}</button>)}
+      <div className="stats-periods" role="group" aria-label={t("stats.periodGroup")}>
+        {PERIODS.map((period) => <button key={period.hours} className={period.hours === hours ? "active" : ""} onClick={() => setHours(period.hours)}>{t(period.key)}</button>)}
       </div>
     </div>
 
-    {!summary ? <p className="stats-empty">{loading ? "Načítám…" : "Statistiky se nepodařilo načíst."}</p> : <>
+    {!summary ? <p className="stats-empty">{loading ? t("common.loading") : t("stats.loadFailed")}</p> : <>
       <div className="stats-cards">
-        <Card title="Za hodinu" window={summary.hour}/>
-        <Card title="Za 24 hodin" window={summary.day}/>
-        <Card title="Za 7 dní" window={summary.week}/>
-        <Card title="Za 30 dní" window={summary.month}/>
-        <Card title="Celkem" window={summary.total}/>
+        <Card title={t("stats.card.hour")} window={summary.hour}/>
+        <Card title={t("stats.card.day")} window={summary.day}/>
+        <Card title={t("stats.card.week")} window={summary.week}/>
+        <Card title={t("stats.card.month")} window={summary.month}/>
+        <Card title={t("stats.card.total")} window={summary.total}/>
       </div>
 
       <section className="panel stats-graph">
         <div className="stats-graph-head">
-          <h3>{lines.length ? "Průběh vybraných zdrojů" : "Průběh za zvolené období"}</h3>
+          <h3>{lines.length ? t("stats.chosenTrend") : t("stats.periodTrend")}</h3>
           {lines.length > 0 && <div className="stats-legend">
             {lines.map((line) => <span key={line.id}><i style={{ background: line.color }}/>{line.label}</span>)}
-            <button className="link-button" onClick={() => setChosen(new Set())}>zrušit výběr</button>
+            <button className="link-button" onClick={() => setChosen(new Set())}>{t("stats.clearSelection")}</button>
           </div>}
         </div>
         {summary.points.some((point) => point.bytes) || lines.length
           ? <Chart summary={summary} lines={lines}/>
-          : <p className="stats-empty">V tomhle období netekla data ven.</p>}
+          : <p className="stats-empty">{t("stats.noTraffic")}</p>}
       </section>
 
-      <p className="stats-hint">Kliknutím na položku přidáte její vlastní linii do grafu; vybrat jich jde víc naráz.
-        Přehrávání z knihovny čte soubor z disku, takže ve sloupcích ani v kartách není — do grafu se dá přidat jako čárkovaná linka.</p>
+      <p className="stats-hint">{t("stats.hint")}</p>
 
       <div className="stats-columns">
-        <Breakdown title="Podle zdroje" kind="provider" items={summary.providers} chosen={chosen} onToggle={toggle} colors={colors}/>
-        <Breakdown title="Podle doplňku" kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors}/>
-        <Breakdown title="Podle druhu provozu" kind="source" items={summary.sources} chosen={chosen} onToggle={toggle} colors={colors}/>
+        <Breakdown title={t("stats.byProvider")} kind="provider" items={summary.providers} chosen={chosen} onToggle={toggle} colors={colors}/>
+        <Breakdown title={t("stats.byAddon")} kind="addon" items={summary.addons} chosen={chosen} onToggle={toggle} colors={colors}/>
+        <Breakdown title={t("stats.bySource")} kind="source" items={summary.sources} chosen={chosen} onToggle={toggle} colors={colors}/>
       </div>
     </>}
   </section>;

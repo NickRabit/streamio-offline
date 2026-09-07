@@ -1,20 +1,22 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
+import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
 import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
+import { languageName, locale, localeTag, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
-/** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
- * Soukromý režim může úložiště zakázat, proto všechno v try/catch. */
-const remember = (key: string, value: string) => { try { localStorage.setItem(`library-${key}`, value); } catch { /* úložiště nemusí být k dispozici */ } };
+/** Library browsing choices survive both a section switch and a browser restart.
+ * Private mode may forbid storage, hence the try/catch around everything. */
+const remember = (key: string, value: string) => { try { localStorage.setItem(`library-${key}`, value); } catch { /* storage may be unavailable */ } };
 const recall = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
   try { const value = localStorage.getItem(`library-${key}`); return allowed.includes(value as T) ? value as T : fallback; }
   catch { return fallback; }
@@ -34,22 +36,23 @@ const galleryFor = (item: Meta | null): GalleryImage[] => {
     if (typeof value !== "string" || !value.trim() || seen.has(value)) return;
     seen.add(value); images.push({ url: value, label, shape });
   };
-  add(item.poster, "Poster", "poster");
-  add(item.background, "Pozadí", "wide");
-  add(item.logo, "Logo", "wide");
+  add(item.poster, t("gallery.poster"), "poster");
+  add(item.background, t("gallery.background"), "wide");
+  add(item.logo, t("gallery.logo"), "wide");
   for (const key of ["images", "screenshots"]) {
     const values = item[key];
     if (!Array.isArray(values)) continue;
     for (const [index, value] of values.entries()) {
       const candidate = typeof value === "object" && value ? value as Record<string, unknown> : undefined;
-      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, `Náhled ${index + 1}`, "wide");
+      add(typeof value === "string" ? value : candidate?.url ?? candidate?.src, t("gallery.still", { index: index + 1 }), "wide");
     }
   }
-  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || "Náhled epizody", "wide");
+  for (const video of item.videos ?? []) add(video.thumbnail, video.title || video.name || t("gallery.episodeStill"), "wide");
   return images.slice(0, 18);
 };
 
 export function App() {
+  const { t } = useI18n();
   const [view, setView] = useState<View>("catalog"); const [addons, setAddons] = useState<Addon[]>([]); const [catalogs, setCatalogs] = useState<Catalog[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try { return localStorage.getItem("sidebar-collapsed") === "1"; } catch { return false; }
@@ -67,7 +70,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -91,17 +94,17 @@ export function App() {
   const [watchlist, setWatchlist] = useState<WatchlistEntry[]>([]);
   const [libraryFavorites, setLibraryFavorites] = useState<string[]>([]);
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
-  // Cesta, na kterou se má výpis po prokliku ze stahování posunout a zvýraznit ji.
+  // The path the listing should scroll to and highlight after a jump from the download queue.
   const [browseFocus, setBrowseFocus] = useState<string | null>(null);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
-    if (!confirm(`Opravdu smazat ${folder ? "složku" : "soubor"} „${label}“?${folder ? " Smaže se i vše uvnitř." : ""} Tohle nejde vrátit.`)) return;
-    // Se souborem mizí i jeho rozkoukanost a hvězdička v katalogu, takže se oba
-    // seznamy načtou znovu -- jinak by smazaný titul zůstal v řadách viset.
+    if (!confirm(t(folder ? "library.deleteFolderConfirm" : "library.deleteFileConfirm", { name: label }))) return;
+    // Deleting a file also drops its resume position and its catalogue star, so both
+    // lists are reloaded -- otherwise the deleted title would hang around in the rows.
     try {
       await api.deleteLibraryItem(itemPath);
-      notify("Smazáno.");
+      notify(t("library.deleted"));
       await loadBrowse(browsePath);
       const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
       setResume(nextResume); setWatchlist(nextWatchlist);
@@ -117,10 +120,10 @@ export function App() {
     try {
       await api.setWatchlist({ type: item.type || "movie", id: item.id, name: item.name, poster: item.poster, favorite });
       setWatchlist(await api.watchlist());
-      notify(favorite ? "Přidáno do seznamu." : "Odebráno ze seznamu.");
+      notify(t(favorite ? "watchlist.added" : "watchlist.removed"));
     } catch (error) { fail(error); }
   };
-  /** Hvězdička v přehrávači míří tam, kam patří: soubor do knihovny, titul do seznamu. */
+  /** The player's star points where it belongs: a file to the library, a title to the list. */
   const togglePlayerFavorite = async () => {
     const path = localStream?.localPath;
     if (path) {
@@ -128,14 +131,14 @@ export function App() {
       try {
         await api.setFavorite(path, wanted);
         setLibraryFavorites((current) => wanted ? [...current, path] : current.filter((item) => item !== path));
-        notify(wanted ? "Přidáno do oblíbených." : "Odebráno z oblíbených.");
+        notify(t(wanted ? "favorite.added" : "favorite.removed"));
       } catch (error) { fail(error); }
       return;
     }
     if (selected) await toggleWatchlist(selected);
   };
 
-  /** Otevře titul z katalogu; rozkoukaná pozice se pak navazuje sama podle klíče. */
+  /** Opens a catalogue title; the resume position then follows from the key on its own. */
   const openFromCatalog = async (entry: { type: string; id: string; name: string; poster?: string }) => {
     setView("catalog");
     await openMeta({ id: entry.id, type: entry.type, name: entry.name, poster: entry.poster } as Meta);
@@ -148,9 +151,9 @@ export function App() {
   };
   const renameItem = async (itemPath: string, label: string) => {
     setMenuFor(null);
-    const wanted = prompt("Nové jméno:", label);
+    const wanted = prompt(t("library.renamePrompt"), label);
     if (!wanted || wanted === label) return;
-    try { await api.renameLibraryItem(itemPath, wanted); notify("Přejmenováno."); await loadBrowse(browsePath); } catch (error) { fail(error); }
+    try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
@@ -160,14 +163,14 @@ export function App() {
   const [pendingSources, setPendingSources] = useState(0);
   const pickedRef = useRef(false); const sourcesRequestRef = useRef(0);
   const loadingRef = useRef(false); const requestRef = useRef(0); const itemsRef = useRef<Meta[]>([]); const gridRef = useRef<HTMLDivElement>(null); const detailRef = useRef<HTMLElement>(null);
-  // Vlastní seznamy se tváří jako katalog, jen nepocházejí od doplňku.
+  // The built-in lists look like a catalogue, they just do not come from an addon.
   const VIRTUAL = { resume: ":resume", watchlist: ":watchlist" } as const;
   const virtualCatalog = selectedCatalog === VIRTUAL.resume || selectedCatalog === VIRTUAL.watchlist ? selectedCatalog : "";
   const currentCatalog = virtualCatalog ? undefined
     : catalogs.find((catalog) => `${catalog.addonKey}:${catalog.type}:${catalog.id}` === selectedCatalog) ?? catalogs[0];
   const searchRequired = Boolean(currentCatalog?.extra?.some((extra) => extra.name === "search" && extra.isRequired));
   const videoId = selectedVideo?.id || selected?.id; const videoTitle = selectedVideo ? `${selected?.name} · ${selectedVideo.title || selectedVideo.name || `S${selectedVideo.season}E${selectedVideo.episode}`}` : selected?.name || "Video";
-  // Dlouhé seriály mají stovky dílů; seznam se proto větví po sériích. Speciály (season 0) patří na konec.
+  // Long shows run to hundreds of episodes, so the list branches by season. Specials (season 0) belong at the end.
   const seasons = [...new Set((selected?.videos ?? []).map((video) => video.season).filter((value): value is number => typeof value === "number"))].sort((a, b) => (a === 0 ? 1 : b === 0 ? -1 : a - b));
   const activeSeason = season ?? selectedVideo?.season ?? seasons.find((value) => value > 0) ?? seasons[0] ?? null;
   const visibleEpisodes = (selected?.videos ?? []).filter((video) => seasons.length <= 1 || activeSeason === null || video.season === activeSeason);
@@ -186,7 +189,7 @@ export function App() {
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
   }, []);
-  // Obsah sekce se dotahuje asynchronně, takže se na uloženou pozici chvíli doskakuje.
+  // A section's content arrives asynchronously, so the saved position is chased for a moment.
   useEffect(() => {
     viewRef.current = view;
     const wanted = scrollByView.current[view] ?? 0;
@@ -199,7 +202,7 @@ export function App() {
       else restoringScroll.current = false;
     };
     handle = requestAnimationFrame(apply);
-    // Doskakování ustoupí, jakmile se uživatel dotkne stránky sám.
+    // The chase gives way as soon as the viewer touches the page themselves.
     const stop = () => { cancelAnimationFrame(handle); restoringScroll.current = false; };
     for (const event of ["wheel", "touchstart", "keydown"]) window.addEventListener(event, stop, { passive: true, once: true });
     return () => {
@@ -246,8 +249,8 @@ export function App() {
     setBrowsePath(""); setBrowseQuery("");
     setBrowseSort("name"); setBrowseDesc(false); setOnlyFavorites(false);
   };
-  /** Klik na sekci, ve které už jsme, ji vrátí do výchozího stavu; jinak se
-   * obnoví poslední filtry i pozice stránky. */
+  /** Clicking the section we are already in resets it; otherwise the last filters
+   * and the page position are restored. */
   const openView = (target: View) => {
     if (target !== view) { setView(target); return; }
     scrollByView.current[target] = 0;
@@ -258,7 +261,7 @@ export function App() {
   };
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
-    try { localStorage.setItem("sidebar-collapsed", next ? "1" : "0"); } catch { /* soukromý režim může úložiště zakázat */ }
+    try { localStorage.setItem("sidebar-collapsed", next ? "1" : "0"); } catch { /* private mode may forbid storage */ }
     return next;
   });
 
@@ -274,10 +277,10 @@ export function App() {
       for (const job of jobs) {
         const previous = jobStatus.current.get(job.id);
         if (previous === "waiting" && job.status !== "waiting" && job.status !== "paused" && job.status !== "failed") {
-          notify(`${job.title} je na Real-Debrid, stahuji do knihovny.`);
+          notify(t("downloads.debridReady", { title: job.title }));
         }
         if (previous && previous !== "completed" && job.status === "completed") {
-          notify(`${job.title} je v knihovně.`);
+          notify(t("downloads.inLibrary", { title: job.title }));
         }
       }
     }
@@ -290,17 +293,22 @@ export function App() {
   const [setupNeeded, setSetupNeeded] = useState(false);
   const [buildInfo, setBuildInfo] = useState<BuildInfo | null>(null);
   useEffect(() => { api.status().then(setBuildInfo).catch(() => setBuildInfo(null)); }, []);
+  // The sign-in and setup screens render before anything else, so the stored language
+  // rides along on this one call. Only a fresh install falls back to the browser's guess.
   useEffect(() => {
     api.me()
-      .then((status) => { if ("setup" in status) { setSetupNeeded(true); setSession(null); } else setSession(status); })
+      .then((status) => {
+        if (status.language) setLocale(status.language);
+        if ("setup" in status) { setSetupNeeded(true); setSession(null); } else setSession(status);
+      })
       .catch(() => setSession(null));
   }, []);
   const ready = Boolean(session);
-  // Načítat data má smysl až po přihlášení, jinak by to jen sypalo chyby 401.
-  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then(setSettings).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
-  // Nabídka doplňků, ve kterých má smysl hledat, se mění s jejich zapínáním.
+  // Loading data only makes sense after signing in; before that it would just throw 401s.
+  useEffect(() => { if (!ready) return; refresh().catch(fail); loadDownloads(); api.settings().then((next) => { setSettings(next); setLocale(next.uiLanguage); }).catch(fail); api.languages().then(setLanguages).catch(() => undefined); }, [ready]);
+  // Which addons are worth searching changes as they are switched on and off.
   useEffect(() => { api.searchable().then(setSearchable).catch(() => undefined); }, [addons]);
-  // Přesné jazyky zná až rozbor souboru, tak ho uděláme pro vybraný stream.
+  // Only a file probe knows the exact languages, so we run one for the chosen stream.
   useEffect(() => {
     setInspection(null);
     if (!selectedStream?.playable) return;
@@ -311,7 +319,7 @@ export function App() {
   const saveSettings = async (patch: SettingsPatch) => {
     const { realDebridToken: _token, ...rest } = patch;
     if (Object.keys(rest).length) setSettings((current: AppSettings) => ({ ...current, ...rest }));
-    try { setSettings(await api.updateSettings(patch)); notify("Nastavení uloženo."); } catch (e) { fail(e); }
+    try { setSettings(await api.updateSettings(patch)); notify(t("settings.saved")); } catch (e) { fail(e); }
   };
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
@@ -347,7 +355,7 @@ export function App() {
   useEffect(() => { if (!ready) return; api.watchlist().then(setWatchlist).catch(() => undefined); }, [ready, view]);
   useEffect(() => {
     if (!browse) return;
-    // Příznak oblíbenosti nese každá položka výpisu, stačí ho posbírat.
+    // Every listed entry carries its own favourite flag; collecting them is enough.
     setLibraryFavorites((current) => {
       const next = new Set(current);
       for (const item of browse.items) { if (item.favorite) next.add(item.path); else next.delete(item.path); }
@@ -356,8 +364,8 @@ export function App() {
   }, [browse]);
   useEffect(() => {
     if (!ready) return;
-    // Po zavření přehrávače se poslední pozice teprve odesílá, takže si chvíli počkáme.
-    // Seznam potřebuje katalog i knihovna, výpis složky jen knihovna.
+    // After the player closes the last position is still on its way, so we wait a moment.
+    // Both the catalogue and the library need the list; only the library needs the folder listing.
     const timer = setTimeout(() => {
       api.progressList().then(setResume).catch(() => undefined);
       if (!playerOpen && view === "library") void refreshBrowse(browse?.items.length ?? 60);
@@ -374,7 +382,7 @@ export function App() {
 
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
     [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
-  // Donačítání scrollem stránky, stejně jako v katalogu. Tlačítko zůstává jako záloha.
+  // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
     const nactenych = browse.items.length;
@@ -388,7 +396,7 @@ export function App() {
     return () => window.removeEventListener("scroll", onScroll);
   }, [view, browse, browseBusy, browsePath]);
 
-  // Hledaná položka nemusí být na první stránce výpisu, tak se donačítá, dokud se nenajde.
+  // The wanted entry need not be on the first page, so pages load until it turns up.
   useEffect(() => {
     if (view !== "library" || !browseFocus || !browse || browse.path !== browsePath) return;
     if (!browse.items.some((item) => item.path === browseFocus)) {
@@ -402,17 +410,17 @@ export function App() {
     return () => clearTimeout(timer);
   }, [view, browse, browseBusy, browseFocus]);
 
-  // Náhledy se dodělávají na pozadí; jakmile jsou hotové, stránka se sama obnoví.
+  // Artwork is finished in the background; once it is ready the page refreshes itself.
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
-    // Obnovujeme jen tolik položek, kolik už je načtených, ať se seznam nesroluje zpátky.
+    // Only as many entries as are already loaded are refreshed, so the list does not scroll back.
     const nactenych = browse.items.length;
     const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
     return () => clearTimeout(timer);
   }, [view, browse?.pending, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
 
-  /** Proklik z fronty stahování: otevře složku, ve které soubor leží, a položku v ní najde.
-   * Filtry se musí uklidit, jinak by hledaný soubor zůstal odfiltrovaný mimo výpis. */
+  /** Jumping from the download queue: opens the folder the file sits in and finds it there.
+   * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
   const revealInLibrary = (target: string) => {
     const slash = target.lastIndexOf("/");
     setMenuFor(null); setFromFavorites(false); setOnlyFavorites(false); setBrowseQuery("");
@@ -422,7 +430,7 @@ export function App() {
     window.scrollTo(0, 0);
   };
 
-  /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
+  /** A downloaded file plays down the same path as a stream, only the source is the disk. */
   const playLocal = async (title: string, path: string, poster?: string) => {
     try {
       const source = await api.librarySource(path);
@@ -455,11 +463,12 @@ export function App() {
   }, [view, ready]);
 
   const genreOptions = currentCatalog?.extra?.find((extra) => extra.name === "genre")?.options ?? [];
-  // Žánr patří konkrétnímu katalogu. Po přepnutí katalogu zmizí z nabídky, ale ve stavu
-  // zůstane, a katalog na neznámý žánr nevrátí nic. Bereme ho proto jen když existuje.
+  // A genre belongs to one catalogue. Switching catalogues drops it from the menu but leaves
+  // it in state, and a catalogue returns nothing for a genre it does not know. So we only take it
+  // when it exists.
   const activeGenre = genreOptions.includes(genre) ? genre : "";
 
-  /** Stejné položky se můžou vrátit z víc doplňků i z víc stránek. */
+  /** The same entries can come back from several addons and from several pages. */
   const merge = (previous: Meta[], incoming: Meta[]) => {
     const seen = new Set(previous.map((item) => `${item.type}:${item.id}`));
     return [...previous, ...incoming.filter((item) => !seen.has(`${item.type}:${item.id}`))];
@@ -467,7 +476,7 @@ export function App() {
 
   const loadPage = async (reset: boolean) => {
     if (!submittedQuery && !virtualCatalog && !currentCatalog) return;
-    // Donačítání se smí zahodit, ale nové zadání ne — to musí předchozí běh přebít.
+    // Paging may be dropped, a new query may not -- that one has to override the run before it.
     if (!reset && loadingRef.current) return;
     const request = reset ? ++requestRef.current : requestRef.current;
     const stale = () => request !== requestRef.current;
@@ -479,12 +488,12 @@ export function App() {
         const result = await api.search(submittedQuery, typeFilter, reset ? "" : cursor, searchAddon);
         if (stale()) return;
         const next = reset ? result.items : merge(itemsRef.current, result.items);
-        // Doplněk může vracet pořád totéž; bez téhle pojistky by se donačítalo donekonečna.
+        // An addon may keep returning the same thing; without this guard paging would never end.
         const gainedNothing = !reset && next.length === itemsRef.current.length;
         itemsRef.current = next; setItems(next);
         setSourceCount(result.sources); setCursor(result.cursor); setHasMore(result.hasMore && !gainedNothing);
       } else if (virtualCatalog) {
-        // Obsah se plní odvozeně, tady není co načítat.
+        // The content is derived, so there is nothing to load here.
         setHasMore(false);
       } else {
         const metas = await api.catalog(currentCatalog!, "", from, activeGenre);
@@ -499,12 +508,12 @@ export function App() {
   };
 
   const submitSearch = (event?: FormEvent) => { event?.preventDefault(); setSubmittedQuery(search.trim()); };
-  // Změna katalogu, dotazu nebo filtru začíná od první stránky.
+  // A changed catalogue, query or filter starts from the first page.
   useEffect(() => { itemsRef.current = []; setItems([]); setSkip(0); setCursor(""); setHasMore(false); setSourceCount(0); void loadPage(true); },
     [submittedQuery, searchAddon, typeFilter, activeGenre, virtualCatalog, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id, catalogReset]);
 
-  // Mřížka je vlastní posuvník. Obyčejný posluchač scrollu funguje i tam,
-  // kde IntersectionObserver mlčí (skrytý dokument, úsporné režimy).
+  // The grid scrolls on its own. A plain scroll listener works even where
+  // IntersectionObserver stays quiet (a hidden document, power-saving modes).
   useEffect(() => {
     const grid = gridRef.current;
     if (!grid || !hasMore) return;
@@ -513,8 +522,8 @@ export function App() {
     return () => grid.removeEventListener("scroll", onScroll);
   }, [hasMore, skip, cursor, submittedQuery, searchAddon, typeFilter, activeGenre, currentCatalog?.addonKey, currentCatalog?.type, currentCatalog?.id]);
 
-  /** Tentýž film vede každý doplněk pod svým ID. Slučujeme podle názvu a roku a držíme se
-   *  položky s IMDb ID, protože podle něj hledají zdrojové doplňky streamy. */
+  /** Every addon files the same film under its own id. We merge by name and year and keep
+   *  the entry with an IMDb id, because that is what source addons look streams up by. */
   const groupByName = (list: Meta[]) => {
     const groups = new Map<string, Meta>();
     for (const item of list) {
@@ -535,7 +544,7 @@ export function App() {
     return [...groups.values()];
   };
 
-  // Priorita doplňku je jeho pořadí v seznamu; nastavuje se šipkami na kartě doplňku.
+  // An addon's priority is its position in the list, set by the arrows on its card.
   const addonPriority = useMemo(() => new Map(addons.map((addon, index) => [addon.manifest.name, index])), [addons]);
   const listedStreams = useMemo(
     () => settings.realDebridConfigured ? streams : streams.filter((stream) => stream.kind !== "torrent"),
@@ -544,7 +553,7 @@ export function App() {
   const visibleStreams = useMemo(
     () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true),
     [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
-  // Počty v každé nabídce platí pro to, co projde tím druhým filtrem, jinak by si odporovaly.
+  // The counts in each menu apply to what passes the other filter, or they would contradict each other.
   const byLanguage = useMemo(
     () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : listedStreams,
     [listedStreams, streamLanguage]);
@@ -555,7 +564,7 @@ export function App() {
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
     for (const stream of byLanguage) { const name = stream.addonName ?? "?"; counts.set(name, (counts.get(name) ?? 0) + 1); }
-    // Zvolený doplněk musí v nabídce zůstat, i když na něj nic nezbylo, jinak by pole zprázdnělo.
+    // The chosen addon has to stay in the menu even when nothing is left for it, or the field empties.
     if (streamAddon && !counts.has(streamAddon)) counts.set(streamAddon, 0);
     const rank = (name: string) => addonPriority.get(name) ?? Number.MAX_SAFE_INTEGER;
     return [...counts.entries()].sort((a, b) => (rank(a[0]) - rank(b[0])) || (b[1] - a[1]));
@@ -566,17 +575,17 @@ export function App() {
     if (streamLanguage && !counts.has(streamLanguage)) counts.set(streamLanguage, 0);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [byAddon, streamLanguage]);
-  // Když filtr odstraní vybraný zdroj, výběr se posune na první zbylý.
+  // When a filter removes the chosen source, the pick moves to the first one left.
   useEffect(() => {
     if (!visibleStreams.length) { if (selectedStream) setSelectedStream(null); return; }
     const preferred = pickDefaultStream(visibleStreams);
     if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(preferred ?? null); return; }
-    // Během donačítání může přijít lepší zdroj; vlastní volbu uživatele ale nepřebíjíme.
+    // A better source may arrive while paging, but the viewer's own pick is never overridden.
     if (!pickedRef.current && pendingSources > 0 && preferred && selectedStream !== preferred) setSelectedStream(preferred);
   }, [visibleStreams, pendingSources]);
 
-  /** Obsah vlastních seznamů se počítá z paměti; nesmí procházet plným načtením,
-   *  které by shodilo vybraný titul. */
+  /** The built-in lists are computed from memory; they must not go through a full load,
+   *  which would drop the selected title. */
   const virtualItems = useMemo<Meta[]>(() => {
     if (virtualCatalog === VIRTUAL.watchlist) return watchlist.map((item) => ({ id: item.id, type: item.type, name: item.name, poster: item.poster }));
     if (virtualCatalog === VIRTUAL.resume) return resume.filter((item) => !item.key.startsWith("file:")).map((item) => {
@@ -603,15 +612,15 @@ export function App() {
 
   const visibleItems = useMemo(() => {
     const year = (item: Meta) => Number(String(item.releaseInfo ?? item.year ?? "").slice(0, 4)) || 0;
-    // Vlastní seznamy nesou vlastní smysluplné pořadí: naposledy sledované napřed
-    // a naposledy přidané do seznamu. Obecné řazení by ho jen rozbilo.
+    // The built-in lists carry their own meaningful order: last watched first, last added
+    // to the list. General sorting would only break it.
     if (virtualCatalog) return items;
     const list = settings.mergeByName ? groupByName(items) : [...items];
-    if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, "cs"));
+    if (sort === "name") list.sort((a, b) => a.name.localeCompare(b.name, localeTag()));
     else if (sort === "year") list.sort((a, b) => year(b) - year(a));
     return list;
   }, [items, sort, settings.mergeByName, virtualCatalog]);
-  /** Každý doplněk se ptá zvlášť, aby se výsledky ukazovaly průběžně a nečekalo se na nejpomalejší. */
+  /** Each addon is asked separately, so results show up as they arrive instead of waiting for the slowest. */
   const fetchSources = async (type: string, id: string, video?: Video) => {
     const request = ++sourcesRequestRef.current;
     const stale = () => request !== sourcesRequestRef.current;
@@ -627,7 +636,7 @@ export function App() {
           const part = await api.streams(type, id, source.key);
           if (!stale() && part.length) setStreams((previous) => [...previous, ...part]);
         } catch (error) {
-          // Jeden nedostupný doplněk nesmí zbytek shodit ani zahltit chybami.
+          // One unreachable addon must neither bring the rest down nor flood the screen with errors.
           if (!stale()) report("WARN", `Sources from the addon could not be loaded: ${source.name}`, { addon: source.name, reason: error instanceof Error ? error.message : String(error) });
         } finally { if (!stale()) setPendingSources((count) => count - 1); }
       }));
@@ -655,11 +664,11 @@ export function App() {
   const canPlay = Boolean(selectedStream?.playable);
   const enqueue = async () => {
     if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
-    // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
+    // The server builds the path from this; without it an episode would end up a flat file.
     const media = selectedMedia();
     try {
       const job = await api.download(videoTitle, selectedStream, media);
-      notify(job.status === "waiting" ? "Čeká na Real-Debrid." : "Přidáno do stahovací fronty.");
+      notify(t(job.status === "waiting" ? "downloads.waitingDebrid" : "downloads.queued"));
       await loadDownloads(); return true;
     } catch (e) { fail(e); return false; }
   };
@@ -668,89 +677,89 @@ export function App() {
     if (!selectedStream?.playable) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
-      notify(`Stahování ${filename} spuštěno přes server.`);
+      notify(t("save.startedViaServer", { filename }));
       return true;
     } catch (e) { fail(e); return false; }
   };
   const downloadLibraryFile = async (filePath: string) => {
     try {
       const filename = await saveToDevice({ path: filePath });
-      notify(`Stahování ${filename} spuštěno.`);
+      notify(t("save.started", { filename }));
       return true;
     } catch (e) { fail(e); return false; }
   };
 
-  /** Hromadné stažení: fronta dostane líné úlohy a zdroj (největší v preferovaném jazyce)
-   *  si každá vybere sama, až na ni dojde řada. Doplňky tak nedostanou lavinu dotazů naráz. */
+  /** Bulk download: the queue gets lazy jobs and each picks its own source (the largest in the
+   *  preferred language) when its turn comes. That way addons never get an avalanche of requests. */
   const enqueueEpisodes = async (scope: "series" | "season") => {
     if (!selected?.videos?.length) return;
     const now = Date.now();
     const episodes = selected.videos.filter((video) => {
       if (!video.id) return false;
       if (scope === "season" && video.season !== activeSeason) return false;
-      // Celý seriál = řádné série; speciály (season 0) a dosud nevydané díly se přeskakují.
+      // The whole show means the regular seasons; specials (season 0) and unreleased episodes are skipped.
       if (scope === "series" && typeof video.season === "number" && video.season <= 0) return false;
       if (video.released && Date.parse(String(video.released)) > now) return false;
       return true;
     });
-    if (!episodes.length) { fail(new Error("Žádné epizody ke stažení.")); return; }
+    if (!episodes.length) { fail(new Error(t("episodes.noneToDownload"))); return; }
     const label = scope === "season"
-      ? (activeSeason === 0 ? `${episodes.length} speciálů` : `${episodes.length} epizod ${activeSeason}. série`)
-      : `všech ${episodes.length} epizod seriálu`;
-    if (!window.confirm(`Přidat ${label} do fronty? Zdroj se pro každou epizodu vybere automaticky až při stahování.`)) return;
+      ? t(activeSeason === 0 ? "episodes.specialsCount" : "episodes.seasonCount", { count: episodes.length, season: activeSeason ?? 0 })
+      : t("episodes.wholeShowCount", { count: episodes.length });
+    if (!window.confirm(t("episodes.bulkConfirm", { what: label }))) return;
     try {
       const metaType = selected.type || currentCatalog?.type || "series";
       const result = await api.downloadBulk(selected.name, metaType, episodes.map((video) => ({ id: String(video.id), season: video.season, episode: video.episode, title: video.title || video.name })),
         { id: selected.id, metaType, poster: selected.poster });
-      notify(`Do fronty přidáno ${result.added} epizod${result.skipped ? `, ${result.skipped} přeskočeno (už ve frontě)` : ""}.`);
+      notify(t("episodes.bulkAdded", { count: result.added }) + (result.skipped ? ` ${t("episodes.bulkSkipped", { count: result.skipped })}` : ""));
       await loadDownloads();
     } catch (e) { fail(e); }
   };
 
-  if (session === undefined) return <div className="login-screen"><div className="loading">Načítám…</div></div>;
+  if (session === undefined) return <div className="login-screen"><div className="loading">{t("common.loading")}</div></div>;
   if (!ready) return <LoginScreen setup={setupNeeded} onSession={(next) => { setSetupNeeded(false); setSession(next); }}/>;
 
   return <div className={`app-shell catalog-tiles-${settings.catalogTileSize} library-tiles-${settings.libraryTileSize}${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-    <header className="topbar"><button className="brand brand-home" title="Přejít do čistého katalogu" aria-label="Přejít do čistého katalogu" onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>DOMÁCÍ MEDIATÉKA</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right"><div className="online"><i/> Docker server online</div>
-      <button className="signout" title={`Přihlášen jako ${session?.username ?? ""}`} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> Odhlásit</button></div></header>
+    <header className="topbar"><button className="brand brand-home" title={t("app.goToCleanCatalog")} aria-label={t("app.goToCleanCatalog")} onClick={resetCatalog}><div className="brand-mark"><CirclePlay/></div><div><small>{t("auth.brandEyebrow")}</small><h1>Stremio <span>Offline</span></h1></div></button><div className="topbar-right"><div className="online"><i/> {t("app.serverOnline")}</div>
+      <button className="signout" title={t("auth.signedInAs", { username: session?.username ?? "" })} onClick={async () => { try { await api.logout(); } finally { location.reload(); } }}><LogOut/> {t("auth.signOut")}</button></div></header>
     <aside className="sidebar"><nav>
-      <Nav icon={<Library/>} label="Katalog" active={view === "catalog"} onClick={() => openView("catalog")}/>
-      <Nav icon={<HardDrive/>} label="Knihovna" active={view === "library"} onClick={() => openView("library")}/>
-      <Nav icon={<Download/>} label="Stahování" active={view === "downloads"} badge={downloads.filter((job) => job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
-      <Nav icon={<PackagePlus/>} label="Doplňky" active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
-      <Nav icon={<Settings/>} label="Nastavení" active={view === "settings"} onClick={() => openView("settings")}/>
-      <Nav icon={<BarChart3/>} label="Statistiky" active={view === "stats"} onClick={() => openView("stats")}/>
-    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"} aria-label={sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{sidebarCollapsed ? "Rozbalit menu" : "Sbalit menu"}</span></button><div className="addon-status"><small>AKTIVNÍ DOPLŇKY</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>katalogy a zdroje</span></div></div></aside>
+      <Nav icon={<Library/>} label={t("nav.catalog")} active={view === "catalog"} onClick={() => openView("catalog")}/>
+      <Nav icon={<HardDrive/>} label={t("nav.library")} active={view === "library"} onClick={() => openView("library")}/>
+      <Nav icon={<Download/>} label={t("nav.downloads")} active={view === "downloads"} badge={downloads.filter((job) => job.status === "downloading" || job.status === "queued" || job.status === "waiting").length} onClick={() => openView("downloads")}/>
+      <Nav icon={<PackagePlus/>} label={t("nav.addons")} active={view === "addons"} badge={addons.length} onClick={() => openView("addons")}/>
+      <Nav icon={<Settings/>} label={t("nav.settings")} active={view === "settings"} onClick={() => openView("settings")}/>
+      <Nav icon={<BarChart3/>} label={t("nav.stats")} active={view === "stats"} onClick={() => openView("stats")}/>
+    </nav><div className="sidebar-bottom"><button className="sidebar-toggle" onClick={toggleSidebar} title={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")} aria-label={t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}>{sidebarCollapsed ? <PanelLeftOpen/> : <PanelLeftClose/>}<span>{t(sidebarCollapsed ? "app.expandMenu" : "app.collapseMenu")}</span></button><div className="addon-status"><small>{t("app.activeAddons")}</small><strong>{addons.filter((a) => a.enabled).length}</strong><span>{t("app.catalogsAndSources")}</span></div></div></aside>
     <main className={view === "catalog" ? "view-catalog" : ""}>
-      {view === "catalog" && <section className="catalog-view"><Heading eyebrow="KATALOG" title="Co chcete sledovat?"/>
+      {view === "catalog" && <section className="catalog-view"><Heading eyebrow={t("catalog.eyebrow")} title={t("catalog.title")}/>
         {!catalogs.length ? <Onboarding onOpen={() => setView("addons")}/> : <>
           <form className="searchbar" onSubmit={submitSearch}>
-            <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Hledat ve všech doplňcích naráz…"/></div>
-            <label className="scope-select"><span>v</span><select aria-label="Kde hledat" value={searchAddon} onChange={(e) => setSearchAddon(e.target.value)}>
-              <option value="">všech doplňcích</option>
+            <div className="search-input"><Search/><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t("catalog.searchPlaceholder")}/></div>
+            <label className="scope-select"><span>{t("catalog.searchScopeIn")}</span><select aria-label={t("catalog.searchScope")} value={searchAddon} onChange={(e) => setSearchAddon(e.target.value)}>
+              <option value="">{t("catalog.allAddons")}</option>
               {[...new Map(searchable.map((item) => [item.addonKey, item.addonName])).entries()].map(([key, name]) => <option key={key} value={key}>{name}</option>)}
             </select></label>
-            <button className="primary" disabled={busy}><Search/> Vyhledat</button>
-            {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> Zrušit</button>}
+            <button className="primary" disabled={busy}><Search/> {t("catalog.search")}</button>
+            {submittedQuery && <button type="button" onClick={() => { setSearch(""); setSubmittedQuery(""); }}><X/> {t("common.cancel")}</button>}
           </form>
           <div className="filterbar">
             {submittedQuery
               ? <>
-                  <span className="scope-badge">Prohledáno {sourceCount} {sourceCount === 1 ? "katalog" : sourceCount >= 2 && sourceCount <= 4 ? "katalogy" : "katalogů"} {searchAddon ? `v doplňku ${searchable.find((item) => item.addonKey === searchAddon)?.addonName ?? ""}` : "ve všech doplňcích"}</span>
-                  <label><span>Typ</span><select aria-label="Typ" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">Vše</option><option value="movie">Filmy</option><option value="series">Seriály</option></select></label>
+                  <span className="scope-badge">{t("catalog.searchedCatalogs", { count: sourceCount })} {searchAddon ? t("catalog.inAddon", { addon: searchable.find((item) => item.addonKey === searchAddon)?.addonName ?? "" }) : t("catalog.inAllAddons")}</span>
+                  <label><span>{t("catalog.type")}</span><select aria-label={t("catalog.type")} value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}><option value="">{t("common.all")}</option><option value="movie">{t("catalog.movies")}</option><option value="series">{t("catalog.series")}</option></select></label>
                 </>
               : <>
-                  <label className="catalog-filter"><span>Procházet katalog</span><select className="catalog-select" aria-label="Procházet katalog" value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
-                    <option value={VIRTUAL.watchlist}>★ Můj seznam ({watchlist.length})</option>
-                    <option value={VIRTUAL.resume}>▸ Pokračovat ve sledování ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
-                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? "seriály" : catalog.type})</option>)}
+                  <label className="catalog-filter"><span>{t("catalog.browse")}</span><select className="catalog-select" aria-label={t("catalog.browse")} value={selectedCatalog} onChange={(e) => setSelectedCatalog(e.target.value)}>
+                    <option value={VIRTUAL.watchlist}>★ {t("catalog.myList")} ({watchlist.length})</option>
+                    <option value={VIRTUAL.resume}>▸ {t("library.continueWatching")} ({resume.filter((item) => !item.key.startsWith("file:")).length})</option>
+                    {catalogs.map((catalog) => <option key={`${catalog.addonKey}:${catalog.type}:${catalog.id}`} value={`${catalog.addonKey}:${catalog.type}:${catalog.id}`}>{catalog.addonName} · {catalog.name || catalog.id} ({catalog.type === "series" ? t("catalog.seriesLower") : catalog.type})</option>)}
                   </select></label>
-                  {genreOptions.length > 0 && <label><span>Žánr</span><select aria-label="Žánr" value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">Všechny</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
+                  {genreOptions.length > 0 && <label><span>{t("catalog.genre")}</span><select aria-label={t("catalog.genre")} value={activeGenre} onChange={(e) => setGenre(e.target.value)}><option value="">{t("common.allFeminine")}</option>{genreOptions.map((option) => <option key={option} value={option}>{option}</option>)}</select></label>}
                 </>}
-            <label><span>Řazení</span><select aria-label="Řazení katalogu" value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">Podle doplňku</option><option value="name">Název A–Ž</option><option value="year">Rok sestupně</option></select></label>
-            {sort !== "default" && <small className="filter-note">Řadí se jen už načtené položky.</small>}
+            <label><span>{t("common.sorting")}</span><select aria-label={t("catalog.sorting")} value={sort} onChange={(e) => setSort(e.target.value)}><option value="default">{t("catalog.sortAddon")}</option><option value="name">{t("catalog.sortName")}</option><option value="year">{t("catalog.sortYear")}</option></select></label>
+            {sort !== "default" && <small className="filter-note">{t("catalog.sortNote")}</small>}
           </div>
-          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? `Hledání: ${submittedQuery}` : "Výsledky"}</h3><span>{visibleItems.length} položek{hasMore ? "+" : ""}</span></div>
+          <div className="catalog-layout"><section className="panel result-panel"><div className="panel-head"><h3>{submittedQuery ? t("catalog.searchHeading", { query: submittedQuery }) : t("catalog.results")}</h3><span>{t("catalog.itemCount", { count: visibleItems.length })}{hasMore ? "+" : ""}</span></div>
             <div className="poster-grid" ref={gridRef}>
               {visibleItems.map((item) => {
                 const klic = `${item.type || "movie"}:${item.id}`;
@@ -767,59 +776,59 @@ export function App() {
                   <strong>{item.name}</strong>
                   <small title={metadata}>{metadata}</small>
                   {menuFor === klic && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                    <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {vSeznamu ? "Odebrat ze seznamu" : "Přidat do seznamu"}</button>
-                    {postup && <button onClick={() => void forgetCatalogWatched(item)}><RotateCcw/> Označit jako neshlédnuté</button>}
+                    <button onClick={() => { setMenuFor(null); void toggleWatchlist(item); }}><Star/> {t(vSeznamu ? "watchlist.remove" : "watchlist.add")}</button>
+                    {postup && <button onClick={() => void forgetCatalogWatched(item)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                   </span>}
                 </button>;
               })}
-              {hasMore && <div className="load-more">{loadingMore ? <span>Načítám další…</span> : <button onClick={() => void loadPage(false)}>Načíst další</button>}</div>}
+              {hasMore && <div className="load-more">{loadingMore ? <span>{t("common.loadingMore")}</span> : <button onClick={() => void loadPage(false)}>{t("common.loadMore")}</button>}</div>}
             </div>
             {!items.length && !busy && <Empty icon={<Search/>}
-              title={submittedQuery ? "Nic se nenašlo" : searchRequired ? "Zadejte hledaný název" : "Katalog je prázdný"}
-              text={submittedQuery ? `Žádný z ${sourceCount} prohledávaných katalogů nevrátil výsledek. Zkuste jiný výraz.` : searchRequired ? "Tento katalog vrací výsledky až po zadání hledaného výrazu." : "Zkuste vyhledávání nebo jiný katalog."}/>}
-            {busy && <div className="loading">Načítám…</div>}
+              title={t(submittedQuery ? "catalog.emptySearchTitle" : searchRequired ? "catalog.needQueryTitle" : "catalog.emptyTitle")}
+              text={submittedQuery ? t("catalog.emptySearchText", { count: sourceCount }) : t(searchRequired ? "catalog.needQueryText" : "catalog.emptyText")}/>}
+            {busy && <div className="loading">{t("common.loading")}</div>}
           </section><section ref={detailRef} className={`panel detail-panel ${selected ? "mobile-open" : ""} ${sourcesLoaded && (selected?.videos?.length ? selectedVideo && !episodesOpen : true) ? "series-sources-layout" : ""} ${detailCompact ? "hero-compact" : ""}`}>{selected ? <>
-            <div className="mobile-detail-head"><button onClick={closeMeta}><ChevronLeft/> Výsledky</button><strong>{selected.name}</strong></div>
-            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{selected.type === "series" ? "Seriál" : "Film"}</span>
-              <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={inWatchlist(selected.type, selected.id) ? "Odebrat ze seznamu" : "Přidat do seznamu"}
-                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || "Bez popisu."}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title="Zvětšit poster a zobrazit náhledy"><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? `${galleryImages.length} náhledů` : "Zvětšit"}</span></button>}</div></div>
+            <div className="mobile-detail-head"><button onClick={closeMeta}><ChevronLeft/> {t("catalog.results")}</button><strong>{selected.name}</strong></div>
+            <div className="detail-primary"><div className={`hero ${selected.videos?.length ? "series-hero" : ""} ${galleryImages.length ? "has-gallery" : ""}`} style={selected.background ? { backgroundImage: `linear-gradient(90deg,#121721 25%,transparent),url(${selected.background})` } : undefined}><div className="detail-copy"><span className="pill">{t(selected.type === "series" ? "catalog.oneSeries" : "catalog.oneMovie")}</span>
+              <button className={`watch-star ${inWatchlist(selected.type, selected.id) ? "on" : ""}`} title={t(inWatchlist(selected.type, selected.id) ? "watchlist.remove" : "watchlist.add")}
+                onClick={() => void toggleWatchlist(selected)}><Star/></button><h2>{selected.name}</h2><p className="meta-line">{[selected.releaseInfo || selected.year, ...(selected.genres || []).slice(0, 3)].filter(Boolean).join(" · ")}</p><p>{selected.description || t("catalog.noDescription")}</p></div>{galleryImages.length > 0 && <button className={`gallery-open ${galleryImages[0].shape}`} onClick={() => setGalleryIndex(0)} title={t("gallery.openHint")}><img src={galleryImages[0].url} alt=""/><span><Images/> {galleryImages.length > 1 ? t("gallery.stillCount", { count: galleryImages.length }) : t("gallery.enlarge")}</span></button>}</div></div>
             <div className="detail-workflow">
-            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>Vybraná epizoda</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : "Díl"}</b><span>{selectedVideo.title || selectedVideo.name || "Epizoda"}</span><button onClick={() => setEpisodesOpen(true)}>Změnit epizodu</button></div> : <><div className="subhead episode-head"><h3>Epizody</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label="Série" value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? "Speciály" : `${value}. série`}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? "Stáhnout všechny speciály" : `Stáhnout všechny epizody ${activeSeason}. série`} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? "Speciály" : `Série ${activeSeason}`}</button>}<button title="Stáhnout celý seriál" onClick={() => void enqueueEpisodes("series")}><Download/> Celý seriál</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>Sbalit</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || "Epizoda"}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>Načíst zdroje</button>}
-            {sourcesLoaded && <div className="sources"><div className="subhead"><h3>Zdroje</h3><span>{visibleStreams.length === streams.length ? streams.length : `${visibleStreams.length} z ${streams.length}`}{pendingSources > 0 ? ` · načítám z ${pendingSources} ${pendingSources === 1 ? "doplňku" : "doplňků"}…` : ""}</span></div>
+            {selected.videos?.length ? <div className={`episodes ${selectedVideo && !episodesOpen ? "collapsed" : ""}`}>{selectedVideo && !episodesOpen ? <div className="episode-current"><small>{t("episodes.chosen")}</small><b>{selectedVideo.season != null ? `${String(selectedVideo.season).padStart(2,"0")}×${String(selectedVideo.episode || 0).padStart(2,"0")}` : t("episodes.part")}</b><span>{selectedVideo.title || selectedVideo.name || t("episodes.one")}</span><button onClick={() => setEpisodesOpen(true)}>{t("episodes.change")}</button></div> : <><div className="subhead episode-head"><h3>{t("episodes.heading")}</h3><div className="episode-tools">{seasons.length > 1 && <select className="season-select" aria-label={t("episodes.season")} value={activeSeason ?? ""} onChange={(event) => setSeason(Number(event.target.value))}>{seasons.map((value) => <option key={value} value={value}>{value === 0 ? t("episodes.specials") : t("episodes.seasonNumber", { season: value })}</option>)}</select>}{activeSeason != null && <button title={activeSeason === 0 ? t("episodes.downloadSpecials") : t("episodes.downloadSeason", { season: activeSeason })} onClick={() => void enqueueEpisodes("season")}><Download/> {activeSeason === 0 ? t("episodes.specials") : t("episodes.seasonShort", { season: activeSeason })}</button>}<button title={t("episodes.downloadShow")} onClick={() => void enqueueEpisodes("series")}><Download/> {t("episodes.wholeShow")}</button>{selectedVideo ? <button onClick={() => setEpisodesOpen(false)}>{t("common.collapse")}</button> : <span>{visibleEpisodes.length}</span>}</div></div><div className="episode-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleEpisodes.map((video, index) => <button key={video.id || index} className={selectedVideo?.id === video.id ? "selected" : ""} onClick={() => { setEpisodesOpen(false); void loadSources(video); }}><b>{video.season != null ? `${String(video.season).padStart(2,"0")}×${String(video.episode || 0).padStart(2,"0")}` : index + 1}</b><span>{video.title || video.name || t("episodes.one")}</span><ChevronRight/></button>)}</div></>}</div> : !sourcesLoaded && <button className="primary wide" onClick={() => loadSources()} disabled={busy}>{t("sources.load")}</button>}
+            {sourcesLoaded && <div className="sources"><div className="subhead"><h3>{t("sources.heading")}</h3><span>{visibleStreams.length === streams.length ? streams.length : t("sources.ofTotal", { shown: visibleStreams.length, total: streams.length })}{pendingSources > 0 ? ` · ${t("sources.loadingFrom", { count: pendingSources })}` : ""}</span></div>
               {streams.length > 1 && <div className="stream-filters">
-                <label><span>Doplněk</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
-                  <option value="">Všechny ({byLanguage.length})</option>
+                <label><span>{t("sources.addon")}</span><select value={streamAddon} onChange={(event) => setStreamAddon(event.target.value)}>
+                  <option value="">{t("common.allFeminine")} ({byLanguage.length})</option>
                   {streamAddons.map(([name, count]) => <option key={name} value={name}>{name} ({count})</option>)}
                 </select></label>
-                {streamLangs.length > 0 && <label><span>Jazyk</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
-                  <option value="">Libovolný ({byAddon.length})</option>
+                {streamLangs.length > 0 && <label><span>{t("auth.language")}</span><select value={streamLanguage} onChange={(event) => setStreamLanguage(event.target.value)}>
+                  <option value="">{t("sources.anyLanguage")} ({byAddon.length})</option>
                   {streamLangs.map(([code, count]) => <option key={code} value={code}>{label(code)} ({count})</option>)}
                 </select></label>}
-                <label><span>Řazení</span><select value={streamSort} onChange={(event) => setStreamSort(event.target.value as StreamSort)}>
-                  <option value="recommended">Doporučené</option>
-                  <option value="size-desc">Od největšího</option>
-                  <option value="size-asc">Od nejmenšího</option>
-                  <option value="addon">Podle priority doplňku</option>
+                <label><span>{t("common.sorting")}</span><select value={streamSort} onChange={(event) => setStreamSort(event.target.value as StreamSort)}>
+                  <option value="recommended">{t("sources.sortRecommended")}</option>
+                  <option value="size-desc">{t("sources.sortLargest")}</option>
+                  <option value="size-asc">{t("sources.sortSmallest")}</option>
+                  <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
-              {!streams.length && pendingSources === 0 && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
-              {!streams.length && pendingSources > 0 && <div className="no-sources">Ptám se doplňků…</div>}
-              {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">Doplňky vrátily jen torrenty. Bez tokenu Real-Debrid v <button className="link-button" onClick={() => openView("settings")}>Nastavení</button> je nelze stáhnout ani přehrát.</div>}
-              {Boolean(streams.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
-              {selectedStream?.kind === "unsupported" && <p className="notice">Tento zdroj nelze bezpečně přehrát přes server. Vyberte jiný zdroj.</p>}
-              {selectedStream?.kind === "torrent" && <p className="notice">Tenhle zdroj je torrent. Dejte ho Do knihovny — Real-Debrid ho nejdřív stáhne k sobě a appka ho pak uloží. Přehrát jde až z knihovny.</p>}
-              <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
-                {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
-                · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> Do knihovny</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
+              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              {!streams.length && pendingSources === 0 && <div className="no-sources">{t("sources.none")}</div>}
+              {!streams.length && pendingSources > 0 && <div className="no-sources">{t("sources.asking")}</div>}
+              {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}
+              {Boolean(streams.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">{t("sources.noneMatchFilter", { count: streams.length })} <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>{t("sources.clearFilters")}</button></div>}
+              {selectedStream?.kind === "unsupported" && <p className="notice">{t("sources.unsupported")}</p>}
+              {selectedStream?.kind === "torrent" && <p className="notice">{t("sources.torrentNotice")}</p>}
+              <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: subtitles.length + (selectedStream?.subtitles?.length || 0) })}
+                {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
+                · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
+                {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => setPlayerOpen(true)}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div>
             </div>}
             </div>
-          </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
+          </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>
         </>}
       </section>}
-      {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
+      {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow={t("library.eyebrow")} title={t("library.title")}/>
         {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>Pokračovat ve sledování</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>Zobrazit vše ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
+          <div className="subhead"><h3>{t("library.continueWatching")}</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>{t("library.showAll")} ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
           <div className="resume-strip">
             {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
               if (item.path) playLocal(item.title, item.path, item.poster);
@@ -830,42 +839,42 @@ export function App() {
                 <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.position / (item.duration || 1) * 100))}%` }}/></i>
               </span>
               <strong>{item.title}</strong>
-              <small>zbývá {fmtEta(Math.max(0, item.duration - item.position))}</small>
+              <small>{t("library.remaining", { time: fmtEta(Math.max(0, item.duration - item.position)) })}</small>
             </button>)}
           </div>
         </div>}
         <div className="panel browse-panel">
         <div className="browse-bar">
-          <nav className="crumbs" aria-label="Cesta v knihovně">
-            {browsePath && <button className="library-back" aria-label="O složku zpět" onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath.startsWith(":")) setFromFavorites(false); setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
-            <button onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
+          <nav className="crumbs" aria-label={t("library.breadcrumbs")}>
+            {browsePath && <button className="library-back" aria-label={t("library.folderUp")} onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath.startsWith(":")) setFromFavorites(false); setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
+            <button onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> {t("nav.library")}</button>
             {(fromFavorites || browsePath === ":favorites") && <span>
               <ChevronRight/>
-              <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>Oblíbené</button>
+              <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>{t("favorite.off")}</button>
             </span>}
-            {browsePath === ":resume" && <span><ChevronRight/><button disabled>Pokračovat ve sledování</button></span>}
+            {browsePath === ":resume" && <span><ChevronRight/><button disabled>{t("library.continueWatching")}</button></span>}
             {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{part}</button>
             </span>)}
           </nav>
           <div className="browse-tools">
-            <div className="search-input"><Search/><input value={browseQuery} aria-label="Filtrovat knihovnu" placeholder="Filtrovat…" onChange={(event) => setBrowseQuery(event.target.value)}/></div>
-            <select aria-label="Řazení" value={browseSort} onChange={(event) => {
+            <div className="search-input"><Search/><input value={browseQuery} aria-label={t("library.filter")} placeholder={t("library.filterPlaceholder")} onChange={(event) => setBrowseQuery(event.target.value)}/></div>
+            <select aria-label={t("common.sorting")} value={browseSort} onChange={(event) => {
               const next = event.target.value as LibrarySort;
               setBrowseSort(next);
               // Dates and sizes start with the largest value; names start with A.
               setBrowseDesc(next === "added" || next === "size");
             }}>
-              <option value="name">Podle názvu</option><option value="added">{browsePath === ":resume" ? "Naposledy sledované" : "Podle data přidání"}</option>
-              <option value="size">Podle velikosti</option><option value="random">Náhodně</option>
+              <option value="name">{t("library.sortName")}</option><option value="added">{t(browsePath === ":resume" ? "library.sortLastWatched" : "library.sortAdded")}</option>
+              <option value="size">{t("library.sortSize")}</option><option value="random">{t("library.sortRandom")}</option>
             </select>
-            <button title={browseDesc ? "Sestupně" : "Vzestupně"} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
+            <button title={t(browseDesc ? "common.descending" : "common.ascending")} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
               {browseDesc ? <ArrowDown/> : <ArrowUp/>}
             </button>
-            <button className={onlyFavorites ? "active-filter" : ""} title="Jen oblíbené" disabled={browsePath === ":favorites"}
+            <button className={onlyFavorites ? "active-filter" : ""} title={t("library.onlyFavorites")} disabled={browsePath === ":favorites"}
               onClick={() => setOnlyFavorites((value) => !value)}><Star/></button>
-            <button title={browseView === "grid" ? "Zobrazit po řádcích" : "Zobrazit dlaždice"} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
+            <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>
           </div>
@@ -873,44 +882,44 @@ export function App() {
 
         {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
           <span className="favorites-collage" aria-hidden="true">{[...new Set(favoritePreview?.items.map((item) => item.poster).filter((poster): poster is string => Boolean(poster)))].slice(0, 3).map((poster) => <img key={poster} src={poster} alt=""/>)}<Star/></span>
-          <span className="favorites-copy"><strong>Oblíbené</strong><small>{favoritePreview?.total ? `${favoritePreview.total} položek napříč knihovnou` : "Vaše oblíbené filmy a seriály na jednom místě"}</small></span><ChevronRight/>
+          <span className="favorites-copy"><strong>{t("favorite.off")}</strong><small>{favoritePreview?.total ? t("library.favoritesCount", { count: favoritePreview.total }) : t("library.favoritesEmptyHint")}</small></span><ChevronRight/>
         </button>}
         {!browse || !browse.items.length
-          ? (browseBusy ? <div className="loading">Načítám…</div>
-            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : browsePath === ":resume" ? "Nic rozkoukaného" : browsePath === ":favorites" || onlyFavorites ? "Zatím žádné oblíbené" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : browsePath === ":resume" ? "Rozkoukané soubory se tu objeví automaticky při sledování." : browsePath === ":favorites" || onlyFavorites ? "Přidejte soubor nebo složku do oblíbených přes nabídku se třemi tečkami." : "Dokončená stahování se tu objeví sama."}/>)
+          ? (browseBusy ? <div className="loading">{t("common.loading")}</div>
+            : <Empty icon={<HardDrive/>} title={t(browseQuery ? "library.emptyFilterTitle" : browsePath === ":resume" ? "library.emptyResumeTitle" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesTitle" : "library.emptyTitle")} text={t(browseQuery ? "library.emptyFilterText" : browsePath === ":resume" ? "library.emptyResumeText" : browsePath === ":favorites" || onlyFavorites ? "library.emptyFavoritesText" : "library.emptyText")}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "folder"
                 ? <article className="browse-item folder" key={item.path}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
-                    <span className="library-copy"><strong>{item.name}</strong><small>{item.fileCount} souborů · {bytes(item.size)}</small></span><span className="library-action"><FolderOpen/> Otevřít složku <ChevronRight/></span></button>
-                    <button className="browse-menu" aria-label={`Možnosti: ${item.name}`} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
+                    <span className="library-copy"><strong>{item.name}</strong><small>{t("library.fileCount", { count: item.fileCount })} · {bytes(item.size)}</small></span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
+                    <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
-                      <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> Přejmenovat</button>
-                      <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> Smazat</button>
+                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
+                      <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
+                      <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
                 : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path}><button className="library-open" onClick={() => playLocal(item.label, item.path, item.poster)}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{browsePath === ":resume" && item.progress ? `zbývá ${fmtEta(Math.max(0, item.progress.duration - item.progress.position))}` : bytes(item.size)}</small></span><span className="library-action"><Play/> {item.progress ? "Pokračovat" : "Přehrát"}</span></button>
-                    <button className="browse-menu" aria-label={`Možnosti: ${item.label}`} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
+                    <small>{browsePath === ":resume" && item.progress ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) }) : bytes(item.size)}</small></span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
+                    <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
-                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>
-                      {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> Označit jako neshlédnuté</button>}
-                      <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> Stáhnout do zařízení</button>
-                      <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> Přejmenovat</button>
-                      <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> Smazat</button>
+                      <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
+                      {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
+                      <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
+                      <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
+                      <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>)}
             </div>
-            {browseBusy && <div className="loading">Načítám…</div>}
+            {browseBusy && <div className="loading">{t("common.loading")}</div>}
             {(() => {
               const nactenych = browse.items.length;
               return !browseBusy && nactenych < browse.total && <div className="load-more">
-                <button onClick={() => void loadBrowse(browsePath, nactenych)}>Načíst další ({browse.total - nactenych})</button>
+                <button onClick={() => void loadBrowse(browsePath, nactenych)}>{t("common.loadMore")} ({browse.total - nactenych})</button>
               </div>;
             })()}
           </>}
@@ -952,17 +961,17 @@ function MediaGallery({ images, index, onIndex, onClose }: { images: GalleryImag
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [index, images.length]);
-  return <div className="gallery-overlay" role="dialog" aria-modal="true" aria-label="Galerie obrázků" onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-    <button className="gallery-close icon-button" aria-label="Zavřít galerii" onClick={onClose}><X/></button>
-    {images.length > 1 && <button className="gallery-arrow previous" aria-label="Předchozí obrázek" onClick={() => move(-1)}><ChevronLeft/></button>}
-    <figure><img className={current.shape} src={current.url} alt={current.label}/><figcaption>{current.label} · {index + 1} z {images.length}</figcaption></figure>
-    {images.length > 1 && <button className="gallery-arrow next" aria-label="Další obrázek" onClick={() => move(1)}><ChevronRight/></button>}
-    {images.length > 1 && <div className="gallery-thumbnails">{images.map((image, itemIndex) => <button key={image.url} className={itemIndex === index ? "selected" : ""} aria-label={`Zobrazit: ${image.label}`} onClick={() => onIndex(itemIndex)}><img src={image.url} alt="" loading="lazy"/></button>)}</div>}
+  return <div className="gallery-overlay" role="dialog" aria-modal="true" aria-label={t("gallery.title")} onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <button className="gallery-close icon-button" aria-label={t("gallery.close")} onClick={onClose}><X/></button>
+    {images.length > 1 && <button className="gallery-arrow previous" aria-label={t("gallery.previous")} onClick={() => move(-1)}><ChevronLeft/></button>}
+    <figure><img className={current.shape} src={current.url} alt={current.label}/><figcaption>{t("gallery.caption", { label: current.label, index: index + 1, total: images.length })}</figcaption></figure>
+    {images.length > 1 && <button className="gallery-arrow next" aria-label={t("gallery.next")} onClick={() => move(1)}><ChevronRight/></button>}
+    {images.length > 1 && <div className="gallery-thumbnails">{images.map((image, itemIndex) => <button key={image.url} className={itemIndex === index ? "selected" : ""} aria-label={t("gallery.show", { label: image.label })} onClick={() => onIndex(itemIndex)}><img src={image.url} alt="" loading="lazy"/></button>)}</div>}
   </div>;
 }
 function Heading({ eyebrow, title }: { eyebrow: string; title: string }) { return <div className="heading"><small>{eyebrow}</small><h2>{title}</h2></div>; }
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <div className="empty"><i>{icon}</i><h3>{title}</h3><p>{text}</p></div>; }
-function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>Přidejte první Stremio doplněk</h2><p>Aplikace potřebuje alespoň jeden katalogový manifest. Zdrojové manifesty s Real-Debrid můžete přidat samostatně.</p><button className="primary" onClick={onOpen}><Plus/> Přidat manifest</button></div>; }
+function Onboarding({ onOpen }: { onOpen: () => void }) { return <div className="panel onboarding"><i><PackagePlus/></i><h2>{t("onboarding.title")}</h2><p>{t("onboarding.text")}</p><button className="primary" onClick={onOpen}><Plus/> {t("onboarding.action")}</button></div>; }
 
 function RealDebridSettings({ configured, onSave, onError }: { configured: boolean; onSave: (patch: SettingsPatch) => Promise<void>; onError: (error: unknown) => void }) {
   const [token, setToken] = useState("");
@@ -976,32 +985,37 @@ function RealDebridSettings({ configured, onSave, onError }: { configured: boole
     finally { setBusy(false); }
   };
   const clear = async () => {
-    if (!confirm("Odebrat uložený token Real-Debrid?")) return;
+    if (!confirm(t("debrid.removeConfirm"))) return;
     setBusy(true);
     try { await onSave({ realDebridToken: "" }); setToken(""); }
     catch (error) { onError(error); }
     finally { setBusy(false); }
   };
   return <section className="panel settings-section debrid-section">
-    <SettingsSectionHead icon={<KeyRound/>} title="Real-Debrid" text="Token, kterým server požádá debrid o stažení torrentu. Doplňky s už vyřešenou HTTPS adresou ho nepotřebují."/>
+    <SettingsSectionHead icon={<KeyRound/>} title="Real-Debrid" text={t("debrid.sectionText")}/>
     {configured
-      ? <p className="debrid-status" role="status">Token je uložený. Nový zápis ho nahradí až po ověření u Real-Debrid.</p>
-      : <p className="debrid-status muted">Bez tokenu zůstanou surové torrenty skryté. HTTP zdroje z doplňků fungují dál.</p>}
+      ? <p className="debrid-status" role="status">{t("debrid.stored")}</p>
+      : <p className="debrid-status muted">{t("debrid.missing")}</p>}
     <label className="debrid-field">
-      <span>{configured ? "Nahradit token" : "API token"}</span>
+      <span>{t(configured ? "debrid.replaceToken" : "debrid.apiToken")}</span>
       <input type="password" autoComplete="off" spellCheck={false} value={token} onChange={(event) => setToken(event.target.value)}
-        aria-label="API token Real-Debrid" placeholder={configured ? "••••••••" : "vložit token z real-debrid.com"}/>
+        aria-label={t("debrid.tokenLabel")} placeholder={configured ? "••••••••" : t("debrid.tokenPlaceholder")}/>
     </label>
     <div className="setting-actions">
-      <button className="primary" disabled={busy || !token.trim()} onClick={() => void submit()}>{configured ? "Nahradit token" : "Uložit token"}</button>
-      {configured && <button className="danger" disabled={busy} onClick={() => void clear()}>Odebrat</button>}
+      <button className="primary" disabled={busy || !token.trim()} onClick={() => void submit()}>{t(configured ? "debrid.replaceToken" : "debrid.saveToken")}</button>
+      {configured && <button className="danger" disabled={busy} onClick={() => void clear()}>{t("common.remove")}</button>}
     </div>
   </section>;
 }
 
 function SettingsPage({ build, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
-  const languageOptions = languages.map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
-  const tileSizes = [{ value: "compact", label: "Kompaktní" }, { value: "small", label: "Malé" }, { value: "medium", label: "Střední (výchozí)" }, { value: "large", label: "Velké" }] as const;
+  const { t, locale, setLocale } = useI18n();
+  // The names come from the browser in the active language, so they need sorting there too.
+  const languageOptions = languages
+    .map((item) => ({ code: item.code, name: languageName(item.code) }))
+    .sort((a, b) => a.name.localeCompare(b.name, localeTag()))
+    .map((item) => <option key={item.code} value={item.code}>{item.name}</option>);
+  const tileSizes = [{ value: "compact", key: "settings.tile.compact" }, { value: "small", key: "settings.tile.small" }, { value: "medium", key: "settings.tile.medium" }, { value: "large", key: "settings.tile.large" }] as const;
   const importInput = useRef<HTMLInputElement>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const exportSettings = async () => {
@@ -1012,95 +1026,103 @@ function SettingsPage({ build, settings, languages, session, onSession, onSave, 
       const link = document.createElement("a");
       link.href = url; link.download = `stremio-offline-settings-${new Date().toISOString().slice(0, 10)}.json`; link.click();
       URL.revokeObjectURL(url);
-      onNotify("Záloha nastavení byla exportována.");
+      onNotify(t("settings.exported"));
     } catch (error) { onError(error); }
     finally { setBackupBusy(false); }
   };
   const importSettings = async (file?: File) => {
     if (!file) return;
     if (importInput.current) importInput.current.value = "";
-    if (!confirm("Import nahradí aktuální nastavení a všechny nainstalované doplňky obsahem zálohy. Pokračovat?")) return;
+    if (!confirm(t("settings.importConfirm"))) return;
     setBackupBusy(true);
     try {
       let backup: unknown;
       try { backup = JSON.parse(await file.text()); }
-      catch { throw new Error("Vybraný soubor neobsahuje platný JSON."); }
+      catch { throw new Error(t("settings.importNotJson")); }
       await onImported(backup);
-      onNotify("Nastavení a doplňky byly importovány.");
+      onNotify(t("settings.imported"));
     } catch (error) { onError(error); }
     finally { setBackupBusy(false); }
   };
-  return <section className="settings-page"><div className="settings-title"><Heading eyebrow="NASTAVENÍ" title="Nastavení aplikace"/><span><Check/> Změny se ukládají automaticky</span></div><p className="lead">Správa úložiště, stahování, knihovny a výchozího chování přehrávače.</p>
+  return <section className="settings-page"><div className="settings-title"><Heading eyebrow={t("settings.eyebrow")} title={t("settings.title")}/><span><Check/> {t("settings.autosave")}</span></div><p className="lead">{t("settings.lead")}</p>
     <div className="settings-grid">
       <AccountSettings session={session} onSession={onSession} onNotify={onNotify} onError={onError}/>
-      <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title="Úložiště" text="Cílový adresář uvnitř Docker kontejneru"/><div className="storage-path"><span>Docker cesta</span><code>/downloads</code></div><p>Skutečné umístění na Macu nebo NASu určuje <code>DOWNLOAD_PATH</code> v souboru <code>.env</code>. Podsložky jednotlivých providerů nastavíte na stránce Doplňky.</p></section>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title="Stahování" text="Výkon fronty a zatížení úložiště"/><SettingControl title="Souběžná stahování" text="Kolik souborů se smí stahovat najednou dohromady."><select aria-label="Souběžná stahování" value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title="Souběžně z jednoho zdroje" text="Poskytovatelé omezují počet souběžných spojení a přebytečné přenosy utnou nebo nechají hladovět. Jednička je nejbezpečnější."><select aria-label="Souběžně z jednoho zdroje" value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
+      <section className="panel settings-section language-section"><SettingsSectionHead icon={<Languages/>} title={t("settings.languageTitle")} text={t("settings.languageText")}/>
+        <SettingControl title={t("settings.uiLanguage")} text={t("settings.uiLanguageHint")}>
+          <select aria-label={t("settings.uiLanguage")} value={locale} onChange={(event) => {
+            const next = event.target.value as Locale;
+            setLocale(next);
+            void onSave({ uiLanguage: next });
+          }}>{LOCALES.map((code) => <option key={code} value={code}>{LOCALE_NAMES[code]}</option>)}</select>
+        </SettingControl></section>
+      <section className="panel settings-section storage-section"><SettingsSectionHead icon={<HardDrive/>} title={t("settings.storageTitle")} text={t("settings.storageText")}/><div className="storage-path"><span>{t("settings.dockerPath")}</span><code>/downloads</code></div><p>{t("settings.storageNoteBefore")} <code>DOWNLOAD_PATH</code> {t("settings.storageNoteAfter")}</p></section>
+      <section className="panel settings-section"><SettingsSectionHead icon={<Download/>} title={t("nav.downloads")} text={t("settings.downloadsText")}/><SettingControl title={t("settings.concurrent")} text={t("settings.concurrentHint")}><select aria-label={t("settings.concurrent")} value={settings.concurrentDownloads} onChange={(event) => void onSave({ concurrentDownloads: Number(event.target.value) })}>{[1,2,3,4,5,6,7,8].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl><SettingControl title={t("settings.perProvider")} text={t("settings.perProviderHint")}><select aria-label={t("settings.perProvider")} value={settings.parallelPerProvider ?? 1} onChange={(event) => void onSave({ parallelPerProvider: Number(event.target.value) })}>{[1,2,3,4].map((value) => <option key={value} value={value}>{value}</option>)}</select></SettingControl></section>
       <RealDebridSettings configured={settings.realDebridConfigured} onSave={onSave} onError={onError}/>
-      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title="Knihovna" text="Zobrazení výsledků z více doplňků"/><SettingControl title="Stejné tituly" text="Shodný název a rok lze sloučit do jedné položky."><select aria-label="Stejné tituly" value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">Slučovat</option><option value="0">Zobrazit zvlášť</option></select></SettingControl><SettingControl title="Sledovat, kde jste skončil" text="Ukládá pozici přehrávání, aby šlo navázat. Vypnutím se nic nového nezaznamená.">
-          <select aria-label="Sledovat pozici" value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
-            <option value="1">Ukládat</option><option value="0">Neukládat</option>
+      <section className="panel settings-section"><SettingsSectionHead icon={<Library/>} title={t("nav.library")} text={t("settings.libraryText")}/><SettingControl title={t("settings.sameTitles")} text={t("settings.sameTitlesHint")}><select aria-label={t("settings.sameTitles")} value={settings.mergeByName ? "1" : "0"} onChange={(event) => void onSave({ mergeByName: event.target.value === "1" })}><option value="1">{t("settings.merge")}</option><option value="0">{t("settings.showSeparately")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
+          <select aria-label={t("settings.trackProgressLabel")} value={settings.trackProgress ? "1" : "0"} onChange={(event) => void onSave({ trackProgress: event.target.value === "1" })}>
+            <option value="1">{t("settings.store")}</option><option value="0">{t("settings.doNotStore")}</option>
           </select></SettingControl>
-        <SettingControl title="Řádek Pokračovat ve sledování" text="Zobrazí rozkoukané tituly nahoře v knihovně.">
-          <select aria-label="Řádek rozkoukaných" value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
-            <option value="1">Zobrazovat</option><option value="0">Skrýt</option>
+        <SettingControl title={t("settings.resumeRow")} text={t("settings.resumeRowHint")}>
+          <select aria-label={t("settings.resumeRowLabel")} value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
+            <option value="1">{t("settings.show")}</option><option value="0">{t("settings.hide")}</option>
           </select></SettingControl>
-        <SettingControl title="Historie sledování" text="Smaže všechny uložené pozice. Soubory zůstanou.">
+        <SettingControl title={t("settings.history")} text={t("settings.historyHint")}>
           <button className="danger" onClick={async () => {
-            if (!confirm("Opravdu smazat celou historii sledování?")) return;
-            try { await api.clearProgress(); onNotify("Historie smazána."); } catch (error) { onError(error); }
-          }}><Trash2/> Smazat historii</button></SettingControl>
-        <SettingControl title="Kam ukládat náhledy" text="Vedle videa je převezme i Jellyfin nebo Emby, ale zapisujeme tím do vašich složek. Cizí obrázek nikdy nepřepisujeme.">
-        <select aria-label="Kam ukládat náhledy" value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>
-          <option value="data">Do dat aplikace</option><option value="media">Vedle videa</option>
+            if (!confirm(t("settings.historyConfirm"))) return;
+            try { await api.clearProgress(); onNotify(t("settings.historyCleared")); } catch (error) { onError(error); }
+          }}><Trash2/> {t("settings.clearHistory")}</button></SettingControl>
+        <SettingControl title={t("settings.artwork")} text={t("settings.artworkHint")}>
+        <select aria-label={t("settings.artwork")} value={settings.artworkLocation} onChange={(event) => void onSave({ artworkLocation: event.target.value as "data" | "media" })}>
+          <option value="data">{t("settings.artworkData")}</option><option value="media">{t("settings.artworkMedia")}</option>
         </select></SettingControl>
-        <SettingControl title="Velikost položek katalogu" text="Určuje počet plakátů, které se vejdou do řádku katalogu."><select aria-label="Velikost položek katalogu" value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
-        <SettingControl title="Velikost položek knihovny" text="Mění velikost náhledů v mřížkovém zobrazení knihovny."><select aria-label="Velikost položek knihovny" value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{size.label}</option>)}</select></SettingControl>
-        <SettingControl title="Výchozí řazení zdrojů" text="Doporučené dá dopředu preferovaný jazyk, pak doplňky s vyšší prioritou a uvnitř největší soubory."><select aria-label="Výchozí řazení zdrojů" value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">Doporučené</option><option value="size-desc">Od největšího</option><option value="size-asc">Od nejmenšího</option><option value="addon">Podle priority doplňku</option></select></SettingControl></section>
-      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title="Přehrávání" text="Preferované stopy při spuštění videa"/><div className="playback-settings"><SettingControl title="Jazyk zvuku" text="Při nedostupnosti se použije angličtina."><select aria-label="Preferovaný jazyk zvuku" value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title="Jazyk titulků" text="Vestavěné titulky mají přednost před doplňkem."><select aria-label="Preferovaný jazyk titulků" value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
-      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title="Záloha konfigurace" text="Přenos nastavení a nainstalovaných doplňků"/><p>Export zahrnuje všechna nastavení, pořadí doplňků, jejich stav a pravidla ukládání. Neobsahuje účet, knihovnu ani historii sledování.</p><p className="notice">Personalizované adresy doplňků a token Real-Debrid jsou v souboru v čitelné podobě. Zálohu proto uchovávejte jako heslo.</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> Exportovat nastavení</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> Importovat nastavení</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label="Vybrat zálohu nastavení" onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
+        <SettingControl title={t("settings.catalogTiles")} text={t("settings.catalogTilesHint")}><select aria-label={t("settings.catalogTiles")} value={settings.catalogTileSize} onChange={(event) => void onSave({ catalogTileSize: event.target.value as AppSettings["catalogTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl>
+        <SettingControl title={t("settings.libraryTiles")} text={t("settings.libraryTilesHint")}><select aria-label={t("settings.libraryTiles")} value={settings.libraryTileSize} onChange={(event) => void onSave({ libraryTileSize: event.target.value as AppSettings["libraryTileSize"] })}>{tileSizes.map((size) => <option key={size.value} value={size.value}>{t(size.key)}</option>)}</select></SettingControl>
+        <SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl></section>
+      <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div></section>
+      <section className="panel settings-section backup-section"><SettingsSectionHead icon={<FileJson/>} title={t("settings.backupTitle")} text={t("settings.backupText")}/><p>{t("settings.backupBody")}</p><p className="notice">{t("settings.backupWarning")}</p><div className="setting-actions"><button disabled={backupBusy} onClick={() => void exportSettings()}><Download/> {t("settings.export")}</button><button disabled={backupBusy} onClick={() => importInput.current?.click()}><Upload/> {t("settings.import")}</button><input ref={importInput} className="file-input" type="file" accept="application/json,.json" aria-label={t("settings.pickBackup")} onChange={(event) => void importSettings(event.target.files?.[0])}/></div></section>
       <DiagnosticsSection build={build} onNotify={onNotify} onError={onError}/>
     </div>
   </section>;
 }
 
 
-const LOG_LEVELS = [["", "Vše"], ["INFO", "Info a výš"], ["WARN", "Varování a chyby"], ["ERROR", "Jen chyby"]] as const;
-const PERIODS = [[1, "Poslední hodina"], [24, "Posledních 24 hodin"], [168, "Posledních 7 dnů"], [0, "Vše"]] as const;
+const LOG_LEVELS = [["", "diag.levelAll"], ["INFO", "diag.levelInfo"], ["WARN", "diag.levelWarn"], ["ERROR", "diag.levelError"]] as const satisfies ReadonlyArray<readonly [string, Key]>;
+const PERIODS = [[1, "diag.periodHour"], [24, "diag.periodDay"], [168, "diag.periodWeek"], [0, "diag.periodAll"]] as const satisfies ReadonlyArray<readonly [number, Key]>;
 const duration = (seconds: number) => seconds >= 86400 ? `${Math.floor(seconds / 86400)} d ${Math.floor((seconds % 86400) / 3600)} h`
   : seconds >= 3600 ? `${Math.floor(seconds / 3600)} h ${Math.floor((seconds % 3600) / 60)} min` : `${Math.max(1, Math.round(seconds / 60))} min`;
 const since = (at: string) => {
   const seconds = Math.max(0, (Date.now() - new Date(at).getTime()) / 1000);
-  return seconds < 90 ? "před chvílí" : `před ${duration(seconds)}`;
+  return seconds < 90 ? t("diag.justNow") : t("diag.ago", { duration: duration(seconds) });
 };
-const clock = (at: string) => at ? new Date(at).toLocaleTimeString("cs-CZ") : "";
+const clock = (at: string) => at ? new Date(at).toLocaleTimeString(localeTag()) : "";
 
 function Fact({ term, children }: { term: string; children: React.ReactNode }) {
   return <div className="fact"><dt>{term}</dt><dd>{children}</dd></div>;
 }
 
-/** Jedna skupina stejných hlášek. Rozbalí se do posledních výskytů i s kontextem,
- * takže běžný pohled zůstane krátký a podrobnosti jsou po ruce. */
+/** One group of identical messages. It unfolds into the last occurrences with their
+ * context, so the ordinary view stays short and the detail is at hand. */
 function Issue({ group }: { group: LogGroup }) {
   const [open, setOpen] = useState(false);
   return <li className={`issue ${group.level.toLowerCase()}`}>
     <button className="issue-head" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className={`level-chip ${group.level.toLowerCase()}`}>{group.level}</span>
       <span className="issue-message">{group.message}</span>
-      <span className="issue-count" title={`${group.count}× od ${clock(group.first)}`}>{group.count}×</span>
+      <span className="issue-count" title={t("diag.sinceCount", { count: group.count, time: clock(group.first) })}>{group.count}×</span>
       <span className="issue-when">{since(group.last)}</span>
       <ChevronDown className={open ? "rotated" : ""}/>
     </button>
     {open && <div className="issue-detail">
       {group.samples.map((sample, index) => <div key={`${sample.at}:${index}`}>
         <span>{clock(sample.at)}</span>
-        {sample.context ? <code>{sample.context}</code> : <code className="empty">bez dalších údajů</code>}
+        {sample.context ? <code>{sample.context}</code> : <code className="empty">{t("diag.noContext")}</code>}
       </div>)}
     </div>}
   </li>;
 }
 
-/** Diagnostika má nejdřív odpovědět "je něco rozbité?", teprve pak nabídnout syrový log.
- * Ten běžného uživatele nezajímá, proto je celý panel i log schovaný, dokud si o ně neřekne. */
+/** Diagnostics should first answer "is something broken?" and only then offer the raw log.
+ * That does not interest an ordinary user, so both the panel and the log stay hidden until asked for. */
 function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | null; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<Diagnostics | null>(null);
@@ -1130,17 +1152,17 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
     catch (error) { onError(error); }
     finally { setBusy(false); }
   };
-  // Psaní do hledání nemá po každém písmenu chodit na server.
+  // Typing in the search box should not hit the server on every letter.
   useEffect(() => { const timer = setTimeout(() => setQuery(search.trim()), 400); return () => clearTimeout(timer); }, [search]);
-  // Přehled se načte i zavřený, jinak by odznak v hlavičce tvrdil "bez chyb", aniž by se díval.
+  // The overview loads even while collapsed; otherwise the header chip would claim "no errors" without looking.
   useEffect(() => { void loadOverview(); }, [hours, query]);
   useEffect(() => { if (open && showLog) void loadLog(); }, [open, showLog, level, tail, hours, query]);
 
   const refresh = async () => { await loadOverview(); if (showLog) await loadLog(); };
-  const copyLog = async () => { try { await copyText(await api.logs()); onNotify("Log zkopírován do schránky."); } catch (error) { onError(error); } };
+  const copyLog = async () => { try { await copyText(await api.logs()); onNotify(t("diag.logCopied")); } catch (error) { onError(error); } };
   const clearLog = async () => {
-    if (!confirm("Opravdu smazat celý log? Dosavadní záznamy se ztratí, nové se budou zapisovat dál.")) return;
-    try { await api.clearLogs(); onNotify("Log byl smazán."); setLines([]); await loadOverview(); }
+    if (!confirm(t("diag.clearLogConfirm"))) return;
+    try { await api.clearLogs(); onNotify(t("diag.logCleared")); setLines([]); await loadOverview(); }
     catch (error) { onError(error); }
   };
 
@@ -1154,76 +1176,76 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 
   return <section className="panel settings-section diagnostics-section">
     <button className="diagnostics-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-      <SettingsSectionHead icon={<FileText/>} title="Diagnostika" text="Stav serveru a poslední problémy"/>
-      {!open && info && <span className={`state-chip ${worst}`}>{worst === "ok" ? "Bez chyb" : `${reports} hlášení`}</span>}
+      <SettingsSectionHead icon={<FileText/>} title={t("diag.title")} text={t("diag.subtitle")}/>
+      {!open && info && <span className={`state-chip ${worst}`}>{worst === "ok" ? t("diag.noErrors") : t("diag.reportCount", { count: reports })}</span>}
       <ChevronDown className={open ? "rotated" : ""}/>
     </button>
 
     {open && <div className="diagnostics-body">
       <dl className="diagnostics-facts">
-        <Fact term="Verze">{info?.version ?? build?.version ?? "—"}{build?.commit ? <small> · {build.commit.slice(0, 7)}</small> : null}</Fact>
-        <Fact term="Server běží">{info ? duration(info.uptimeSeconds) : "—"}</Fact>
-        <Fact term="Převod videa">{info?.playback.ffmpeg.version ? `FFmpeg ${info.playback.ffmpeg.version}` : "—"}<small>{vaapi?.device ? ` · GPU ${vaapi.device}` : " · softwarově"}</small></Fact>
-        <Fact term="Přehrávání">{sessions.length ? `${sessions.length} běžících relací` : "žádná relace"}</Fact>
-        <Fact term="Fronta stahování">{queue.length ? queue.map(([status, count]) => `${statusLabel(status as DownloadJob["status"])} ${count}`).join(", ") : "prázdná"}</Fact>
-        {(info?.storage ?? []).map((disk) => <Fact key={disk.path} term={`Volné místo ${disk.path}`}>{bytes(disk.freeBytes)}<small>{disk.totalBytes ? ` z ${bytes(disk.totalBytes)}` : ""}</small></Fact>)}
+        <Fact term={t("diag.version")}>{info?.version ?? build?.version ?? "—"}{build?.commit ? <small> · {build.commit.slice(0, 7)}</small> : null}</Fact>
+        <Fact term={t("diag.uptime")}>{info ? duration(info.uptimeSeconds) : "—"}</Fact>
+        <Fact term={t("diag.conversion")}>{info?.playback.ffmpeg.version ? `FFmpeg ${info.playback.ffmpeg.version}` : "—"}<small>{vaapi?.device ? ` · GPU ${vaapi.device}` : ` · ${t("diag.software")}`}</small></Fact>
+        <Fact term={t("diag.playback")}>{sessions.length ? t("diag.sessionCount", { count: sessions.length }) : t("diag.noSessions")}</Fact>
+        <Fact term={t("diag.queue")}>{queue.length ? queue.map(([status, count]) => `${statusLabel(status as DownloadJob["status"])} ${count}`).join(", ") : t("diag.queueEmpty")}</Fact>
+        {(info?.storage ?? []).map((disk) => <Fact key={disk.path} term={t("diag.freeSpace", { path: disk.path })}>{bytes(disk.freeBytes)}<small>{disk.totalBytes ? ` ${t("diag.ofTotal", { total: bytes(disk.totalBytes) })}` : ""}</small></Fact>)}
       </dl>
 
       {sessions.length > 0 && <ul className="diagnostics-list">{sessions.map((session) => <li key={session.id}>
         <strong>{session.title ?? session.id}</strong>
-        <span>{session.mode}{session.hardware ? " · GPU" : ""} · {session.video ?? "?"}/{session.audio ?? "?"} · na {Math.round(session.offset)} s · nečinná {session.idleSeconds} s</span>
+        <span>{session.mode}{session.hardware ? " · GPU" : ""} · {session.video ?? "?"}/{session.audio ?? "?"} · {t("diag.atSecond", { seconds: Math.round(session.offset) })} · {t("diag.idleFor", { seconds: session.idleSeconds })}</span>
       </li>)}</ul>}
 
       {info?.downloads.halt && <ul className="diagnostics-list"><li>
-        <strong>Fronta zastavena</strong><span>{info.downloads.halt.message}</span>
+        <strong>{t("diag.queueHalted")}</strong><span>{info.downloads.halt.message}</span>
       </li></ul>}
 
       {failed.length > 0 && <ul className="diagnostics-list">{failed.map((job) => <li key={job.id}>
-        <strong>{job.title}</strong><span>{job.error ?? "chyba bez popisu"}</span>
+        <strong>{job.title}</strong><span>{job.error ?? t("diag.errorWithoutDetail")}</span>
       </li>)}</ul>}
 
       {troubled.length > 0 && <ul className="diagnostics-list">{troubled.map((host) => <li key={host.host}>
         <strong>{host.host}</strong>
-        <span>{host.state === "open" ? `odstaven, další pokus za ${host.opensInSeconds ?? 0} s`
-          : host.state === "half-open" ? "zkouší se po výpadku"
-          : `${host.failures} selhání po sobě`}{host.rejected ? ` · ${host.rejected} odmítnutých dotazů` : ""}</span>
+        <span>{host.state === "open" ? t("diag.hostOpen", { seconds: host.opensInSeconds ?? 0 })
+          : host.state === "half-open" ? t("diag.hostHalfOpen")
+          : t("diag.hostFailures", { count: host.failures })}{host.rejected ? ` · ${t("diag.hostRejected", { count: host.rejected })}` : ""}</span>
       </li>)}</ul>}
 
       <div className="diagnostics-filters">
-        <label><span>Období</span><select aria-label="Období" value={hours} onChange={(event) => setHours(Number(event.target.value))}>{PERIODS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
-        <label className="grow"><span>Hledat ve zprávách</span><input type="search" placeholder="např. ffmpeg, hls.js, addon" value={search} onChange={(event) => setSearch(event.target.value)}/></label>
-        <button disabled={busy} onClick={() => void refresh()}><RefreshCw/> Obnovit</button>
+        <label><span>{t("stats.periodGroup")}</span><select aria-label={t("stats.periodGroup")} value={hours} onChange={(event) => setHours(Number(event.target.value))}>{PERIODS.map(([value, key]) => <option key={value} value={value}>{t(key)}</option>)}</select></label>
+        <label className="grow"><span>{t("diag.searchMessages")}</span><input type="search" placeholder={t("diag.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)}/></label>
+        <button disabled={busy} onClick={() => void refresh()}><RefreshCw/> {t("common.refresh")}</button>
       </div>
 
       <div className="issues-head">
-        <h4>Poslední problémy</h4>
-        {issues.length > 0 && <span className={`state-chip ${worst}`}>{reports} hlášení</span>}
+        <h4>{t("diag.recentIssues")}</h4>
+        {issues.length > 0 && <span className={`state-chip ${worst}`}>{t("diag.reportCount", { count: reports })}</span>}
       </div>
       {issues.length ? <ul className="issues">{issues.slice(0, 12).map((issue) => <Issue key={issue.key} group={issue}/>)}</ul>
-        : <p className="issues-empty">Ve zvoleném období server nezaznamenal žádné varování ani chybu.</p>}
+        : <p className="issues-empty">{t("diag.noIssues")}</p>}
 
       <div className="log-toggle">
-        <button onClick={() => setShowLog(!showLog)} aria-expanded={showLog}><ChevronDown className={showLog ? "rotated" : ""}/> {showLog ? "Skrýt podrobný log" : "Zobrazit podrobný log"}</button>
-        <a className="button" href="/api/logs" download="stremio-offline.log"><Download/> Stáhnout</a>
-        <button onClick={() => void copyLog()}><Copy/> Kopírovat</button>
-        <button className="danger" onClick={() => void clearLog()}><Trash2/> Smazat log</button>
+        <button onClick={() => setShowLog(!showLog)} aria-expanded={showLog}><ChevronDown className={showLog ? "rotated" : ""}/> {t(showLog ? "diag.hideLog" : "diag.showLog")}</button>
+        <a className="button" href="/api/logs" download="stremio-offline.log"><Download/> {t("common.download")}</a>
+        <button onClick={() => void copyLog()}><Copy/> {t("common.copy")}</button>
+        <button className="danger" onClick={() => void clearLog()}><Trash2/> {t("diag.clearLog")}</button>
       </div>
 
       {showLog && <div className="log-panel">
         <div className="log-filters">
-          <label><span>Úroveň</span><select aria-label="Úroveň logu" value={level} onChange={(event) => setLevel(event.target.value)}>{LOG_LEVELS.map(([value, text]) => <option key={value} value={value}>{text}</option>)}</select></label>
-          <label><span>Řádků</span><select aria-label="Počet řádků logu" value={tail} onChange={(event) => setTail(Number(event.target.value))}>{[100, 200, 500, 1000].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
-          <label className="log-wrap"><input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)}/><span>Zalamovat řádky</span></label>
+          <label><span>{t("diag.level")}</span><select aria-label={t("diag.logLevel")} value={level} onChange={(event) => setLevel(event.target.value)}>{LOG_LEVELS.map(([value, key]) => <option key={value} value={value}>{t(key)}</option>)}</select></label>
+          <label><span>{t("diag.lines")}</span><select aria-label={t("diag.lineCount")} value={tail} onChange={(event) => setTail(Number(event.target.value))}>{[100, 200, 500, 1000].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label className="log-wrap"><input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)}/><span>{t("diag.wrapLines")}</span></label>
         </div>
-        <div className={`log-viewer${wrap ? " wrap" : ""}`} aria-label="Záznam serveru">
+        <div className={`log-viewer${wrap ? " wrap" : ""}`} aria-label={t("diag.serverLog")}>
           {lines.length ? lines.map((line, index) => <div className={`log-line ${line.level.toLowerCase()}`} key={`${line.at}:${index}`}>
             <span className="log-time">{clock(line.at)}</span>
             <span className={`level-chip ${line.level.toLowerCase()}`}>{line.level || "—"}</span>
             <span className="log-message">{line.message}</span>
             {line.context && <span className="log-context">{line.context}</span>}
-          </div>) : <div className="log-line">{busy ? "Načítám…" : "Ve zvoleném období není žádný záznam."}</div>}
+          </div>) : <div className="log-line">{busy ? t("common.loading") : t("diag.noLines")}</div>}
         </div>
-        <p>Log neobsahuje adresy streamů ani přístupové tokeny.{info?.logRetentionDays ? ` Záznamy starší než ${info.logRetentionDays} dnů server maže sám.` : ""}</p>
+        <p>{t("diag.logPrivacy")}{info?.logRetentionDays ? ` ${t("diag.logRetention", { days: info.logRetentionDays })}` : ""}</p>
       </div>}
     </div>}
   </section>;
@@ -1231,13 +1253,13 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 
 function Addons({ addons, onChanged, onNotify, onError }: { addons: Addon[]; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
-  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify("Manifest byl přidán."); } catch (err) { onError(err); } finally { setBusy(false); } };
-  return <section><Heading eyebrow="DOPLŇKY" title="Knihovny a zdroje"/><p className="lead">Vložte adresu končící na <code>manifest.json</code>. Personalizovaná URL může obsahovat citlivý token; v rozhraní ji po uložení skryjeme. Umístění souborů se nastavuje jen u doplňků, které poskytují streamy.</p>
-    <form className="panel addon-form" onSubmit={submit}><label><span>URL manifestu</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>Úloha</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">Automaticky / obojí</option><option value="catalog">Pouze knihovna</option><option value="source">Pouze zdroje</option></select></label><button className="primary" disabled={busy}><Plus/> Přidat</button></form>
+  const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify(t("addons.added")); } catch (err) { onError(err); } finally { setBusy(false); } };
+  return <section><Heading eyebrow={t("addons.eyebrow")} title={t("addons.title")}/><p className="lead">{t("addons.leadBefore")} <code>manifest.json</code>. {t("addons.leadAfter")}</p>
+    <form className="panel addon-form" onSubmit={submit}><label><span>{t("addons.manifestUrl")}</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>{t("addons.role")}</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option></select></label><button className="primary" disabled={busy}><Plus/> {t("common.add")}</button></form>
     {[
-      { title: "Zdroje streamů", text: "Pořadí určuje prioritu při řazení zdrojů u titulu.", ordered: true, list: addons.filter((addon) => addon.role !== "catalog") },
-      { title: "Knihovny a metadata", text: "Dodávají katalogy, popisy a plakáty.", ordered: false, list: addons.filter((addon) => addon.role === "catalog") },
-    ].filter((group) => group.list.length > 0).map((group) => <div className="addon-group" key={group.title}>
+      { key: "sources", title: t("addons.streamSources"), text: t("addons.streamSourcesText"), ordered: true, list: addons.filter((addon) => addon.role !== "catalog") },
+      { key: "catalogs", title: t("addons.catalogsTitle"), text: t("addons.catalogsText"), ordered: false, list: addons.filter((addon) => addon.role === "catalog") },
+    ].filter((group) => group.list.length > 0).map((group) => <div className="addon-group" key={group.key}>
       <div className="subhead"><h3>{group.title}</h3><span>{group.text}</span></div>
       <div className="addon-grid">{group.list.map((addon, index) => <AddonCard key={addon.key} addon={addon}
         index={group.ordered ? index : -1} total={group.list.length}
@@ -1256,7 +1278,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   const [manifestRole, setManifestRole] = useState(addon.role);
   const [manifestBusy, setManifestBusy] = useState(false);
 
-  // Skutečnou adresu rozhraní běžně skrývá kvůli tokenu, načteme ji až při otevření.
+  // The interface normally hides the real address because of the token; it is fetched on opening.
   const openManifest = async () => {
     const next = !manifestOpen;
     setManifestOpen(next);
@@ -1268,7 +1290,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   };
   const saveManifest = async () => {
     setManifestBusy(true);
-    try { await api.updateAddon(addon.key, { url: manifestUrl.trim(), role: manifestRole }); await onChanged(); onNotify("Doplněk aktualizován."); }
+    try { await api.updateAddon(addon.key, { url: manifestUrl.trim(), role: manifestRole }); await onChanged(); onNotify(t("addons.updated")); }
     catch (error) { onError(error); }
     finally { setManifestBusy(false); }
   };
@@ -1280,40 +1302,40 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
       const link = document.createElement("a");
       link.href = href; link.download = `${addon.manifest.name.replace(/[^\w.-]+/g, "-")}.json`;
       link.click(); URL.revokeObjectURL(href);
-      onNotify("Manifest uložen do souboru.");
+      onNotify(t("addons.manifestSaved"));
     } catch (error) { onError(error); }
   };
   const providesStreams = (addon.manifest.resources ?? []).some((resource) => typeof resource === "string" ? resource === "stream" : resource.name === "stream");
   useEffect(() => setDraft(clone(addon.downloadSettings)), [addon.downloadSettings]);
   const change = (kind: "movie" | "series", patch: Partial<AddonDownloadSettings["movie"]>) => setDraft((current) => ({ ...current, [kind]: { ...current[kind], ...patch } }));
-  const preview = (kind: "movie" | "series") => { const rule = draft[kind]; const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); const root = `/downloads${folder ? `/${folder}` : ""}`; if (kind === "movie") return rule.layout === "flat" ? `${root}/Název filmu.mkv` : `${root}/Název filmu/Název filmu.mkv`; return rule.layout === "flat" ? `${root}/Název seriálu - S01E01 - Název dílu.mkv` : `${root}/Název seriálu/01 serie/01 - Název dílu.mkv`; };
-  const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(`Ukládání pro ${addon.manifest.name} bylo nastaveno.`); } catch (error) { onError(error); } finally { setSaving(false); } };
+  const preview = (kind: "movie" | "series") => { const rule = draft[kind]; const folder = rule.subfolder.trim().replaceAll("\\", "/").replace(/^\/+|\/+$/g, ""); const root = `/downloads${folder ? `/${folder}` : ""}`; if (kind === "movie") return rule.layout === "flat" ? `${root}/${t("addons.sampleMovie")}.mkv` : `${root}/${t("addons.sampleMovie")}/${t("addons.sampleMovie")}.mkv`; return rule.layout === "flat" ? `${root}/${t("addons.sampleShow")} - S01E01 - ${t("addons.sampleEpisode")}.mkv` : `${root}/${t("addons.sampleShow")}/01 ${t("addons.sampleSeasonFolder")}/01 - ${t("addons.sampleEpisode")}.mkv`; };
+  const save = async () => { setSaving(true); try { const saved = await api.updateAddon(addon.key, { downloadSettings: draft }); setDraft(clone(saved.downloadSettings)); await onChanged(); onNotify(t("addons.storageSaved", { addon: addon.manifest.name })); } catch (error) { onError(error); } finally { setSaving(false); } };
   return <article className={`panel addon-card ${storageOpen ? "storage-expanded" : ""}`}>
     {addon.manifest.logo ? <img src={addon.manifest.logo} alt=""/> : <div className="addon-logo"><PackagePlus/></div>}
-    <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {addon.role === "catalog" ? "knihovna" : addon.role === "source" ? "zdroje" : "knihovna i zdroje"}</small></div>
+    <div className="addon-body"><div className="addon-title"><h3>{addon.manifest.name}</h3>{addon.manifest.behaviorHints?.p2p && <span className="p2p">P2P</span>}</div><p>{addon.manifest.description || addon.displayUrl}</p><small>{addon.manifest.version} · {t(addon.role === "catalog" ? "addons.isCatalog" : addon.role === "source" ? "addons.isSource" : "addons.isBoth")}</small></div>
     <div className="addon-actions">{index >= 0 && <div className="addon-order">
-      <button title="Vyšší priorita při řazení zdrojů" disabled={index === 0} onClick={async()=>{try { await api.moveAddon(addon.key, -1); await onChanged(); } catch (error) { onError(error); }}}><ArrowUp/></button>
-      <button title="Nižší priorita při řazení zdrojů" disabled={index === total - 1} onClick={async()=>{try { await api.moveAddon(addon.key, 1); await onChanged(); } catch (error) { onError(error); }}}><ArrowDown/></button>
-    </div>}<label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label><button className="danger icon-button" title="Odstranit" onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button></div>
-    <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>Manifest a export</span><ChevronDown/></button>
+      <button title={t("addons.higherPriority")} disabled={index === 0} onClick={async()=>{try { await api.moveAddon(addon.key, -1); await onChanged(); } catch (error) { onError(error); }}}><ArrowUp/></button>
+      <button title={t("addons.lowerPriority")} disabled={index === total - 1} onClick={async()=>{try { await api.moveAddon(addon.key, 1); await onChanged(); } catch (error) { onError(error); }}}><ArrowDown/></button>
+    </div>}<label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label><button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button></div>
+    <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>{t("addons.manifestAndExport")}</span><ChevronDown/></button>
     {manifestOpen && <div className="addon-download-settings">
-      <div className="addon-download-head"><strong>Adresa manifestu</strong><small>Po překonfigurování doplňku sem vložte novou adresu. Pořadí, zapnutí i nastavení ukládání zůstanou zachovány. Adresa může obsahovat přístupový token, zacházejte s ní jako s heslem.</small></div>
+      <div className="addon-download-head"><strong>{t("addons.manifestAddress")}</strong><small>{t("addons.manifestAddressHint")}</small></div>
       <label className="manifest-field"><span>URL</span>
-        <input value={manifestUrl} onChange={(event) => setManifestUrl(event.target.value)} placeholder="načítám…" spellCheck={false}/></label>
-      <label className="manifest-field"><span>Úloha</span>
+        <input value={manifestUrl} onChange={(event) => setManifestUrl(event.target.value)} placeholder={t("common.loading")} spellCheck={false}/></label>
+      <label className="manifest-field"><span>{t("addons.role")}</span>
         <select value={manifestRole} onChange={(event) => setManifestRole(event.target.value as Addon["role"])}>
-          <option value="both">Automaticky / obojí</option><option value="catalog">Pouze knihovna</option><option value="source">Pouze zdroje</option>
+          <option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option>
         </select></label>
       <div className="manifest-actions">
-        <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> Uložit</button>
-        <button onClick={async () => { try { await copyText(manifestUrl); onNotify("Adresa zkopírována."); } catch (error) { onError(error); } }}><Copy/> Kopírovat URL</button>
-        <button onClick={() => void exportManifest()}><FileJson/> Exportovat JSON</button>
+        <button className="primary" disabled={manifestBusy || !manifestUrl.trim()} onClick={() => void saveManifest()}><Check/> {t("common.save")}</button>
+        <button onClick={async () => { try { await copyText(manifestUrl); onNotify(t("addons.urlCopied")); } catch (error) { onError(error); } }}><Copy/> {t("addons.copyUrl")}</button>
+        <button onClick={() => void exportManifest()}><FileJson/> {t("addons.exportJson")}</button>
       </div>
     </div>}
-    {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>Nastavení ukládání</span><ChevronDown/></button>}
-    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>Kam ukládat soubory</strong><small>Hostitelský adresář je určený pomocí <code>DOWNLOAD_PATH</code>. Zde vybíráte pouze podsložku uvnitř <code>/downloads</code>.</small></div>
-      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{kind === "movie" ? "Filmy" : "Seriály"}</b><label className="folder-label"><span>Podsložka v /downloads</span><div className="folder-field"><code>/downloads/</code><input aria-label={`${kind === "movie" ? "Filmy" : "Seriály"} – podsložka v downloads`} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder="prázdné = základní složka"/></div></label><label><span>Způsob uložení</span><select aria-label={`${kind === "movie" ? "Filmy" : "Seriály"} – způsob uložení`} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">Složka podle filmu / seriálu</option><option value="flat">Plochá struktura – jen soubory</option></select></label><small className="path-preview">Příklad: <code>{preview(kind)}</code></small></div>)}</div>
-      <div className="download-settings-actions"><button onClick={() => { setDraft(clone(addon.downloadSettings)); setStorageOpen(false); }}>Zrušit</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{saving ? "Ukládám…" : "Uložit nastavení"}</button></div>
+    {providesStreams && <button className={`storage-toggle ${storageOpen ? "open" : ""}`} onClick={() => setStorageOpen((value) => !value)} aria-expanded={storageOpen}><FolderCog/> <span>{t("addons.storageSettings")}</span><ChevronDown/></button>}
+    {providesStreams && storageOpen && <div className="addon-download-settings"><div className="addon-download-head"><strong>{t("addons.whereToStore")}</strong><small>{t("addons.whereToStoreBefore")} <code>DOWNLOAD_PATH</code>. {t("addons.whereToStoreAfter")} <code>/downloads</code>.</small></div>
+      <div className="download-rule-grid">{(["movie", "series"] as const).map((kind) => <div className="download-rule" key={kind}><b>{t(kind === "movie" ? "catalog.movies" : "catalog.series")}</b><label className="folder-label"><span>{t("addons.subfolder")}</span><div className="folder-field"><code>/downloads/</code><input aria-label={t("addons.subfolderLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].subfolder} onChange={(event) => change(kind, { subfolder: event.target.value })} placeholder={t("addons.subfolderPlaceholder")}/></div></label><label><span>{t("addons.layout")}</span><select aria-label={t("addons.layoutLabel", { kind: t(kind === "movie" ? "catalog.movies" : "catalog.series") })} value={draft[kind].layout} onChange={(event) => change(kind, { layout: event.target.value as "flat" | "structured" })}><option value="structured">{t("addons.layoutStructured")}</option><option value="flat">{t("addons.layoutFlat")}</option></select></label><small className="path-preview">{t("addons.example")} <code>{preview(kind)}</code></small></div>)}</div>
+      <div className="download-settings-actions"><button onClick={() => { setDraft(clone(addon.downloadSettings)); setStorageOpen(false); }}>{t("common.cancel")}</button><button className="primary save-download-settings" disabled={saving} onClick={() => void save()}>{t(saving ? "common.saving" : "settings.saveSettings")}</button></div>
     </div>}
   </article>;
 }
@@ -1321,7 +1343,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
 function Downloads({ jobs, halt, refresh, onError, onReveal }: { jobs: DownloadJob[]; halt: QueueHalt | null; refresh: () => Promise<void>; onError: (e: unknown) => void; onReveal: (target: string) => void }) {
   const active = jobs.filter((job) => job.status === "downloading"); const totalSpeed = active.reduce((sum, job) => sum + job.speed, 0); const eta = (job: DownloadJob) => job.speed > 0 && job.total ? fmtEta((job.total - job.received) / job.speed) : "—";
   const action = async (operation: () => Promise<void>) => { try { await operation(); await refresh(); } catch (error) { onError(error); } };
-  return <section className="downloads-page"><div className="download-title"><Heading eyebrow="STAHOVÁNÍ" title="Fronta"/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> Vyčistit dokončené</button></div>{halt && <div className="queue-halt" role="status">{halt.message} Po uvolnění místa fronta pokračuje sama.</div>}<div className="summary"><div><b>{jobs.length}</b><span>položek</span></div><div><b>{active.length}</b><span>probíhá</span></div><div><b>{speed(totalSpeed)}</b><span>celková rychlost</span></div></div><div className="panel downloads" tabIndex={0} role="region" aria-label="Fronta stahování"><div className="download-head"><span>Název</span><span>Stav</span><span>Průběh</span><span>Rychlost / zbývá</span><span>Akce</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}>{job.title}</button> : <strong>{job.title}</strong>}<small>{job.target || (job.pending ? "Zdroj se vybere při stahování" : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions">{job.status === "completed" && job.target && <button title="Zobrazit v knihovně" onClick={() => onReveal(job.target)}><HardDrive/></button>}<button title="Nahoru" disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title="Dolů" disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title="Pozastavit" onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title="Pokračovat" onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title="Zkusit znovu" onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title="Odstranit z fronty" onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title="Fronta je prázdná" text="Vyberte HTTP zdroj nebo torrent s Real-Debrid a použijte tlačítko Do knihovny."/>}</div></section>;
+  return <section className="downloads-page"><div className="download-title"><Heading eyebrow={t("downloads.eyebrow")} title={t("downloads.title")}/><button disabled={!jobs.some((job) => job.status === "completed")} onClick={() => action(api.clearCompleted)}><Trash2/> {t("downloads.clearCompleted")}</button></div>{halt && <div className="queue-halt" role="status">{halt.message} {t("downloads.haltResumes")}</div>}<div className="summary"><div><b>{jobs.length}</b><span>{t("downloads.itemsLabel")}</span></div><div><b>{active.length}</b><span>{t("downloads.running")}</span></div><div><b>{speed(totalSpeed)}</b><span>{t("downloads.totalSpeed")}</span></div></div><div className="panel downloads" tabIndex={0} role="region" aria-label={t("downloads.queueLabel")}><div className="download-head"><span>{t("downloads.colName")}</span><span>{t("downloads.colStatus")}</span><span>{t("downloads.colProgress")}</span><span>{t("downloads.colSpeed")}</span><span>{t("downloads.colActions")}</span></div>{jobs.map((job)=><div className="download-row" key={job.id}><div className="download-job">{job.status === "completed" && job.target ? <button className="link-button job-link" title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}>{job.title}</button> : <strong>{job.title}</strong>}<small>{job.target || (job.pending ? t("downloads.sourcePickedLater") : "")}{job.error ? ` · ${job.error}`:""}</small></div><span className={`job-status ${job.status}`}>{statusLabel(job.status)}</span><div className="download-progress"><span>{job.status === "waiting" ? `${job.debridProgress ?? 0} %` : `${bytes(job.received)} / ${bytes(job.total)}`}</span><div className="progress"><i style={{width:`${job.status === "waiting" ? Math.min(100, job.debridProgress ?? 0) : job.total ? Math.min(100, job.received/job.total*100):0}%`}}/></div></div><span className="download-speed">{speed(job.speed)}<small>{eta(job)}</small></span><div className="queue-actions">{job.status === "completed" && job.target && <button title={t("downloads.showInLibrary")} onClick={() => onReveal(job.target)}><HardDrive/></button>}<button title={t("downloads.moveUp")} disabled={job.order === 0 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, -1))}><ArrowUp/></button><button title={t("downloads.moveDown")} disabled={job.order === jobs.length - 1 || job.status === "downloading"} onClick={() => action(() => api.moveDownload(job.id, 1))}><ArrowDown/></button>{job.status === "downloading" || job.status === "queued" || job.status === "waiting" ? <button title={t("player.pause")} onClick={() => action(() => api.downloadAction(job.id,"pause"))}><Pause/></button> : job.status === "paused" ? <button title={t("library.continue")} onClick={() => action(() => api.downloadAction(job.id,"resume"))}><Play/></button> : job.status === "failed" ? <button title={t("downloads.retry")} onClick={() => action(() => api.downloadAction(job.id,"retry"))}><RefreshCw/></button> : null}<button className="danger" title={t("downloads.removeFromQueue")} onClick={() => action(() => api.removeDownload(job.id))}><Trash2/></button></div></div>)}{!jobs.length && <Empty icon={<Download/>} title={t("downloads.emptyTitle")} text={t("downloads.emptyText")}/>}</div></section>;
 }
 const fmtEta = (seconds: number) => seconds < 60 ? `${Math.ceil(seconds)} s` : seconds < 3600 ? `${Math.ceil(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.ceil((seconds % 3600) / 60)} min`;
-const statusLabel = (status: DownloadJob["status"]) => ({ queued: "Ve frontě", waiting: "Čeká na Real-Debrid", downloading: "Stahuji", paused: "Pozastaveno", completed: "Dokončeno", failed: "Chyba" })[status];
+const statusLabel = (status: DownloadJob["status"]) => t(({ queued: "downloads.status.queued", waiting: "downloads.status.waiting", downloading: "downloads.status.downloading", paused: "downloads.status.paused", completed: "downloads.status.completed", failed: "downloads.status.failed" } as const)[status]);

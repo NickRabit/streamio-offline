@@ -6,6 +6,7 @@ import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 import { detectCapabilities } from "./capabilities";
+import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
 interface Props { open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
@@ -85,7 +86,7 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
     className={`timeline-bar${dragging ? " scrubbing" : ""}`}
     role="slider"
     tabIndex={0}
-    aria-label="Pozice videa"
+    aria-label={t("player.position")}
     aria-valuemin={0}
     aria-valuemax={Math.round(max)}
     aria-valuenow={Math.round(Math.min(value, max))}
@@ -108,15 +109,15 @@ function TimelineBar({ value, max, onScrub, onSeek, onReveal }: {
 }
 
 const supports = (type: string) => {
-  try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE není k dispozici */ }
+  try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE may be unavailable */ }
   try { return document.createElement("video").canPlayType(type) !== ""; } catch { return false; }
 };
 const capabilities = (): Capabilities => detectCapabilities(supports, navigator.userAgent, navigator.maxTouchPoints);
 
-const MODE_LABEL: Record<PlaybackMode, string> = {
-  direct: "PŘÍMÉ PŘEHRÁNÍ · BEZ PŘEVODU",
-  remux: "PŘEBALENO · VIDEO BEZ PŘEKÓDOVÁNÍ",
-  transcode: "PŘEKÓDOVÁNO",
+const MODE_KEY: Record<PlaybackMode, Key> = {
+  direct: "player.mode.direct",
+  remux: "player.mode.remux",
+  transcode: "player.mode.transcode",
 };
 
 /** Overlay fullscreen keeps the HTML cue layer. Native cues are only for the
@@ -130,12 +131,13 @@ const nativeVideoFullscreen = (video: HTMLVideoElement, overlay: HTMLElement | n
 /** Keys the player claims for itself. Anything else (Escape) leaves focus alone. */
 const SHORTCUT_KEYS = new Set([" ", "k", "ArrowLeft", "ArrowRight", "c", "t", "f"]);
 
-/** Cílové kvality překódování; hodnoty musí odpovídat QUALITY_BITRATE na serveru. */
+/** Target transcode qualities; the values must match QUALITY_BITRATE on the server. */
 const QUALITIES = [1080, 720, 480];
 const lowerQuality = (current: number | null) => current === null || current === 1080 ? 720 : current === 720 ? 480 : null;
 
 const CHANNELS: Record<number, string> = { 1: "mono", 2: "stereo", 6: "5.1", 8: "7.1" };
-/** Soubory běžně označí víc stop stejným jazykem, takže musí být poznat i podle něčeho jiného. */
+/** Files routinely tag several tracks with the same language, so a track has to be
+ *  recognisable by something else as well. */
 const trackLabel = (track: Track) => {
   const parts = [label(track.language)];
   if (track.title) parts.push(track.title);
@@ -145,6 +147,8 @@ const trackLabel = (track: Track) => {
 };
 
 export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+  // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
+  useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
   const overlayRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -194,14 +198,14 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
-  // Hláška o navázání má informovat, ne překážet; po pěti sekundách zmizí.
+  // The resumed-at notice should inform, not get in the way; it leaves after five seconds.
   useEffect(() => {
     if (!resumedFrom) return;
     const timer = setTimeout(() => setResumedFrom(0), 5000);
     return () => clearTimeout(timer);
   }, [resumedFrom]);
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
-  // Soubor z knihovny už na disku je, nabízet jeho stažení nedává smysl.
+  // A library file is already on disk, so offering to download it makes no sense.
   const isLocal = stream?.kind === "library";
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
@@ -315,10 +319,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     if (mode === "direct") { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
     if (Hls.isSupported()) {
-      // Delší buffer na obě strany znamená, že běžné přeskočení o pár sekund vyřídí
-      // prohlížeč sám okamžitě, místo restartu FFmpeg na serveru.
-      // maxBufferHole přemostí drobné mezery na hranicích segmentů (kopie videa řeže jen
-      // na klíčových snímcích), místo aby na nich přehrávání zamrzlo.
+      // A longer buffer on both sides means the browser handles an ordinary few-second
+      // skip itself, immediately, instead of restarting FFmpeg on the server.
+      // maxBufferHole bridges the small gaps at segment boundaries (a video copy only cuts
+      // on key frames) instead of letting playback freeze on them.
       const hls = new Hls({ ...HLS_PLAYER_CONFIG });
       hlsRef.current = hls;
       hls.on(Hls.Events.MANIFEST_PARSED, () => { if (autoplay) void video.play().catch(() => undefined); });
@@ -342,19 +346,19 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
           recoverFromDecodeRef.current(data.details);
           return;
         }
-        abandon(`Přehrávání selhalo: ${data.details} (${data.type})`);
+        abandon(t("player.playbackFailed", { details: data.details, type: data.type }));
       });
       hls.loadSource(url); hls.attachMedia(video);
     } else if (video.canPlayType("application/vnd.apple.mpegurl")) { video.src = url; if (autoplay) void video.play().catch(() => undefined); }
     else {
       report("ERROR", "The browser supports neither MSE nor native HLS", { ...context(), userAgent: navigator.userAgent });
-      setError("Tento prohlížeč nepodporuje HLS přehrávání.");
+      setError(t("player.noHls"));
     }
   };
 
   const showTime = (value: number) => { timeRef.current = value; setTime(value); };
 
-  /** Společný popis relace: bez něj je hlášení o chybě jen holé "nepřehrálo se". */
+  /** Shared description of the session: without it an error report is a bare "it did not play". */
   const context = () => ({
     session: sessionRef.current ?? undefined, mode: modeRef.current, position: Math.round(timeRef.current),
     offset: Math.round(offsetRef.current), title,
@@ -380,7 +384,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
     decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
-    // Rozkoukané: server zná pozici, přehrávání se rovnou spustí odtamtud.
+    // Resuming: the server knows the position and starts playback right there.
     (async () => {
       const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
       const from = saved && saved.position > 30 ? saved.position : 0;
@@ -393,13 +397,13 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         ...context(), mode: created.mode, hardware: created.hardware, acceleration: created.acceleration,
         video: created.video, audio: created.audio, resumedFrom: Math.round(from), capabilities: capabilities(),
       });
-      // Server nemusí pro direct play spouštět FFmpeg, takže počáteční čas nastaví
-      // přímo video element. U remuxu/transcode už je posun zahrnutý v URL relace.
+      // For direct play the server need not start FFmpeg, so the video element sets the
+      // starting time itself. With remux/transcode the offset is already in the session URL.
       if (from > 0 && created.mode === "direct") {
         const move = () => { if (!disposed) { video.currentTime = from; showTime(from); } };
         if (video.readyState >= 1) move(); else video.addEventListener("loadedmetadata", move, { once: true });
       }
-      // Vestavěné titulky si vybral server; když žádné nesedí, zkusíme preferovaný jazyk z doplňků.
+      // The server picked the embedded subtitles; if none fit, try the preferred language from addons.
       if (created.subtitleTrack === null && !created.sidecarUrl) {
         setAddonSubtitle(addonSubtitles.find((item) => (item.lang ?? "").toLowerCase().startsWith(subtitleLanguage)) ?? null);
       }
@@ -433,7 +437,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     return () => { stop = true; };
   }, [session?.sidecarUrl]);
 
-  /** Uvnitř vyrobené části skočíme okamžitě, jinak necháme převod začít znovu od nové pozice. */
+  /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
   const seekTo = async (target: number, forceRestart = false) => {
     const video = videoRef.current; if (!video) return;
     const bounded = Math.max(0, duration ? Math.min(target, duration - 1) : target);
@@ -476,15 +480,15 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
           const message = value instanceof Error ? value.message : String(value);
-          if (!(value instanceof ApiError && value.code === "RESOURCE_NOT_FOUND") && !message.includes("Relace přehrávání už neexistuje")) throw value;
-          // Server mohl být mezitím restartován nebo uklidit nečinnou relaci.
-          // Nová HLS relace začne rovnou na cíli; přímý stream si posune prohlížeč.
+          if (!(value instanceof ApiError) || !["RESOURCE_NOT_FOUND", "PLAYBACK_SESSION_GONE"].includes(value.code ?? "")) throw value;
+          // The server may have restarted in the meantime, or cleaned up an idle session.
+          // A new HLS session starts at the target; a direct stream is moved by the browser.
           next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId));
           id = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
         if (epoch !== seekEpochRef.current) return;
-        // Když uživatel mezitím vybral jiné místo, starou generaci ani nepřipojujeme.
+        // If the viewer picked another spot meanwhile, the old generation is never attached.
         if (pendingSeekRef.current !== null) continue;
         applySession(next, autoplay);
         if (recoveredDirectAt !== null) {
@@ -509,7 +513,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     if (abandonedRef.current || seekInFlightRef.current) return;
     const action = planDecodeRecovery(modeRef.current, decodeRecoversRef.current);
     if (action === "give-up") {
-      abandon("Prohlížeč nedokázal přehrát tento stream.");
+      abandon(t("player.browserRefused"));
       return;
     }
     decodeRecoversRef.current = recordDecodeRecover(decodeRecoversRef.current);
@@ -518,7 +522,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     void seekTo(timeRef.current, true);
   };
 
-  /** Jiná stopa nebo kvalita znamená jiné mapování pro FFmpeg, takže se převod restartuje na aktuální pozici. */
+  /** Another track or quality means another FFmpeg mapping, so the conversion restarts at the current position. */
   const changeTrack = async (changes: { audio?: number; subtitle?: number | null; quality?: number | null }) => {
     const id = sessionRef.current; if (!id) return;
     const at = timeRef.current;
@@ -526,12 +530,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
     video?.pause();
     try {
-      // Když spojení selže cestou, server přepnutí stejně provede a stav se rozejde;
-      // druhý pokus vrátí to, v čem relace opravdu je.
+      // If the connection fails on the way, the server still performs the switch and the two
+      // states drift apart; a second attempt returns what the session really holds.
       const next = await api.setTrack(id, { ...changes, time: at })
         .catch((error) => { if (error instanceof ApiError) throw error; return api.setTrack(id, { ...changes, time: at }); });
       applySession(next);
-      // Návrat na originál může skončit přímým přehráváním od nuly; pozici si posuneme sami.
+      // Going back to the original may end as direct playback from zero; we move the position ourselves.
       if (next.mode === "direct" && at > 0) {
         const moveDirect = () => { const current = videoRef.current; if (current) current.currentTime = at; showTime(at); };
         if (videoRef.current && videoRef.current.readyState >= 1) moveDirect();
@@ -551,7 +555,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     void changeTrack({ quality: value });
   };
 
-  /** Mikrozadrhnutí do 400 ms hlášku vůbec nerozsvítí; blikala by při každém dorovnání bufferu. */
+  /** A micro-stall under 400 ms never lights the notice up; it would blink on every buffer top-up. */
   const showBufferSoon = () => {
     if (bufferTimerRef.current !== undefined) return;
     bufferTimerRef.current = window.setTimeout(() => { bufferTimerRef.current = undefined; setBuffering(true); }, 400);
@@ -561,7 +565,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     setBuffering(false);
   };
 
-  /** Opakované zadrhnutí mimo seek je signál slabé linky; nabídneme nižší kvalitu. */
+  /** Repeated stalls outside a seek signal a weak link; offer a lower quality. */
   const noteStall = () => {
     showBufferSoon();
     const video = videoRef.current;
@@ -569,11 +573,11 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     const now = Date.now();
     stallsRef.current = [...stallsRef.current.filter((at) => now - at < 60_000), now];
     if (stallsRef.current.length < 3) return;
-    // Nižší kvalita srazí datový tok, takže zadrhávání kvůli síti skutečně spraví.
-    // Znamená ale překódování, a to bez hardwarové akcelerace slabý procesor
-    // nestíhá -- pak by rada uškodila víc, než pomohla. Ptáme se proto serveru,
-    // jestli akceleraci má; příznak hardware to neřekne, ten je při přebalení
-    // vždy nepravdivý, protože se v něm VAAPI nepoužívá.
+    // A lower quality cuts the bitrate, so it really does fix stalling caused by the network.
+    // It also means transcoding, which a weak CPU cannot keep up with unaided -- the advice
+    // would then hurt more than it helps. So we ask the server whether it has acceleration;
+    // the hardware flag does not answer that, being always false while remuxing, where VAAPI
+    // is not used at all.
     report("WARN", "Playback keeps stalling", {
       ...context(), stalls: stallsRef.current.length, quality: session?.quality ?? null,
       hardware: session?.hardware, acceleration: session?.acceleration,
@@ -592,7 +596,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     setAddonSubtitle(value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null);
   };
 
-  // Pozici hlásíme po deseti sekundách a ještě jednou při zavření, ať se nic neztratí.
+  // The position is reported every ten seconds and once more on close, so nothing is lost.
   useEffect(() => {
     if (!open || !progressKey) return;
     const send = () => {
@@ -640,8 +644,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     return clearControlsTimer;
   }, [open, paused, buffering, error, scrub]);
 
-  /** Fullscreen musí obsahovat celou naši vrstvu. iOS umí u videa jen vlastní
-   * přehrávač, který u průběžně vznikajícího HLS nezná délku celého filmu. */
+  /** Fullscreen has to contain our whole layer. On iOS a video only gets the system
+   * player, which does not know the full length of an HLS stream still being produced. */
   const enterBrowserFullscreen = async () => {
     if (document.fullscreenElement) return true;
     const node = overlayRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
@@ -654,7 +658,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         await node.webkitRequestFullscreen();
         return true;
       }
-    } catch { /* Bez uživatelského gesta může prohlížeč automatický fullscreen odmítnout. */ }
+    } catch { /* Without a user gesture the browser may refuse automatic fullscreen. */ }
     return false;
   };
 
@@ -664,13 +668,13 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       return;
     }
     if (cssFullscreen) { setCssFullscreen(false); return; }
-    // Safari na iPhonu nepodporuje fullscreen běžného elementu. Místo přechodu
-    // do nativního video přehrávače použijeme kompaktní vrstvu přes celý viewport.
+    // Safari on iPhone does not support fullscreen for an ordinary element. Instead of
+    // handing over to the native video player we use a compact layer over the whole viewport.
     if (!await enterBrowserFullscreen()) setCssFullscreen(true);
   };
 
-  /** Otočení telefonu na šířku maximalizuje přehrávač a, dovolí-li to prohlížeč,
-   * přejde i do nativního fullscreenu. CSS varianta funguje vždy. */
+  /** Turning the phone to landscape maximises the player and, if the browser allows it,
+   * enters native fullscreen too. The CSS variant always works. */
   useEffect(() => {
     if (!open) { setMobileLandscape(false); setCssFullscreen(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
@@ -702,7 +706,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     };
   }, [open]);
 
-  /** Přehrávání běží dál; do fronty se přidá tentýž stream, který právě hraje. */
+  /** Playback keeps running; the queue gets the very stream that is playing. */
   const download = async () => {
     if (downloadState !== "idle") return;
     setDownloadState("busy");
@@ -723,8 +727,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     setCssFullscreen(false);
     const fullscreen = document.fullscreenElement;
     onClose();
-    // Nejdřív sundáme overlay, teprve potom fullscreen. Jinak Safari při křížku
-    // nahoře vysune záložky ještě přes video.
+    // The overlay goes first, fullscreen second. Otherwise Safari slides its tabs out
+    // over the video when the close button is up there.
     if (fullscreen) window.setTimeout(() => {
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
     }, 80);
@@ -763,8 +767,8 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
 
   return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls}>
     <div className="player-head">
-      <div><small>{session ? MODE_LABEL[session.mode] : "PŘIPRAVUJI"}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
-      <button className="icon-button" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
+      <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.hardware ? " · VAAPI" : ""}</small><strong>{title}</strong></div>
+      <button className="icon-button" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
     </div>
     <div className="player-host">
       <video ref={videoRef} playsInline
@@ -784,20 +788,20 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
             networkState: videoRef.current?.networkState, readyState: videoRef.current?.readyState,
           });
           if (media?.code === 3) { recoverFromDecodeRef.current("element"); return; }
-          abandon("Prohlížeč nedokázal přehrát tento stream.");
+          abandon(t("player.browserRefused"));
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label="Titulky" default />
+          ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
-      {resumedFrom > 0 && <div className="player-resumed">Navázáno na {fmt(resumedFrom)}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>Přehrát od začátku</button></div>}
-      {buffering && !error && <div className="player-buffer">Načítám…</div>}
+      {resumedFrom > 0 && <div className="player-resumed">{t("player.resumedAt", { time: fmt(resumedFrom) })}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>{t("player.playFromStart")}</button></div>}
+      {buffering && !error && <div className="player-buffer">{t("common.loading")}</div>}
       {error && <div className="player-error">{error}</div>}
       {qualityHint !== null && !error && <div className="player-hint">
-        <span>Přehrávání se zadrhává.</span>
-        <button onClick={() => changeQuality(qualityHint)}>Snížit kvalitu na {qualityHint}p</button>
-        <button className="icon-button" aria-label="Skrýt doporučení" onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
+        <span>{t("player.stalling")}</span>
+        <button onClick={() => changeQuality(qualityHint)}>{t("player.lowerQualityTo", { height: qualityHint })}</button>
+        <button className="icon-button" aria-label={t("player.hideHint")} onClick={() => { stallsRef.current = []; setQualityHint(null); }}><X /></button>
       </div>}
     </div>
     <div className="timeline">
@@ -809,25 +813,25 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       <span>{fmt(duration)}</span>
     </div>
     <div className="player-controls">
-      <button className="icon-button player-close-control" aria-label="Zavřít přehrávač" onClick={closePlayer}><X /></button>
+      <button className="icon-button player-close-control" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
       <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
-      <button className="play-toggle" aria-label={paused ? "Přehrát" : "Pozastavit"} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
+      <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
       <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
       <Volume2 />
-      <input aria-label="Hlasitost" className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
+      <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
-      {session && <label className="track-picker" title="Kvalita">
+      {session && <label className="track-picker" title={t("player.quality")}>
         <SlidersHorizontal />
-        <select aria-label="Kvalita" value={session.quality ?? "original"}
+        <select aria-label={t("player.quality")} value={session.quality ?? "original"}
           onChange={(event) => changeQuality(event.target.value === "original" ? null : Number(event.target.value))}>
-          <option value="original">Originál</option>
+          <option value="original">{t("player.qualityOriginal")}</option>
           {QUALITIES.map((height) => <option key={height} value={height}>{height}p</option>)}
         </select>
       </label>}
 
-      {(session?.audioTracks.length ?? 0) > 1 && <label className="track-picker" title="Zvuková stopa">
+      {(session?.audioTracks.length ?? 0) > 1 && <label className="track-picker" title={t("player.audioTrack")}>
         <AudioLines />
-        <select aria-label="Zvuková stopa" value={session?.audioTrack ?? 0} onChange={(event) => void changeTrack({ audio: Number(event.target.value) })}>
+        <select aria-label={t("player.audioTrack")} value={session?.audioTrack ?? 0} onChange={(event) => void changeTrack({ audio: Number(event.target.value) })}>
           {session?.audioTracks.map((track) => <option key={track.index} value={track.index}>{trackLabel(track)}</option>)}
         </select>
       </label>}
@@ -835,28 +839,28 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0) && <div className="track-picker">
         <button className={`picker-toggle${subtitlesHidden ? " off" : ""}`} disabled={subtitleValue === "off"}
           onClick={() => setSubtitlesHidden(!subtitlesHidden)}
-          title={subtitleValue === "off" ? "Titulky" : subtitlesHidden ? "Zobrazit titulky (C)" : "Skrýt titulky (C)"}
-          aria-pressed={!subtitlesHidden} aria-label={subtitlesHidden ? "Zobrazit titulky" : "Skrýt titulky"}>
+          title={subtitleValue === "off" ? t("player.subtitles") : subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")}
+          aria-pressed={!subtitlesHidden} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")}>
           {subtitlesHidden ? <CaptionsOff /> : <Captions />}
         </button>
-        <select aria-label="Titulky" value={subtitleValue} onChange={(event) => void chooseSubtitle(event.target.value)}>
-          <option value="off">Vypnuto</option>
-          {session?.subtitleTracks.map((track) => <option key={`e${track.index}`} value={`embedded:${track.index}`}>Vestavěné · {trackLabel(track)}</option>)}
-          {addonSubtitles.map((item, index) => <option key={`a${index}`} value={`addon:${index}`}>Doplněk · {label(item.lang)}{item.addonName ? ` · ${item.addonName}` : ""}</option>)}
+        <select aria-label={t("player.subtitles")} value={subtitleValue} onChange={(event) => void chooseSubtitle(event.target.value)}>
+          <option value="off">{t("player.subtitlesOff")}</option>
+          {session?.subtitleTracks.map((track) => <option key={`e${track.index}`} value={`embedded:${track.index}`}>{t("player.embedded")} · {trackLabel(track)}</option>)}
+          {addonSubtitles.map((item, index) => <option key={`a${index}`} value={`addon:${index}`}>{t("player.fromAddon")} · {label(item.lang)}{item.addonName ? ` · ${item.addonName}` : ""}</option>)}
         </select>
       </div>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}
-      {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"} onClick={onToggleFavorite}>
-        <Star/> <span>{favorite ? "V oblíbených" : "Oblíbené"}</span>
+      {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
+        <Star/> <span>{favorite ? t("favorite.on") : t("favorite.off")}</span>
       </button>}
-      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title="Uložit do knihovny na serveru" aria-label="Uložit do knihovny na serveru">
-        {downloadState === "done" ? <><Check /> <span>Ve frontě</span></> : <><HardDrive /> <span>{downloadState === "busy" ? "Přidávám…" : "Do knihovny"}</span></>}
+      {!isLocal && <button className="player-action" disabled={downloadState === "busy"} onClick={() => void download()} title={t("save.toLibraryHint")} aria-label={t("save.toLibraryHint")}>
+        {downloadState === "done" ? <><Check /> <span>{t("save.queued")}</span></> : <><HardDrive /> <span>{downloadState === "busy" ? t("save.adding") : t("save.toLibrary")}</span></>}
       </button>}
-      <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title="Uložit soubor do tohoto zařízení" aria-label="Uložit soubor do tohoto zařízení">
-        <Download /> <span>{deviceDownloadBusy ? "Připravuji…" : "Do zařízení"}</span>
+      <button className="player-action" disabled={deviceDownloadBusy} onClick={() => void downloadToDevice()} title={t("save.toDeviceHint")} aria-label={t("save.toDeviceHint")}>
+        <Download /> <span>{deviceDownloadBusy ? t("save.preparing") : t("save.toDevice")}</span>
       </button>
-      <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"} aria-label={cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}>{cssFullscreen ? <Minimize/> : <Maximize/>} <span>{cssFullscreen ? "Ukončit celou obrazovku" : "Celá obrazovka"}</span></button>
+      <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{cssFullscreen ? <Minimize/> : <Maximize/>} <span>{t(cssFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>
     </div>
   </div>;
 }

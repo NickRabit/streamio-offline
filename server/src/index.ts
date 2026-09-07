@@ -24,7 +24,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
-import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
+import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
 import type { AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
@@ -208,10 +208,13 @@ setInterval(() => {
 }, 1000).unref();
 
 app.get("/api/auth/me", (req, res) => {
-  if (needsSetup()) return res.json({ setup: true });
+  // The language rides along on the one call the sign-in and setup screens can make
+  // unauthenticated; without it they would render before knowing which one to use.
+  const language = store.settings().uiLanguage;
+  if (needsSetup()) return res.json({ setup: true, language });
   const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: "Nepřihlášeno." });
-  res.json({ username: user });
+  if (!user) return res.status(401).json({ error: "Nepřihlášeno.", language });
+  res.json({ username: user, language });
 });
 
 /** Založení účtu při prvním spuštění. Jde jen do chvíle, než nějaký účet existuje. */
@@ -221,12 +224,18 @@ app.post("/api/auth/setup", asyncRoute(async (req, res) => {
   const password = String(req.body.password ?? "");
   if (username.length < 3) throw new Error("Uživatelské jméno musí mít aspoň 3 znaky.");
   if (password.length < 6) throw new Error("Heslo musí mít aspoň 6 znaků.");
+  const language = isUiLanguage(req.body.language) ? req.body.language : undefined;
   const passwordHash = await hashPassword(password);
   const nextSecret = randomBytes(32).toString("hex");
-  await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
+  await store.update((state) => {
+    state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} };
+    // The first-run language choice is also the best guess at which audio and
+    // subtitles this household wants. Both stay editable in Settings afterwards.
+    if (language) state.settings = { ...state.settings, uiLanguage: language, audioLanguage: language, subtitleLanguage: language };
+  });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  log("INFO", "Account created on first run", { username });
-  res.status(201).json({ username });
+  log("INFO", "Account created on first run", { username, language });
+  res.status(201).json({ username, language: store.settings().uiLanguage });
 }));
 const logins = new LoginThrottle();
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
@@ -1156,8 +1165,9 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
-    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
-    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
+    if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) state.settings.uiLanguage = req.body.uiLanguage;
+    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? state.settings.audioLanguage;
+    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? state.settings.subtitleLanguage;
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);

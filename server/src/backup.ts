@@ -1,7 +1,7 @@
 import type { AddonDownloadSettings, AddonRecord, AddonRole } from "./types.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import { defaultSettings, type Settings } from "./store.js";
-import { normalizeLanguage } from "./language.js";
+import { isUiLanguage, normalizeLanguage } from "./language.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 export const BACKUP_VERSION = 1;
@@ -47,6 +47,9 @@ function parseSettings(value: unknown): Settings {
   const fallback = defaultSettings();
   const number = (name: keyof Settings, maximum: number) => Math.max(1, Math.min(maximum, Number(source[name]) || fallback[name] as number));
   const boolean = (name: keyof Settings) => typeof source[name] === "boolean" ? source[name] as boolean : fallback[name] as boolean;
+  // A backup taken before the interface was translated restores as Czech, the
+  // only language it could have been written in.
+  const uiLanguage = isUiLanguage(source.uiLanguage) ? source.uiLanguage : "cs";
   const audioLanguage = normalizeLanguage(String(source.audioLanguage ?? "")) ?? fallback.audioLanguage;
   const subtitleLanguage = normalizeLanguage(String(source.subtitleLanguage ?? "")) ?? fallback.subtitleLanguage;
   const streamSort = String(source.streamSort ?? "");
@@ -55,7 +58,7 @@ function parseSettings(value: unknown): Settings {
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
-    audioLanguage, subtitleLanguage,
+    uiLanguage, audioLanguage, subtitleLanguage,
     mergeByName: boolean("mergeByName"),
     streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,
     artworkLocation: source.artworkLocation === "media" ? "media" : "data",

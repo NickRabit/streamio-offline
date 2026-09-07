@@ -62,11 +62,11 @@ describe("copyText", () => {
 
   it("reports a refusal instead of failing silently", async () => {
     document.execCommand = vi.fn(() => false);
-    await expect(copyText("nope")).rejects.toThrow(/ručně/);
+    await expect(copyText("nope")).rejects.toThrow(/copy it by hand/);
   });
 
   it("reports a refusal when execCommand throws", async () => {
     document.execCommand = vi.fn(() => { throw new Error("blocked"); });
-    await expect(copyText("nope")).rejects.toThrow(/ručně/);
+    await expect(copyText("nope")).rejects.toThrow(/copy it by hand/);
   });
 });
