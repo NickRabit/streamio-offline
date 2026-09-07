@@ -314,6 +314,7 @@ export const en = {
   "library.markUnwatched": "Mark as unwatched",
   "library.downloadToDevice": "Save to this device",
   "library.continue": "Continue",
+  "library.thisFile": "This file",
 
   // Download queue.
   "downloads.eyebrow": "DOWNLOADS",

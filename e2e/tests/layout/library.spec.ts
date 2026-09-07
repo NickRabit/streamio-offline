@@ -90,3 +90,55 @@ test("show all opens the complete resume collection", async ({ page }) => {
   await page.getByRole("button", { name: "O složku zpět" }).click();
   await expect(page.getByRole("button", { name: "Zobrazit vše (10)" })).toBeVisible();
 });
+
+test("showing a finished download highlights the file in a crowded folder", async ({ page }) => {
+  const files = Array.from({ length: 24 }, (_, index) => ({
+    kind: "file" as const,
+    path: `Seriály/ep-${String(index + 1).padStart(2, "0")}.mkv`,
+    label: `Epizoda ${index + 1}`,
+    size: 1e9,
+    season: 1,
+    episode: index + 1,
+    modified: "2026-09-01",
+    poster: poster("#38516d"),
+    favorite: false,
+  }));
+  const wanted = files[17];
+  await page.route("**/api/downloads", (route) => {
+    if (route.request().method() !== "GET") return route.continue();
+    return route.fulfill({
+      json: {
+        jobs: [{
+          id: "job-1",
+          title: wanted.label,
+          status: "completed",
+          target: wanted.path,
+          received: 1e9,
+          total: 1e9,
+          speed: 0,
+          order: 0,
+          createdAt: "2026-09-01T00:00:00.000Z",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        }],
+        halt: null,
+      },
+    });
+  });
+  await page.route("**/api/library/browse?*", (route) => {
+    const folderPath = new URL(route.request().url()).searchParams.get("path") || "";
+    const items = folderPath === "Seriály"
+      ? files
+      : [{ kind: "folder", path: "Seriály", name: "Seriály", fileCount: files.length, size: 24e9, poster: poster("#38516d"), favorite: false }];
+    return route.fulfill({ json: { path: folderPath, items, total: items.length, pending: false } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Stahování", exact: true }).click();
+  await page.locator(".job-link").click();
+  const focused = page.locator(".browse-item.focused");
+  await expect(focused).toBeVisible();
+  await expect(focused).toHaveAttribute("aria-current", "true");
+  await expect(focused).toContainText("1×18 Epizoda 18");
+  await expect(focused).toContainText("Tento soubor");
+  await expect(focused).toBeInViewport();
+  await expect(page.locator(".browse-item")).toHaveCount(24);
+});

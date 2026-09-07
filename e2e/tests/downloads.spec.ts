@@ -21,4 +21,12 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   // The sample file is a few kilobytes, so it is finished long before the poll
   // interval matters.
   await expect(row.locator(".job-status")).toHaveText("Dokončeno", { timeout: 20_000 });
+
+  await row.locator(".job-link").click();
+  const focused = page.locator(".browse-item.focused");
+  await expect(focused).toBeVisible();
+  await expect(focused).toHaveAttribute("aria-current", "true");
+  await expect(focused).toContainText("Zkušební film");
+  await expect(focused).toContainText("Tento soubor");
+  await expect(focused).toBeInViewport();
 });

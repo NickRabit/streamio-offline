@@ -369,7 +369,21 @@ main.view-catalog{padding-top:98px}main.view-catalog .heading{margin-bottom:8px}
 button:focus{outline:none}
 button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 
-.job-link{display:block;text-align:left;font-weight:700;color:var(--text);text-decoration:none}.job-link:hover{color:var(--accent2);text-decoration:underline}.browse-item.focused .browse-art{border-color:var(--accent);animation:focus-pulse 2.4s ease-out}@keyframes focus-pulse{0%,60%{box-shadow:0 0 0 3px #ff5b3855}100%{box-shadow:0 0 0 0 #ff5b3800}}
+.job-link{display:block;text-align:left;font-weight:700;color:var(--text);text-decoration:none}.job-link:hover{color:var(--accent2);text-decoration:underline}
+
+/* Jump from the download queue: the file has to stand out in a crowded folder,
+   including series whose episodes share one poster. The pulse settles into a
+   static ring so the mark is still there after the motion stops. */
+.browse-item.focused{z-index:3;scroll-margin:96px 12px;border-radius:14px;background:#ff5b3818;outline:3px solid var(--accent);outline-offset:4px;animation:focus-pulse 1.4s ease-out 2}
+.browse-item.focused .browse-art{border-color:var(--accent);box-shadow:0 0 0 3px #ff5b3866}
+.browse-focus-mark{position:absolute;left:8px;right:8px;bottom:8px;z-index:3;font-style:normal;font-size:11px;font-weight:800;letter-spacing:.02em;text-align:center;padding:5px 8px;border-radius:7px;background:var(--accent);color:#fff;pointer-events:none}
+.browse-grid:has(.focused) .browse-item:not(.focused),.browse-rows:has(.focused) .browse-item:not(.focused){opacity:.42;transition:opacity .2s ease}
+.browse-grid:has(.focused) .browse-item:not(.focused):hover,.browse-rows:has(.focused) .browse-item:not(.focused):hover{opacity:1}
+.browse-rows .browse-item.focused{outline-offset:2px}
+.browse-rows .browse-focus-mark{display:none}
+.library-page .browse-rows .browse-item.focused .library-open{box-shadow:inset 4px 0 0 var(--accent);background:#ff5b3814}
+@keyframes focus-pulse{0%,100%{box-shadow:0 0 0 0 #ff5b3800}50%{box-shadow:0 0 0 10px #ff5b384d}}
+@media(prefers-reduced-motion:reduce){.browse-item.focused{animation:none}}
 
 /* Phone portrait and compact landscape cannot fit the five-column queue table. */
 @media(max-width:700px), (max-width:980px) and (max-height:500px) and (orientation:landscape){
