@@ -27,6 +27,8 @@ used from a browser on the home network.
   Range, and pauses itself when the disk fills up.
 - **A local library** of what you downloaded, with artwork, continue watching,
   and a list of your own.
+- **English or Czech**, chosen on first run and changeable in Settings. The
+  choice at setup also seeds the preferred audio and subtitle languages.
 - **One account, created on first run.** No default password, no anonymous
   access.
 - **Diagnostics in the UI** — grouped errors, a filterable log, and what

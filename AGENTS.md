@@ -9,7 +9,12 @@ The single set of rules for any coding agent working in this repository.
   itself; do not restate what a line already says.
 - All comments, documentation and specifications must be written in English.
   Older files still contain Czech comments — translate them only when you are
-  already editing that code. The application UI stays Czech.
+  already editing that code.
+- The interface is translated. Never put a user-visible string in a component:
+  add it to `web/src/i18n/en.ts` and `cs.ts` and call `t("key")`. `cs.ts` is
+  typed against `en.ts`, so a forgotten key fails the build. A message the
+  server sends to the interface carries English text plus a catalogue key
+  (`AppError`); one that only reaches the log stays plain English.
 
 ## Git workflow
 
