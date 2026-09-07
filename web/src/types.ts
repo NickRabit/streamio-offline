@@ -15,7 +15,7 @@ export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean;
 export interface Video { id?: string; title?: string; name?: string; season?: number; episode?: number; released?: string; overview?: string; thumbnail?: string; [key: string]: unknown }
 export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
 export interface Stream {
-  sourceId: string; kind: "remote" | "library" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
+  sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeStreams, streamSize, streamText, type StreamFilters } from "./streams";
+import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamSize, streamText, visibleCatalogStreams, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -113,5 +113,33 @@ describe("arrangeStreams", () => {
     const input = [...all];
     arrangeStreams(input, filters({ sort: "size-desc" }), "cs");
     expect(input).toEqual(all);
+  });
+});
+
+describe("torrent listing", () => {
+  const http = stream({ name: "http", playable: true, kind: "remote", title: "Czech 1 GB" });
+  const torrent = stream({ name: "torrent", playable: false, kind: "torrent", title: "Czech 8 GB" });
+  const external = stream({ name: "ext", playable: false, kind: "unsupported", title: "Czech 2 GB" });
+
+  it("hides torrents until a debrid token is configured", () => {
+    expect(names(visibleCatalogStreams([torrent, http], filters(), "cs", new Map(), false))).toEqual(["http"]);
+    expect(names(visibleCatalogStreams([torrent, http], filters(), "cs", new Map(), true))).toEqual(["torrent", "http"]);
+  });
+
+  it("prefers a playable HTTP source over a torrent", () => {
+    expect(pickDefaultStream([torrent, http])?.name).toBe("http");
+    expect(pickDefaultStream([torrent])?.name).toBe("torrent");
+  });
+
+  it("labels torrents as RD, not as a generic external source", () => {
+    expect(streamBadge(http)).toBe("HTTP");
+    expect(streamBadge(torrent)).toBe("RD");
+    expect(streamBadge(external)).toBe("EXT");
+  });
+
+  it("lets a torrent be queued only when Real-Debrid is configured", () => {
+    expect(canQueue(torrent, false)).toBe(false);
+    expect(canQueue(torrent, true)).toBe(true);
+    expect(canQueue(http, false)).toBe(true);
   });
 });

@@ -9,7 +9,7 @@ import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
-import { arrangeStreams, streamLanguages, streamSize, type StreamSort } from "./streams";
+import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Volby prohlížení knihovny přežijí přepnutí sekce i restart prohlížeče.
@@ -522,16 +522,20 @@ export function App() {
 
   // Priorita doplňku je jeho pořadí v seznamu; nastavuje se šipkami na kartě doplňku.
   const addonPriority = useMemo(() => new Map(addons.map((addon, index) => [addon.manifest.name, index])), [addons]);
+  const listedStreams = useMemo(
+    () => settings.realDebridConfigured ? streams : streams.filter((stream) => stream.kind !== "torrent"),
+    [streams, settings.realDebridConfigured]);
+  const hiddenTorrents = listedStreams.length < streams.length;
   const visibleStreams = useMemo(
-    () => arrangeStreams(streams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority),
-    [streams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
+    () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true),
+    [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
   // Počty v každé nabídce platí pro to, co projde tím druhým filtrem, jinak by si odporovaly.
   const byLanguage = useMemo(
-    () => streamLanguage ? streams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : streams,
-    [streams, streamLanguage]);
+    () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : listedStreams,
+    [listedStreams, streamLanguage]);
   const byAddon = useMemo(
-    () => streamAddon ? streams.filter((stream) => stream.addonName === streamAddon) : streams,
-    [streams, streamAddon]);
+    () => streamAddon ? listedStreams.filter((stream) => stream.addonName === streamAddon) : listedStreams,
+    [listedStreams, streamAddon]);
 
   const streamAddons = useMemo(() => {
     const counts = new Map<string, number>();
@@ -550,9 +554,10 @@ export function App() {
   // Když filtr odstraní vybraný zdroj, výběr se posune na první zbylý.
   useEffect(() => {
     if (!visibleStreams.length) { if (selectedStream) setSelectedStream(null); return; }
-    if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(visibleStreams[0]); return; }
+    const preferred = pickDefaultStream(visibleStreams);
+    if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(preferred ?? null); return; }
     // Během donačítání může přijít lepší zdroj; vlastní volbu uživatele ale nepřebíjíme.
-    if (!pickedRef.current && pendingSources > 0 && selectedStream !== visibleStreams[0]) setSelectedStream(visibleStreams[0]);
+    if (!pickedRef.current && pendingSources > 0 && preferred && selectedStream !== preferred) setSelectedStream(preferred);
   }, [visibleStreams, pendingSources]);
 
   /** Obsah vlastních seznamů se počítá z paměti; nesmí procházet plným načtením,
@@ -633,7 +638,7 @@ export function App() {
     ? { kind: "episode", title: selected?.name, season: selectedVideo.season, episode: selectedVideo.episode, episodeTitle: selectedVideo.title || selectedVideo.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster }
     : { kind: "movie", title: selected?.name, id: selected?.id, metaType: selected?.type, poster: selected?.poster };
   const enqueue = async () => {
-    if (!selectedStream) return false;
+    if (!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)) return false;
     // Server podle toho poskládá cestu; bez těchto údajů by z epizody byl placatý soubor.
     const media = selectedMedia();
     try { await api.download(videoTitle, selectedStream, media); notify("Přidáno do stahovací fronty."); await loadDownloads(); return true; } catch (e) { fail(e); return false; }
@@ -776,15 +781,17 @@ export function App() {
                   <option value="size-asc">Od nejmenšího</option>
                   <option value="addon">Podle priority doplňku</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.playable ? "HTTP" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">Ptám se doplňků…</div>}
-              {Boolean(streams.length) && !visibleStreams.length && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
+              {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">Doplňky vrátily jen torrenty. Bez tokenu Real-Debrid v <button className="link-button" onClick={() => openView("settings")}>Nastavení</button> je nelze stáhnout ani přehrát.</div>}
+              {Boolean(streams.length) && !visibleStreams.length && !(hiddenTorrents && !streamAddon && !streamLanguage) && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
               {selectedStream?.kind === "unsupported" && <p className="notice">Tento zdroj nelze bezpečně přehrát přes server. Vyberte jiný zdroj.</p>}
+              {selectedStream?.kind === "torrent" && <p className="notice">Real-Debrid torrent nejdřív stáhne k sobě. Přehrát půjde, až bude soubor na debridu nebo v knihovně.</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.playable} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.playable} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.playable} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
+                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.playable} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.playable} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>

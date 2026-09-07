@@ -54,3 +54,28 @@ export function arrangeStreams(streams: Stream[], filters: StreamFilters, prefer
   });
   return decorated.map((item) => item.stream);
 }
+
+export function visibleCatalogStreams(
+  streams: Stream[],
+  filters: StreamFilters,
+  preferredLanguage: string,
+  priority: Map<string, number>,
+  showTorrents: boolean,
+): Stream[] {
+  const arranged = arrangeStreams(streams, filters, preferredLanguage, priority);
+  return showTorrents ? arranged : arranged.filter((stream) => stream.kind !== "torrent");
+}
+
+export function pickDefaultStream(streams: Stream[]): Stream | undefined {
+  return streams.find((stream) => stream.playable) ?? streams[0];
+}
+
+export function streamBadge(stream: Stream): string {
+  if (stream.playable) return "HTTP";
+  if (stream.kind === "torrent") return "RD";
+  return "EXT";
+}
+
+export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
+  return stream.playable || (stream.kind === "torrent" && debridConfigured);
+}
