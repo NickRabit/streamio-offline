@@ -5,7 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 // extra one is a file to regenerate whenever the design legitimately changes.
 //
 // The images are only comparable when they are produced in one place, so they are
-// always generated inside the Playwright container. See TESTING.md.
+// always generated inside the Playwright container. See docs/testing.md.
 
 const settle = async (page: Page) => {
   // Posters come from the fixture addon; a half-loaded image would differ per run.

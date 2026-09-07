@@ -10,3 +10,8 @@ downloads/
 e2e/.tmp/
 test-results/
 playwright-report/
+
+# Local-only working documents: an unfinished security/perf spec and a
+# speculative desktop-distribution note. Neither describes shipped behaviour.
+PLAYER_SPEC.md
+FOLLOW_UP_MULTIPLATFORM.md

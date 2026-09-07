@@ -46,7 +46,7 @@ chromium`), `npm run test:e2e` is the faster loop.
 A deliberate design change will fail the screenshot baselines. Regenerate them
 with `npm run test:e2e:snapshots`, or run the **Update screenshot baselines**
 workflow on the branch; do not regenerate them to make an unexplained diff go
-away. See [TESTING.md](TESTING.md) for what belongs in which layer.
+away. See [docs/testing.md](docs/testing.md) for what belongs in which layer.
 
 The supported runtime is Docker:
 
@@ -71,4 +71,4 @@ User-facing features and fixes bump the patch version in the same PR
 `package-lock.json`). Docs and other non-shipping work do not.
 
 Issues and pull requests are the right place for bugs, small features, and
-documentation. Larger product questions belong in [PLAN.md](PLAN.md).
+documentation. Larger product questions belong in the [roadmap](docs/roadmap.md).
