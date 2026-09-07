@@ -96,6 +96,8 @@ export function App() {
   const [localPoster, setLocalPoster] = useState<string | undefined>(undefined);
   // The path the listing should scroll to and highlight after a jump from the download queue.
   const [browseFocus, setBrowseFocus] = useState<string | null>(null);
+  const focusScrolled = useRef<string | null>(null);
+  const focusTimer = useRef(0);
 
   const removeItem = async (itemPath: string, label: string, folder: boolean) => {
     setMenuFor(null);
@@ -397,17 +399,25 @@ export function App() {
   }, [view, browse, browseBusy, browsePath]);
 
   // The wanted entry need not be on the first page, so pages load until it turns up.
+  // Scroll and the hide timer run once per jump; a later artwork refresh must not repeat them.
   useEffect(() => {
-    if (view !== "library" || !browseFocus || !browse || browse.path !== browsePath) return;
+    if (!browseFocus) {
+      focusScrolled.current = null;
+      window.clearTimeout(focusTimer.current);
+      return;
+    }
+    if (view !== "library" || !browse || browse.path !== browsePath) return;
     if (!browse.items.some((item) => item.path === browseFocus)) {
       if (browseBusy) return;
       if (browse.items.length < browse.total) void loadBrowse(browsePath, browse.items.length);
       else setBrowseFocus(null);
       return;
     }
+    if (focusScrolled.current === browseFocus) return;
     document.querySelector(`[data-path="${CSS.escape(browseFocus)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
-    const timer = setTimeout(() => setBrowseFocus(null), 2600);
-    return () => clearTimeout(timer);
+    focusScrolled.current = browseFocus;
+    window.clearTimeout(focusTimer.current);
+    focusTimer.current = window.setTimeout(() => setBrowseFocus(null), 5000);
   }, [view, browse, browseBusy, browseFocus]);
 
   // Artwork is finished in the background; once it is ready the page refreshes itself.
@@ -425,6 +435,7 @@ export function App() {
     const slash = target.lastIndexOf("/");
     setMenuFor(null); setFromFavorites(false); setOnlyFavorites(false); setBrowseQuery("");
     setBrowsePath(slash > 0 ? target.slice(0, slash) : "");
+    focusScrolled.current = null;
     setBrowseFocus(target);
     setView("library");
     window.scrollTo(0, 0);
@@ -900,8 +911,9 @@ export function App() {
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
-                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path}><button className="library-open" onClick={() => playLocal(item.label, item.path, item.poster)}>
+                : <article className={`browse-item${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => playLocal(item.label, item.path, item.poster)}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
+                    {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
                     <small>{browsePath === ":resume" && item.progress ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) }) : bytes(item.size)}</small></span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>

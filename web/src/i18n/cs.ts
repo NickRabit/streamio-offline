@@ -310,6 +310,7 @@ export const cs: Catalog = {
   "library.markUnwatched": "Označit jako neshlédnuté",
   "library.downloadToDevice": "Uložit do tohoto zařízení",
   "library.continue": "Pokračovat",
+  "library.thisFile": "Tento soubor",
 
   // Fronta stahování.
   "downloads.eyebrow": "STAHOVÁNÍ",
