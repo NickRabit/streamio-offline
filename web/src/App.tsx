@@ -71,6 +71,7 @@ export function App() {
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [resumePreview, setResumePreview] = useState<BrowseResult | null>(null);
   const [favoritePreview, setFavoritePreview] = useState<BrowseResult | null>(null);
   const [browse, setBrowse] = useState<BrowseResult | null>(null);
   const [browsePath, setBrowsePath] = useState(""); const [browseQuery, setBrowseQuery] = useState("");
@@ -298,7 +299,9 @@ export function App() {
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
       // Favorites include entries from the entire library tree.
-      const page = target === ":favorites"
+      const page = target === ":resume"
+        ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
+        : target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
       if (request !== browseRequest.current || location !== browseLocation.current) return;
@@ -312,7 +315,9 @@ export function App() {
     const request = browseRequest.current;
     try {
       const options = { limit: Math.max(60, limit), sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
-      const page = browsePath === ":favorites"
+      const page = browsePath === ":resume"
+        ? await api.resumeLibrary({ ...options, query: browseQuery, favorites: onlyFavorites })
+        : browsePath === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: browsePath, query: browseQuery, favorites: onlyFavorites });
       if (location === browseLocation.current && request === browseRequest.current) setBrowse(page);
@@ -341,6 +346,7 @@ export function App() {
   useEffect(() => {
     if (!ready || view !== "library" || browsePath || browseQuery || onlyFavorites) return;
     let cancelled = false;
+    void api.resumeLibrary({ limit: 8 }).then((result) => { if (!cancelled) setResumePreview(result); }).catch(() => { if (!cancelled) setResumePreview(null); });
     void api.favorites({ limit: 12 }).then((result) => { if (!cancelled) setFavoritePreview(result); }).catch(() => { if (!cancelled) setFavoritePreview(null); });
     return () => { cancelled = true; };
   }, [ready, view, browse, browsePath, browseQuery, onlyFavorites]);
@@ -555,9 +561,10 @@ export function App() {
     itemsRef.current = virtualItems; setItems(virtualItems); setHasMore(false);
   }, [virtualCatalog, virtualItems]);
 
-  /** Pozice a hvězdička pro titul z katalogu; obojí se klíčuje stejně. */
-  // Knihovna ukazuje jen to, co na disku opravdu leží; tituly z katalogu patří do katalogu.
-  const localResume = useMemo(() => resume.filter((item) => item.key.startsWith("file:") && item.path), [resume]);
+  // The library preview includes existing local files; catalog progress stays separate.
+  const localResume = useMemo(() => resumePreview
+    ? resumePreview.items.flatMap((item) => item.kind === "file" && item.progress ? [{ key: `file:${item.path}`, path: item.path, title: item.label, poster: item.poster, updatedAt: item.modified, ...item.progress }] : [])
+    : resume.filter((item) => item.key.startsWith("file:") && item.path), [resumePreview, resume]);
   const catalogProgress = (item: Meta) => resume.find((entry) => entry.key === `${item.type || "movie"}:${item.id}`);
   const forgetCatalogWatched = async (item: Meta) => {
     setMenuFor(null);
@@ -776,7 +783,7 @@ export function App() {
       </section>}
       {view === "library" && <section className="library-page" onKeyDown={(event) => { if (event.key === "Escape") setMenuFor(null); }} onClick={() => menuFor && setMenuFor(null)}><Heading eyebrow="KNIHOVNA" title="Stažené soubory"/>
         {settings.showResumeRow && !browsePath && !onlyFavorites && localResume.length > 0 && <div className="resume-row">
-          <div className="subhead"><h3>Pokračovat ve sledování</h3><span>{localResume.length}</span></div>
+          <div className="subhead"><h3>Pokračovat ve sledování</h3><button className="resume-show-all" onClick={() => { setBrowseQuery(""); setOnlyFavorites(false); setFromFavorites(false); setMenuFor(null); setBrowseSort("added"); setBrowseDesc(true); setBrowsePath(":resume"); }}>Zobrazit vše ({resumePreview?.total ?? localResume.length}) <ChevronRight/></button></div>
           <div className="resume-strip">
             {localResume.slice(0, 8).map((item) => <button className="browse-item" key={item.key} onClick={() => {
               if (item.path) playLocal(item.title, item.path, item.poster);
@@ -794,13 +801,14 @@ export function App() {
         <div className="panel browse-panel">
         <div className="browse-bar">
           <nav className="crumbs" aria-label="Cesta v knihovně">
-            {browsePath && <button className="library-back" aria-label="O složku zpět" onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath === ":favorites") setFromFavorites(false); setBrowsePath(browsePath === ":favorites" ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
+            {browsePath && <button className="library-back" aria-label="O složku zpět" onClick={() => { setBrowseQuery(""); setMenuFor(null); if (browsePath.startsWith(":")) setFromFavorites(false); setBrowsePath(browsePath.startsWith(":") ? "" : browsePath.includes("/") ? browsePath.slice(0, browsePath.lastIndexOf("/")) : fromFavorites ? ":favorites" : ""); }}><ChevronLeft/></button>}
             <button onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(""); }} disabled={!browsePath}><HardDrive/> Knihovna</button>
             {(fromFavorites || browsePath === ":favorites") && <span>
               <ChevronRight/>
               <button disabled={browsePath === ":favorites"} onClick={() => { setBrowseQuery(""); setBrowsePath(":favorites"); }}>Oblíbené</button>
             </span>}
-            {browsePath !== ":favorites" && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
+            {browsePath === ":resume" && <span><ChevronRight/><button disabled>Pokračovat ve sledování</button></span>}
+            {!browsePath.startsWith(":") && browsePath.split("/").filter(Boolean).map((part, index, all) => <span key={part + index}>
               <ChevronRight/>
               <button disabled={index === all.length - 1} onClick={() => { setBrowseQuery(""); setBrowsePath(all.slice(0, index + 1).join("/")); }}>{part}</button>
             </span>)}
@@ -813,7 +821,7 @@ export function App() {
               // Dates and sizes start with the largest value; names start with A.
               setBrowseDesc(next === "added" || next === "size");
             }}>
-              <option value="name">Podle názvu</option><option value="added">Podle data přidání</option>
+              <option value="name">Podle názvu</option><option value="added">{browsePath === ":resume" ? "Naposledy sledované" : "Podle data přidání"}</option>
               <option value="size">Podle velikosti</option><option value="random">Náhodně</option>
             </select>
             <button title={browseDesc ? "Sestupně" : "Vzestupně"} onClick={() => setBrowseDesc((value) => !value)} disabled={browseSort === "random"}>
@@ -833,7 +841,7 @@ export function App() {
         </button>}
         {!browse || !browse.items.length
           ? (browseBusy ? <div className="loading">Načítám…</div>
-            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : browsePath === ":favorites" || onlyFavorites ? "Zatím žádné oblíbené" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : browsePath === ":favorites" || onlyFavorites ? "Přidejte soubor nebo složku do oblíbených přes nabídku se třemi tečkami." : "Dokončená stahování se tu objeví sama."}/>)
+            : <Empty icon={<HardDrive/>} title={browseQuery ? "Nic neodpovídá filtru" : browsePath === ":resume" ? "Nic rozkoukaného" : browsePath === ":favorites" || onlyFavorites ? "Zatím žádné oblíbené" : "Zatím nic staženého"} text={browseQuery ? "Zkuste jiný výraz." : browsePath === ":resume" ? "Rozkoukané soubory se tu objeví automaticky při sledování." : browsePath === ":favorites" || onlyFavorites ? "Přidejte soubor nebo složku do oblíbených přes nabídku se třemi tečkami." : "Dokončená stahování se tu objeví sama."}/>)
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "folder"
@@ -851,7 +859,7 @@ export function App() {
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <Film/>}{item.favorite && <i className="fav-mark"><Star/></i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{bytes(item.size)}</small></span><span className="library-action"><Play/> {item.progress ? "Pokračovat" : "Přehrát"}</span></button>
+                    <small>{browsePath === ":resume" && item.progress ? `zbývá ${fmtEta(Math.max(0, item.progress.duration - item.progress.position))}` : bytes(item.size)}</small></span><span className="library-action"><Play/> {item.progress ? "Pokračovat" : "Přehrát"}</span></button>
                     <button className="browse-menu" aria-label={`Možnosti: ${item.label}`} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {item.favorite ? "Odebrat z oblíbených" : "Přidat do oblíbených"}</button>

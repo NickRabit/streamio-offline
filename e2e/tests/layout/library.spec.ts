@@ -65,3 +65,28 @@ test("empty favorites explain how to add titles", async ({ page }) => {
   await expect(page.locator(".library-favorites")).toBeVisible();
   await expect(page.locator(".crumbs")).not.toContainText("Oblíbené");
 });
+
+test("show all opens the complete resume collection", async ({ page }) => {
+  const entries = Array.from({ length: 10 }, (_, index) => ({ ...file, path: `resume-${index}.mp4`, label: `Rozkoukaný film ${index}`, progress: { position: 120, duration: 2400 } }));
+  await page.route("**/api/library/resume?*", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    const filtered = entries.filter((item) => item.label.includes(params.get("query") || ""));
+    return route.fulfill({ json: { path: ":resume", items: filtered.slice(0, Number(params.get("limit") || 60)), total: filtered.length, pending: false } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(page.locator(".resume-strip .browse-item")).toHaveCount(8);
+  await page.getByRole("button", { name: "Zobrazit vše (10)" }).click();
+  await expect(page.locator(".crumbs")).toContainText("Pokračovat ve sledování");
+  await expect(page.locator(".browse-grid .library-open")).toHaveCount(10);
+  await expect(page.locator(".browse-grid .library-action").first()).toHaveText("Pokračovat");
+  await page.getByRole("textbox", { name: "Filtrovat knihovnu" }).fill("film 9");
+  await expect(page.locator(".browse-grid .library-open")).toHaveCount(1);
+  await page.getByRole("button", { name: "Zobrazit po řádcích" }).click();
+  await expect(page.locator(".browse-rows .library-open")).toHaveCount(1);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.getByRole("textbox", { name: "Filtrovat knihovnu" }).fill("nic takového");
+  await expect(page.getByText("Nic neodpovídá filtru", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "O složku zpět" }).click();
+  await expect(page.getByRole("button", { name: "Zobrazit vše (10)" })).toBeVisible();
+});
