@@ -1,6 +1,7 @@
 # Proxy-safe playback and player improvements
 
-Status: implementation in progress; initial P0 transport hardening implemented.
+Status: implementation in progress; P0 transport, opaque media resources and
+session ownership implemented.
 The full P0 release gate remains open.
 Reviewed on 2026-09-06. This document revises the original proposals in
 [PR #29](https://github.com/NickRabit/streamio-offline/pull/29), including its
@@ -19,25 +20,52 @@ same PR as a single implementation plan.
   response-header allowlist. Forward HEAD upstream and preserve successful ranges.
 - [x] P0 cache: prevent shared caching of proxy media, converted segments, subtitles
   and device downloads; do not relay provider cache policy.
-- [ ] Complete P0: opaque DTOs/registry, owner binding, raw-route removal, full HLS
-  graph validation, configuration/metadata/log audit, connection-time DNS policy,
-  restart/revocation recovery and the complete no-leak release suite.
+- [x] P0 source DTOs: allowlisted stream/subtitle responses with random 256-bit IDs;
+  provider URLs and headers stay on the server. Inspect, playback and both
+  download actions accept source IDs; unsupported external browser links are removed.
+- [x] P0 resource registry: owner and scope checks, 30-minute selection expiry,
+  owner-scoped deduplication, 2,000-entry/16 MiB budgets, bounded expiration
+  tombstones and a 600-selection/subtitle-creations-per-minute owner limit.
+- [x] P0 playback ownership: direct media, converted generations, sidecars, subtitle
+  claims and device tickets enforce the auth session. Playback claims outlive
+  selection expiry; heartbeat and active transfers keep live sessions in use.
+  Stop/logout revoke resources and close owned transfers; auth expiry bounds access.
+- [x] P0 media migration: retire raw proxy/subtitle/file GET routes; FFmpeg uses
+  opaque resources with internal authentication limited to loopback media access.
+  Library playback uses opaque media IDs with real-path containment checks.
+- [x] P0 supported HLS graph: rewrite variants, alternate tracks, keys, maps, parts
+  and segments into owned child IDs; bound playlist text, deduplicate children,
+  remove optional metadata, reject unknown EXT tags/attributes and DASH manifests.
+- [ ] Complete P0: credential-bearing settings/addon exports, metadata/artwork/log
+  and subtitle-content audit, connection-time DNS policy, automatic safe source
+  renewal after restart/expiry and the complete browser no-leak release suite.
+  Administrative library APIs (including the library source-selection bridge)
+  still use relative paths and require their own ID migration.
 - [ ] Stage instrumentation and cold/warm baseline (increment 2).
 - [ ] Gesture-aware seeking (P1-A).
 - [ ] Server operation supersession and cancellation (P1-B).
 - [ ] Measured startup experiments (P1-C).
 - [ ] P2 interactions, retained HLS continuation and P3 transport separation.
 
-Initial transport verification: 129 server tests, 92 web tests, production build
-and 16 Playwright Chromium scenarios using the isolated addon/provider fixture.
-Local Docker build/deployment passed; the container is healthy and `/api/status`
-returns `{"status":"ok","version":"0.3.13"}`.
-The proxy tests cover response canaries, 200/206/416, HEAD and HLS child header
-isolation. This is not the complete no-leak suite: raw source URLs and encoded
-headers still exist in the current API. Real-provider playback, real iOS devices,
-FFmpeg conversion journeys and performance benchmarks remain untested in this
-increment. Cross-origin providers requiring custom headers now fail closed;
-explicit source-scoped CDN approval is not implemented.
+Current increment verification (0.3.15): 139 server tests, 93 web tests,
+production build and the full Playwright suite (147 passed, 6 intentionally
+skipped), including 21 setup/Chromium scenarios after incorporating main at
+`1750b63`. Local Docker deployment passed: the container is healthy and
+`/api/status` reports `0.3.15`. The fake provider tests
+cover response canaries, 200/206/416 and HEAD, source/subtitle/download ownership,
+retired raw routes, HLS child revocation, actual FFmpeg conversion, local playback
+and a browser rendering WebM without provider-media requests. Unit tests cover
+selection expiry, independent playback claims, subtitle lifetime, budgets and
+credential-sensitive probe caching. Real iOS devices and performance benchmarks
+remain untested; this is not the complete no-leak suite.
+
+The current registry bounds all resources, including active HLS children; budget
+exhaustion fails closed rather than evicting live playback. Restarted/expired
+selection handles currently require source reselection; there is no automatic
+source-renewal promise. Pending probe/start cancellation remains part of P1-B.
+Cross-origin providers requiring custom headers fail closed; explicit
+source-scoped CDN approval is not implemented. Unsupported HLS extensions also
+fail closed; broad real-provider compatibility needs separate verification.
 
 ## 1. Evidence and scope
 
@@ -448,6 +476,7 @@ docker compose logs --tail=50 stremio-offline
 curl --fail "http://localhost:${STREMIO_OFFLINE_PORT:-8090}/api/status"
 ```
 
-The original specification-only PR did not change runtime behavior. The initial
-transport implementation bumps all workspace versions to 0.3.13. Only checked
-items above are implemented; the remaining release gates stay outstanding.
+The original specification-only PR did not change runtime behavior. Transport
+hardening shipped in 0.3.13; the opaque-resource increment bumps all workspace
+versions to 0.3.15. Only checked items above are implemented; the remaining
+release gates stay outstanding.

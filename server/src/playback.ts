@@ -3,6 +3,8 @@ import { promisify } from "node:util";
 import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
+import { mediaResources, safeSourceText } from "./media-resources.js";
+import { createHash } from "node:crypto";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
@@ -133,7 +135,7 @@ export class PlaybackManager {
   private initialBurst = false;
   private ffmpegVersion?: string;
 
-  constructor(dataDir = process.env.DATA_DIR ?? "/data") { this.root = path.join(dataDir, "playback"); }
+  constructor(dataDir = process.env.DATA_DIR ?? "/data", private onStop: (id: string) => void = () => {}) { this.root = path.join(dataDir, "playback"); }
 
   async load() {
     await rm(this.root, { recursive: true, force: true });
@@ -169,13 +171,18 @@ export class PlaybackManager {
   /** Zjistí stopy zdroje bez spuštění přehrávání; výsledek chvíli držíme, ať se zdroj neotravuje. */
   async inspect(stream: StreamItem): Promise<MediaInfo | undefined> {
     if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
-    const cached = this.inspected.get(stream.url);
+    const key = this.inspectionKey(stream);
+    const cached = this.inspected.get(key);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
-    const inflight = this.inspecting.get(stream.url);
+    const inflight = this.inspecting.get(key);
     if (inflight) return inflight;
     const pending = this.loadInspection(stream);
-    this.inspecting.set(stream.url, pending);
+    this.inspecting.set(key, pending);
     return pending;
+  }
+
+  private inspectionKey(stream: StreamItem) {
+    return createHash("sha256").update(JSON.stringify([stream.url, stream.behaviorHints?.proxyHeaders?.request])).digest("hex");
   }
 
   private async loadInspection(stream: StreamItem) {
@@ -187,10 +194,10 @@ export class PlaybackManager {
         subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
       });
       if (this.inspected.size > 200) this.inspected.clear();
-      this.inspected.set(stream.url!, { info, at: Date.now() });
+      this.inspected.set(this.inspectionKey(stream), { info, at: Date.now() });
       return info;
     } finally {
-      this.inspecting.delete(stream.url!);
+      this.inspecting.delete(this.inspectionKey(stream));
     }
   }
 
@@ -311,12 +318,18 @@ export class PlaybackManager {
     return this.describe(session, url);
   }
 
+  touch(id: string) {
+    const session = this.sessions.get(id);
+    if (session) { session.lastAccess = Date.now(); session.claimed = true; }
+  }
+
   async stop(id: string) {
     const session = this.sessions.get(id);
     if (!session) return;
     log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });
     session.stopped = true;
     this.sessions.delete(id);
+    this.onStop(id);
     this.sidecarReady.delete(id);
     await this.kill(session);
     await session.operations.wait();
@@ -367,7 +380,8 @@ export class PlaybackManager {
       id: session.id, mode: session.mode, url, offset: session.offset,
       duration: session.info?.duration, video: session.info?.video?.codec, audio: session.info?.audio?.codec,
       hardware: session.hardware, acceleration: Boolean(this.vaapiDevice),
-      audioTracks: session.info?.audioTracks ?? [], subtitleTracks: session.info?.subtitleTracks ?? [],
+      audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
+      subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
       sidecarUrl: session.mode === "direct" && session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
     };
@@ -408,20 +422,7 @@ export class PlaybackManager {
     return tracks.find((track) => track.language === preferred)?.index ?? null;
   }
 
-  private proxyPath(stream: StreamItem) {
-    // Stažený soubor nechodí přes proxy, servíruje ho knihovna přímo z disku.
-    if (stream.url!.startsWith("file://")) return `/api/library/file?path=${encodeURIComponent(stream.url!.slice(7))}`;
-    const params = new URLSearchParams({ url: stream.url! });
-    const headers = stream.behaviorHints?.proxyHeaders?.request ?? {};
-    if (Object.keys(headers).length) params.set("headers", Buffer.from(JSON.stringify(headers)).toString("base64url"));
-    // Proxy zná jen adresu, ale ve statistikách má provoz stát u svého doplňku,
-    // stejně jako stahování. Odkud vede, jí proto řekneme rovnou v adrese.
-    if (stream.addonKey) params.set("addonKey", stream.addonKey);
-    if (stream.addonName) params.set("addonName", stream.addonName);
-    const title = sourceTitle(stream);
-    if (title) params.set("title", title);
-    return `/api/proxy?${params}`;
-  }
+  private proxyPath(stream: StreamItem) { return mediaResources.path(stream); }
   /** Volání zevnitř serveru se prokazuje procesním tokenem, protože cookie prohlížeče nemá. */
   private localUrl(relative: string) {
     return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}${relative.includes("?") ? "&" : "?"}token=${INTERNAL_TOKEN}`;

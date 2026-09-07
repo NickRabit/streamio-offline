@@ -13,11 +13,11 @@ export interface Meta {
 }
 export interface SearchResult { items: Meta[]; cursor: string; hasMore: boolean; sources: number }
 export interface Video { id?: string; title?: string; name?: string; season?: number; episode?: number; released?: string; overview?: string; thumbnail?: string; [key: string]: unknown }
-export interface Subtitle { id?: string; url: string; lang?: string; addonName?: string }
+export interface Subtitle { subtitleId: string; lang?: string; addonName?: string }
 export interface Stream {
-  url?: string; externalUrl?: string; infoHash?: string; fileIdx?: number; name?: string; title?: string; description?: string;
+  sourceId: string; kind: "remote" | "library" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
-  behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; proxyHeaders?: { request?: Record<string, string> } };
+  behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }
 export interface Download { id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed"; target: string; received: number; total?: number; speed: number; error?: string; order: number; createdAt: string; updatedAt: string; pending?: boolean }
 
@@ -64,7 +64,7 @@ export interface Capabilities { h264: boolean; hevc: boolean; hevc10: boolean; v
 export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
-  quality: number | null; sidecarUrl?: string;
+  quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
 }
 
 export interface Session { username: string }

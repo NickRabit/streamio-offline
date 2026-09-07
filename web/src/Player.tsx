@@ -145,6 +145,7 @@ const trackLabel = (track: Track) => {
 };
 
 export function Player({ open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+  const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
   const overlayRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -201,7 +202,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   }, [resumedFrom]);
   const reportRef = useRef<{ position: number; duration: number }>({ position: 0, duration: 0 });
   // Soubor z knihovny už na disku je, nabízet jeho stažení nedává smysl.
-  const isLocal = Boolean(stream?.url?.startsWith("file://"));
+  const isLocal = stream?.kind === "library";
   const addonSubtitles = [...(stream?.subtitles ?? []), ...subtitles];
 
   // Some browsers paint native WebVTT below the visible video box. Active cues
@@ -284,7 +285,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       setSubtitleText("");
       setNativeSubtitles(false);
     };
-  }, [open, session?.id, addonSubtitle?.url]);
+  }, [open, session?.id, addonSubtitle?.subtitleId]);
 
   useEffect(() => {
     subtitlesHiddenRef.current = subtitlesHidden;
@@ -357,7 +358,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
   const context = () => ({
     session: sessionRef.current ?? undefined, mode: modeRef.current, position: Math.round(timeRef.current),
     offset: Math.round(offsetRef.current), title,
-    stream: hostOf(stream?.url ?? undefined) ?? (stream?.url?.startsWith("file://") ? "library" : undefined),
+    stream: stream?.kind,
   });
 
   const applySession = (next: PlaybackSession, autoplay = true) => {
@@ -366,11 +367,12 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
+    if (next.subtitleIds) setSubtitleIds(next.subtitleIds);
     attach(next.url, next.mode, autoplay);
   };
 
   useEffect(() => {
-    if (!open || !stream?.url || !videoRef.current) return;
+    if (!open || !stream?.playable || !videoRef.current) return;
     let disposed = false; const video = videoRef.current; const epoch = ++seekEpochRef.current;
     setError(""); setBuffering(true); setTime(0); setDuration(0); setOffset(0); setScrub(null); setSession(null); setAddonSubtitle(null);
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
@@ -383,7 +385,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       const saved = progressKey ? await api.progressOf(progressKey).catch(() => null) : null;
       const from = saved && saved.position > 30 ? saved.position : 0;
       if (from) setResumedFrom(from);
-      return { created: await api.startPlayback(stream, capabilities(), from), from };
+      return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId)), from };
     })().then(({ created, from }) => {
       if (disposed) { void api.stopPlayback(created.id); return; }
       applySession(created);
@@ -474,10 +476,10 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
           const message = value instanceof Error ? value.message : String(value);
-          if (!message.includes("Relace přehrávání už neexistuje")) throw value;
+          if (!(value instanceof ApiError && value.code === "RESOURCE_NOT_FOUND") && !message.includes("Relace přehrávání už neexistuje")) throw value;
           // Server mohl být mezitím restartován nebo uklidit nečinnou relaci.
           // Nová HLS relace začne rovnou na cíli; přímý stream si posune prohlížeč.
-          next = await api.startPlayback(stream!, capabilities(), requested);
+          next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId));
           id = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
@@ -598,13 +600,22 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (!duration || position < 5) return;
       void api.saveProgress({
         key: progressKey, position, duration, title,
-        path: stream?.url?.startsWith("file://") ? stream.url.slice(7) : undefined,
+        path: stream?.localPath,
         poster: progressPoster,
       }).catch(() => undefined);
     };
     const timer = setInterval(send, 10_000);
     return () => { clearInterval(timer); send(); };
   }, [open, progressKey, title, progressPoster]);
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = setInterval(() => {
+      const id = sessionRef.current;
+      if (id) void api.pingPlayback(id).catch(() => undefined);
+    }, 30_000);
+    return () => clearInterval(timer);
+  }, [open]);
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
@@ -777,7 +788,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
         }}>
         {sidecarReady && session?.sidecarUrl
           ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label="Titulky" default />
-          : addonSubtitle && <track key={`${addonSubtitle.url}:${offset}`} kind="subtitles" src={subtitleUrl(addonSubtitle.url, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
+          : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
       {resumedFrom > 0 && <div className="player-resumed">Navázáno na {fmt(resumedFrom)}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>Přehrát od začátku</button></div>}

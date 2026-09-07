@@ -43,6 +43,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
       - run: npx playwright test
         env:
           HOME: /root

@@ -77,3 +77,14 @@ export interface SubtitleItem {
   addonName?: string;
   [key: string]: unknown;
 }
+
+export interface PublicSubtitle { subtitleId: string; lang?: string; addonName?: string }
+export interface PublicStream {
+  sourceId: string;
+  kind: "remote" | "library" | "unsupported";
+  playable: boolean;
+  name?: string; title?: string; description?: string;
+  addonKey?: string; addonName?: string;
+  behaviorHints: { filename?: string; videoSize?: number };
+  subtitles: PublicSubtitle[];
+}

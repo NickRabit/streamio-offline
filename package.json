@@ -1,7 +1,7 @@
 {
   "name": "stremio-offline",
   "private": true,
-  "version": "0.3.14",
+  "version": "0.3.15",
   "description": "Self-hosted web client for Stremio addons",
   "license": "MIT",
   "repository": {
@@ -20,8 +20,8 @@
     "build": "npm run build -w web && npm run build -w server",
     "test": "npm run test -w server && npm run test -w web",
     "test:e2e": "playwright test",
-    "test:e2e:docker": "npm run build && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 mcr.microsoft.com/playwright:v1.56.1-noble npx playwright test",
-    "test:e2e:snapshots": "npm run build && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 mcr.microsoft.com/playwright:v1.56.1-noble npx playwright test --update-snapshots",
+    "test:e2e:docker": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e npx playwright test",
+    "test:e2e:snapshots": "npm run build && docker build -t stremio-offline-e2e -f e2e/Dockerfile . && docker run --rm -v \"$PWD\":/work -w /work -e CI=1 stremio-offline-e2e npx playwright test --update-snapshots",
     "dev:server": "npm run dev -w server",
     "dev:web": "npm run dev -w web"
   },

@@ -23,7 +23,7 @@ const recall = <T extends string>(key: string, allowed: readonly T[], fallback: 
 type View = "catalog" | "library" | "downloads" | "stats" | "addons" | "settings";
 const bytes = (value?: number) => !value ? "—" : value > 1e9 ? `${(value / 1e9).toFixed(1)} GB` : value > 1e6 ? `${(value / 1e6).toFixed(1)} MB` : `${Math.round(value / 1e3)} kB`;
 const speed = (value: number) => value ? `${bytes(value)}/s` : "—";
-const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || (item.infoHash ? "Torrent" : "Stream");
+const streamLabel = (item: Stream) => item.name || item.title?.split("\n")[0] || item.description?.split("\n")[0] || "Stream";
 type GalleryImage = { url: string; label: string; shape: "poster" | "wide" };
 
 const galleryFor = (item: Meta | null): GalleryImage[] => {
@@ -122,7 +122,7 @@ export function App() {
   };
   /** Hvězdička v přehrávači míří tam, kam patří: soubor do knihovny, titul do seznamu. */
   const togglePlayerFavorite = async () => {
-    const path = localStream?.url?.slice(7);
+    const path = localStream?.localPath;
     if (path) {
       const wanted = !libraryFavorites.includes(path);
       try {
@@ -283,7 +283,7 @@ export function App() {
   // Přesné jazyky zná až rozbor souboru, tak ho uděláme pro vybraný stream.
   useEffect(() => {
     setInspection(null);
-    if (!selectedStream?.url) return;
+    if (!selectedStream?.playable) return;
     let stale = false;
     api.inspect(selectedStream).then((value) => { if (!stale) setInspection(value); }).catch(() => undefined);
     return () => { stale = true; };
@@ -402,11 +402,14 @@ export function App() {
   };
 
   /** Stažený soubor se přehrává stejnou cestou jako stream, jen zdrojem je disk. */
-  const playLocal = (title: string, path: string, poster?: string) => {
-    setLocalPoster(poster);
-    setLocalTitle(title);
-    setLocalStream({ url: `file://${path}`, behaviorHints: { filename: path.split("/").pop() } });
-    setPlayerOpen(true);
+  const playLocal = async (title: string, path: string, poster?: string) => {
+    try {
+      const source = await api.librarySource(path);
+      setLocalPoster(poster);
+      setLocalTitle(title);
+      setLocalStream({ ...source, localPath: path });
+      setPlayerOpen(true);
+    } catch (error) { fail(error); }
   };
   // Polling reschedules itself instead of running on a fixed interval: a hidden tab
   // does nothing, and a failing server is asked ever less often. A toast on every tick
@@ -631,7 +634,7 @@ export function App() {
   };
 
   const downloadStreamToDevice = async () => {
-    if (!selectedStream?.url) return false;
+    if (!selectedStream?.playable) return false;
     try {
       const filename = await saveToDevice({ title: videoTitle, stream: selectedStream, media: selectedMedia() });
       notify(`Stahování ${filename} spuštěno přes server.`);
@@ -767,15 +770,15 @@ export function App() {
                   <option value="size-asc">Od nejmenšího</option>
                   <option value="addon">Podle priority doplňku</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.url ? "HTTP" : stream.infoHash ? "P2P" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => setDetailCompact(event.currentTarget.scrollTop > 8)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i>{stream.playable ? "HTTP" : "EXT"}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title="Odhad z názvu od doplňku, nemusí odpovídat souboru">{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">Žádný aktivní zdrojový doplněk pro tento titul nevrátil stream.</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">Ptám se doplňků…</div>}
               {Boolean(streams.length) && !visibleStreams.length && <div className="no-sources">Žádný z {streams.length} zdrojů neodpovídá filtru. <button className="link-button" onClick={() => { setStreamAddon(""); setStreamLanguage(""); }}>Zrušit filtry</button></div>}
-              {selectedStream?.infoHash && !selectedStream.url && <p className="notice">Tento doplněk vrátil nezpracovaný torrent. Přímé Real-Debrid rozlišení přidáme v další etapě; RD doplněk obvykle vrací rovnou HTTPS adresu.</p>}
+              {selectedStream?.kind === "unsupported" && <p className="notice">Tento zdroj nelze bezpečně přehrát přes server. Vyberte jiný zdroj.</p>}
               <div className="source-footer"><div className="source-info"><Subtitles/> {subtitles.length + (selectedStream?.subtitles?.length || 0)} titulků z doplňků
                 {inspection && <> · <b>zvuk v souboru</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>titulky v souboru</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.url && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.url} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.url} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.url} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button>{selectedStream?.externalUrl && <a className="button" href={selectedStream.externalUrl} target="_blank">Otevřít externě</a>}</div></div>
+                {selectedStream?.playable && !inspection && <> · zjišťuji stopy…</>}</div><div className="actions"><button className="primary" disabled={!selectedStream?.playable} onClick={() => setPlayerOpen(true)}><CirclePlay/> Přehrát</button><button disabled={!selectedStream?.playable} onClick={enqueue}><HardDrive/> Do knihovny</button><button disabled={!selectedStream?.playable} onClick={() => void downloadStreamToDevice()}><Download/> Do zařízení</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title="Vyberte titul" text="Zobrazí se podrobnosti, epizody a zdroje ze všech aktivních doplňků."/>}</section></div>
@@ -891,12 +894,12 @@ export function App() {
       }} onNotify={notify} onError={fail}/>}
     </main>
     <Player open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
-      progressKey={localStream?.url ? `file:${localStream.url.slice(7)}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
+      progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
-      favorite={localStream?.url ? libraryFavorites.includes(localStream.url.slice(7)) : inWatchlist(selected?.type, selected?.id)}
-      onToggleFavorite={localStream?.url || selected ? () => void togglePlayerFavorite() : undefined}
+      favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
+      onToggleFavorite={localStream?.localPath || selected ? () => void togglePlayerFavorite() : undefined}
       onDownload={enqueue}
-      onDeviceDownload={() => localStream?.url ? downloadLibraryFile(localStream.url.slice(7)) : downloadStreamToDevice()}
+      onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
     {galleryIndex !== null && galleryImages[galleryIndex] && <MediaGallery images={galleryImages} index={galleryIndex} onIndex={setGalleryIndex} onClose={() => setGalleryIndex(null)}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
