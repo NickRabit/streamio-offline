@@ -29,7 +29,9 @@ These used to be open notes. They are in `main` now.
 - Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
 - Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
 
-Debrid stays per addon. The app plays and downloads resolved HTTPS URLs. There is no built-in Real-Debrid client and there should not be one unless a stream arrives as a raw `infoHash`.
+Shipped debrid path: addons that already return HTTPS (Torrentio configured
+with Real-Debrid, and similar) play and download as any other HTTP stream.
+There is still no built-in Real-Debrid client; a raw `infoHash` is unusable.
 
 ## Next (daily friction)
 
@@ -52,13 +54,48 @@ Do not keep a single number that pretends to be watch time.
 
 ### Queue robustness
 
-- Optional later: night-only window, speed limit, notify when the queue drains, delete watched files.
+- Optional later: night-only window, speed limit, notify when the queue drains, delete watched files. In-app notify (toast + Stahování badge) is shared with the debrid waiting state below; push out of the browser is later.
 
-### Torrents
+### Torrents and Real-Debrid
 
-Addons that return only an `infoHash` are unusable today. Either resolve them (only if a debrid addon already did the work) or hide/disable raw torrent streams so they do not look playable.
+The app does not download torrents. It never runs a torrent engine on the NAS.
+A source is either HTTP(S) already, or it is a magnet/`infoHash` that Real-Debrid
+must fetch on its servers first. After that, the existing HTTP pipeline
+(proxy, Range resume, FFmpeg, library) takes over.
 
-Do not add a local torrent engine on the NAS unless that becomes an explicit product decision.
+**Today.** Cached `[RD+]` streams from a debrid-configured addon already have a
+URL and work. Uncached `[RD download]` streams often have a Torrentio resolve
+URL too, but the first request hangs until Real-Debrid finishes — the proxy
+can kill that. A raw `infoHash` with no URL shows up as **EXT**, looks
+pickable, and is not. Hide or separate those, and if every source is a torrent
+say so and point at Settings.
+
+**Planned client.** One Real-Debrid API token in **Settings**, verified with
+`GET /user`, stored and backed up as a secret — the same rule as tokens in
+addon URLs. Do not scrape the token out of a Torrentio manifest. Day one is
+Real-Debrid only.
+
+The download queue is the source of truth. **To library** on an `infoHash`
+creates a job in a new waiting state (`čeká na debrid`): `addMagnet` →
+`selectFiles` → poll `torrents/info` until `downloaded` → `unrestrict` → the
+job becomes a normal HTTP download. Waiting jobs must not occupy an HTTP
+concurrency slot; they only poll. Dedupe by `infoHash` + `fileIdx`. Map RD
+errors in the job (`509` slots full → retry, `503` infringing → fail, premium
+required → fail). When RD reports downloaded, the app starts the HTTP
+transfer itself — no second click.
+
+**Play** only when an HTTPS URL exists *now*. Cached: unrestrict and play
+through the proxy, same as today. Uncached: do not open the player; the
+action is **To library**. After RD has the file, play-from-RD is allowed
+without waiting for the NAS copy. Once the file is in the library, play that.
+The player itself does not change.
+
+**Notify.** In-app first: toast plus the Stahování badge, two events that
+must not be collapsed — “ready on Real-Debrid” (HTTP download starting) and
+“in the library” (the offline copy). Web Push / ntfy / Telegram wait until
+that is boring.
+
+Follow-show can later enqueue torrent sources the same way. Not in this slice.
 
 ## Later
 
@@ -86,5 +123,8 @@ payloads. See [testing.md](testing.md) for the layers that do exist.
 
 ## Out of scope unless revisited
 
-- Built-in debrid account settings. Configure that in the addon manifest URL.
+- A local torrent engine on the NAS.
+- Playing an uncached torrent in the player while Real-Debrid is still leeching.
+- AllDebrid, Premiumize, or a second debrid provider before Real-Debrid is in daily use.
+- Parsing the API token out of a Torrentio (or other addon) manifest URL.
 - Building the image on every push. Revisit after features land through pull requests instead of bursts on `main`.
