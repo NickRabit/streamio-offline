@@ -38,13 +38,13 @@ const rdError = (status: number, code?: string, errorCode?: number) => {
   if (status === 503 || status === 408 || code === "service_unavailable") {
     return new DebridError("Real-Debrid is not answering right now, trying again.", status === 408 ? 408 : 503, code ?? "service_unavailable");
   }
-  return new DebridError(code ? `Real-Debrid: ${code}` : `Real-Debrid odpověděl chybou (${status}).`, status, code);
+  return new DebridError(code ? `Real-Debrid: ${code}` : `Real-Debrid answered with an error (${status}).`, status, code);
 };
 
 export function isRetryableDebridFailure(error: unknown): boolean {
   if (error instanceof DebridError) return !FATAL.has(error.code ?? "") && (error.status === 408 || error.status === 429 || error.status === 503 || error.status === 509);
   const message = error instanceof Error ? error.message : String(error);
-  return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|UND_ERR|neodpovídá|plné sloty/i.test(message);
+  return /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|UND_ERR|not answering right now|no free slot/i.test(message);
 }
 
 async function rdRequest(token: string, path: string, body?: Record<string, string>, fetchImpl: FetchLike = guardedFetch): Promise<Response> {
@@ -76,7 +76,7 @@ export interface DebridUser { username: string; premium: boolean }
 
 export async function verifyRealDebridToken(token: string, fetchImpl: FetchLike = guardedFetch): Promise<DebridUser> {
   const value = normalizeToken(token);
-  if (!value) throw new DebridError("Zadejte API token Real-Debrid.");
+  if (!value) throw new DebridError("Enter the Real-Debrid API token.");
   const response = await rdRequest(value, "/user", undefined, fetchImpl);
   const body = await response.json() as { username?: string; type?: string; premium?: number };
   const premium = body.type === "premium" || Number(body.premium) > 0;

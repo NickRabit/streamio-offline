@@ -20,10 +20,19 @@ segment.m4s
   assert.ok(output.includes('#EXT-X-MAP:URI="/api/media/4",BYTERANGE="100@0"'));
 });
 
-test("unsupported or ambiguous manifest syntax fails closed", () => {
+test("tags we do not model are dropped, not passed through", () => {
   for (const line of [
     '#EXT-X-DEFINE:NAME="host",VALUE="secret"',
     '#EXT-X-UNKNOWN:URI="https://provider.test"',
+    "#EXT-X-BITRATE:2500",
+  ]) {
+    const output = rewritePlaylist(`#EXTM3U\n${line}\nsegment.m4s`, () => "/api/media/opaque");
+    assert.equal(output, "#EXTM3U\n/api/media/opaque\n");
+  }
+});
+
+test("unsupported or ambiguous manifest syntax fails closed", () => {
+  for (const line of [
     '#EXT-X-MAP:URI="first",URI="second"',
     '#EXT-X-MAP:URI=unquoted',
     '#EXT-X-MEDIA:NAME="https://provider.test"',

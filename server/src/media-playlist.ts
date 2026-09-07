@@ -36,8 +36,11 @@ export function rewritePlaylist(text: string, resource: (uri: string) => string,
     if (tag === "EXT-X-PLAYLIST-TYPE") return /^(VOD|EVENT)$/.test(value) ? [line] : fail();
     if (tag === "EXT-X-PROGRAM-DATE-TIME") return /^[\dT:Z.+-]+$/.test(value) ? [line] : fail();
     if (tag === "EXT-X-SESSION-DATA" || tag === "EXT-X-DATERANGE") return [];
+    // A tag we do not model is dropped, never passed through: whatever it carries
+    // (an origin URL among it) stays out of the rewritten playlist. Rejecting the
+    // whole manifest instead only broke playback of sources that use newer tags.
     const allowed = attributes[tag];
-    if (!allowed) return tag.startsWith("EXT") ? fail() : [];
+    if (!allowed) return [];
     const parts: string[] = [];
     const seen = new Set<string>();
     let remaining = value;

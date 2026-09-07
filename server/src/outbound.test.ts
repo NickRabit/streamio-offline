@@ -38,7 +38,7 @@ test("the breaker opens after the threshold and stops calling the host", async (
   let called = false;
   await assert.rejects(
     guard.run("addon.test", async () => { called = true; return new Response("{}"); }),
-    (error: unknown) => error instanceof GuardRejection && /další pokus za/.test(error.message),
+    (error: unknown) => error instanceof GuardRejection && /the next attempt is in/.test(error.message),
   );
   assert.equal(called, false);
 });

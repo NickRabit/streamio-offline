@@ -407,7 +407,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (from) setResumedFrom(from);
       return { created: await api.startPlayback(stream, capabilities(), from, addonSubtitles.map((item) => item.subtitleId)), from };
     })().then(({ created, from }) => {
-      if (disposed) { void api.stopPlayback(created.id); return; }
+      if (disposed) { void api.stopPlayback(created.id).catch(() => undefined); return; }
       applySession(created);
       report("DEBUG", `Playback session started in ${created.mode} mode`, {
         ...context(), mode: created.mode, hardware: created.hardware, acceleration: created.acceleration,
@@ -433,7 +433,7 @@ export function Player({ open, title, stream, subtitles, subtitleLanguage, progr
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
-      const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id);
+      const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id).catch(() => undefined);
     };
   }, [open, stream, progressKey]);
 
