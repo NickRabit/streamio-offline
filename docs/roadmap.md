@@ -1,8 +1,11 @@
-# Plan
+# Roadmap
 
-A living backlog. Not a sprint commitment. Update this file when something ships or when a new pain shows up in daily use.
+A living backlog, not a sprint commitment. Update this file when something ships
+or when a new pain shows up in daily use.
 
-Target platform remains a Synology NAS with an Intel Celeron (QuickSync on DS220+/DS920+). Direct play and remux are the common path; real transcode needs VAAPI. See README for the hardware setup.
+The target platform remains a Synology NAS with an Intel Celeron (QuickSync on a
+DS220+ or DS920+). Direct play and remux are the common path; a real transcode
+needs VAAPI. See [Hardware acceleration](hardware-acceleration.md) for the setup.
 
 ## Done
 
@@ -20,6 +23,9 @@ These used to be open notes. They are in `main` now.
 - Mobile item / stream / play / download flow (catalog detail, landscape, control sizing).
 - Save to the current device from the stream picker, the player, and the library, always through the server proxy.
 - Diagnostics panel: levels, rotation, retention, redaction, client playback errors, grouped issues.
+- Per-host guard on outbound addon calls: concurrency cap, queue, and a circuit breaker.
+- English documentation, MIT license, and the GitHub community files (contributing, security, code of conduct, issue and pull request templates).
+- GHCR image plus manual and tag-driven build workflows (`ghcr.io/nickrabit/streamio-offline`).
 - Download queue: classify failures (network vs source vs disk), Range resume after a clean drop, halt the queue on ENOSPC and resume when space returns.
 - Mobile player scrubber: press anywhere on the bar, including the unplayed part, and drag the current position forward or back without first jumping to the press point.
 
@@ -63,7 +69,6 @@ Do not add a local torrent engine on the NAS unless that becomes an explicit pro
 
 ### Access and multi-instance
 
-- Rate-limit outbound calls to foreign addon/API hosts.
 - Profiles: addons, settings, history and favorites per profile; user management; lockable profiles; kids profiles that honour age metadata when the catalog provides it.
 - Configurable LAN IP/host for the running container. The web client should try that address first so playback on the home network does not hairpin through Cloudflare Tunnel. Fail closed: never treat an unauthenticated LAN probe as an open door.
 - Remote client mode: another instance (Docker or native) can use this one as the download/playback server, including an instance published behind a Cloudflare Tunnel with explicit auth.
@@ -72,13 +77,12 @@ Do not expose the app directly to the internet. HTTPS reverse proxy or a VPN rem
 
 ### Packaging
 
-- GHCR image already exists (`ghcr.io/nickrabit/streamio-offline`). Tag a `v0.x` when the current `main` feels like a snapshot worth pinning.
 - One-compose install path for people who will not read the Synology chapter.
-- English README, MIT license, and GitHub community files (contributing, security, code of conduct, issue and pull request templates).
 
 ### Tests
 
-Server tests exist. `web` has none. Stream sorting/filtering was checked by hand against real addon payloads.
+Stream sorting and filtering is still checked by hand against real addon
+payloads. See [testing.md](testing.md) for the layers that do exist.
 
 ## Out of scope unless revisited
 

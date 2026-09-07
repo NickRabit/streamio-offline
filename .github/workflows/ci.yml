@@ -30,7 +30,7 @@ jobs:
       - run: npm test
 
   # The Playwright container carries the browser and its system libraries, so the
-  # same image is used locally when baselines are involved. See TESTING.md.
+  # same image is used locally when baselines are involved. See docs/testing.md.
   e2e:
     runs-on: ubuntu-latest
     container:
