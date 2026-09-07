@@ -417,7 +417,7 @@ export function App() {
     document.querySelector(`[data-path="${CSS.escape(browseFocus)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
     focusScrolled.current = browseFocus;
     window.clearTimeout(focusTimer.current);
-    focusTimer.current = window.setTimeout(() => setBrowseFocus(null), 8000);
+    focusTimer.current = window.setTimeout(() => setBrowseFocus(null), 5000);
   }, [view, browse, browseBusy, browseFocus]);
 
   // Artwork is finished in the background; once it is ready the page refreshes itself.
