@@ -559,3 +559,6 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 img.broken{visibility:hidden}
 
 .timeline-preview{display:grid;gap:4px;text-align:center;max-width:160px;white-space:normal}.timeline-preview img{display:block;width:144px;max-height:90px;object-fit:contain;border-radius:3px}
+
+.episode-navigation{display:flex;gap:4px}
+@media(max-width:700px){.player-overlay .player-controls:has(.episode-navigation){flex-wrap:wrap}.player-controls .episode-navigation{order:-1;flex-basis:100%;justify-content:center}}

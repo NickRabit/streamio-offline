@@ -115,6 +115,8 @@ export const cs: Catalog = {
   "player.mode.transcode": "PŘEKÓDOVÁNO",
   "player.hardware": "HW",
   "player.software": "SW",
+  "player.previousEpisode": "Předchozí díl",
+  "player.previousEpisodeTitle": "Předchozí díl: {title}",
   "player.nextEpisode": "Další díl",
   "player.nextEpisodeTitle": "Další díl: {title}",
   "player.mode.preparing": "PŘIPRAVUJI",

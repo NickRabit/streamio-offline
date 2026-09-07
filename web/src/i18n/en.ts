@@ -119,6 +119,8 @@ export const en = {
   "player.mode.transcode": "TRANSCODED",
   "player.hardware": "HW",
   "player.software": "SW",
+  "player.previousEpisode": "Previous episode",
+  "player.previousEpisodeTitle": "Previous episode: {title}",
   "player.nextEpisode": "Next episode",
   "player.nextEpisodeTitle": "Next episode: {title}",
   "player.mode.preparing": "PREPARING",

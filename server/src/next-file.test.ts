@@ -15,5 +15,9 @@ test("next video follows natural episode order and ignores folders, sidecars and
     assert.equal(await nextVideoFile(path.join(root, "Episode 2.mkv")), "Episode 10.mp4");
     assert.equal(await nextVideoFile(path.join(root, "Episode 10.mp4")), undefined);
     assert.equal(await nextVideoFile(path.join(root, "missing.mp4")), undefined);
+    assert.equal(await nextVideoFile(path.join(root, "Episode 1.mp4"), -1), undefined);
+    assert.equal(await nextVideoFile(path.join(root, "Episode 2.mkv"), -1), "Episode 1.mp4");
+    assert.equal(await nextVideoFile(path.join(root, "Episode 10.mp4"), -1), "Episode 2.mkv");
+    assert.equal(await nextVideoFile(path.join(root, "missing.mp4"), -1), undefined);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

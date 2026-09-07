@@ -1,6 +1,6 @@
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
-import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipForward, Volume2, X } from "lucide-react";
+import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
@@ -9,7 +9,7 @@ import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
 
-interface Props { nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<void>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
+interface Props { previousTitle?: string; onPrevious?: () => Promise<void>; nextTitle?: string; nextBusy?: boolean; onNext?: () => Promise<void>; open: boolean; title: string; stream: Stream | null; subtitles: Subtitle[]; subtitleLanguage: string; progressKey?: string; progressPoster?: string; favorite?: boolean; onToggleFavorite?: () => void; onDownload: () => Promise<boolean>; onDeviceDownload: () => Promise<boolean>; onClose: () => void }
 
 const fmt = (seconds: number) => !Number.isFinite(seconds) ? "0:00" : `${Math.floor(seconds / 3600) ? `${Math.floor(seconds / 3600)}:` : ""}${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
@@ -187,7 +187,7 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
-export function Player({ nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
+export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
   const [subtitleIds, setSubtitleIds] = useState<Record<string, string>>({});
@@ -878,7 +878,10 @@ export function Player({ nextTitle, nextBusy, onNext, open, title, stream, subti
         <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
         <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
         <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
+        {(onPrevious || onNext) && <div className="episode-navigation">
+          {onPrevious && <button className="previous-episode" disabled={nextBusy} aria-label={t("player.previousEpisode")} title={t("player.previousEpisodeTitle", { title: previousTitle ?? "" })} onClick={() => void onPrevious()}><SkipBack /></button>}
         {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
+        </div>}
         <Volume2 />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 

@@ -14,6 +14,8 @@ test("local player previews a frame and plays the next naturally sorted file", a
     await page.locator('.browse-item[data-path="Preview episodes/Episode 1.webm"] .library-open').click();
     const overlay = page.locator(".player-overlay");
     await expect(overlay.locator(".player-head")).toContainText("DIRECT STREAM");
+    const previous = overlay.getByRole("button", { name: "Předchozí díl", exact: true });
+    await expect(previous).toHaveCount(0);
     const next = overlay.getByRole("button", { name: "Další díl", exact: true });
     await expect(next).toHaveAttribute("title", "Další díl: Episode 2.webm");
     expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
@@ -38,9 +40,17 @@ test("local player previews a frame and plays the next naturally sorted file", a
     await next.click();
     await expect(overlay.locator(".player-head strong")).toContainText("Episode 2.webm");
     await expect(next).toHaveAttribute("title", "Další díl: Episode 10.webm");
+    await expect(previous).toHaveAttribute("title", "Předchozí díl: Episode 1.webm");
+    expect(await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
+    await previous.click();
+    await expect(overlay.locator(".player-head strong")).toContainText("Episode 1.webm");
+    await expect(previous).toHaveCount(0);
+    await next.click();
+    await expect(overlay.locator(".player-head strong")).toContainText("Episode 2.webm");
     await next.click();
     await expect(overlay.locator(".player-head strong")).toContainText("Episode 10.webm");
     await expect(next).toHaveCount(0);
+    await expect(previous).toHaveAttribute("title", "Předchozí díl: Episode 2.webm");
     await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   } finally {
     await page.close();

@@ -983,13 +983,13 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   });
   res.json({ key, type, id: id || null });
 }));
-app.get("/api/library/next/:sourceId", asyncRoute(async (req, res) => {
+app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {
   const source = mediaResources.get(String(req.params.sourceId), ownerOf(req).sid, "source").stream;
   res.setHeader("cache-control", "private, no-store");
   if (!source.url?.startsWith("file://")) return void res.json(null);
   const relative = source.url.slice(7);
   await libraryTarget(relative);
-  const next = await nextVideoFile(resolveInside(DOWNLOAD_DIR, relative)!);
+  const next = await nextVideoFile(resolveInside(DOWNLOAD_DIR, relative)!, req.path.startsWith("/api/library/previous/") ? -1 : 1);
   res.json(next ? { path: path.posix.join(path.posix.dirname(relative), next), title: next } : null);
 }));
 

@@ -108,8 +108,8 @@ seeds an addon against the fake addon process and a stored account
 runs the unlocked suite and then the restricted config sequentially.
 
 The test image includes FFmpeg for media inspection and real JPEG timeline previews.
-Local playback tests cover mouse and touch previews, natural next-file ordering,
-and the last file hiding the next-episode button across the viewport matrix.
+Local playback tests cover mouse and touch previews, natural previous/next-file ordering,
+and boundary files hiding the unavailable episode button across the viewport matrix.
 
 ### L3 -- responsive, visual, accessibility
 

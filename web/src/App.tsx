@@ -446,20 +446,22 @@ export function App() {
     window.scrollTo(0, 0);
   };
 
+  const [previousFile, setPreviousFile] = useState<{ path: string; title: string } | null>(null);
   const [nextFile, setNextFile] = useState<{ path: string; title: string } | null>(null);
   const [nextBusy, setNextBusy] = useState(false);
   const nextBusyRef = useRef(false);
   useEffect(() => {
-    setNextFile(null);
+    setNextFile(null); setPreviousFile(null);
     if (!playerOpen || !localStream) return;
     let stale = false;
+    void api.previousLibraryFile(localStream.sourceId).then((file) => { if (!stale) setPreviousFile(file); }).catch(() => undefined);
     void api.nextLibraryFile(localStream.sourceId).then((file) => { if (!stale) setNextFile(file); }).catch(() => undefined);
     return () => { stale = true; };
   }, [playerOpen, localStream]);
-  const playNext = async () => {
-    if (!nextFile || nextBusyRef.current) return;
+  const playAdjacent = async (file: { path: string; title: string }) => {
+    if (!file || nextBusyRef.current) return;
     nextBusyRef.current = true; setNextBusy(true);
-    try { await playLocal(nextFile.title, nextFile.path, localPoster); }
+    try { await playLocal(file.title, file.path, localPoster); }
     finally { nextBusyRef.current = false; setNextBusy(false); }
   };
   const playLocal = async (title: string, path: string, poster?: string) => {
@@ -967,7 +969,7 @@ export function App() {
         await refresh(true);
       }} onNotify={notify} onError={fail}/>}
     </main>
-    <Player nextTitle={nextFile?.title} nextBusy={nextBusy} onNext={nextFile ? playNext : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
+    <Player nextTitle={nextFile?.title} nextBusy={nextBusy} onNext={nextFile ? () => playAdjacent(nextFile) : undefined} previousTitle={previousFile?.title} onPrevious={previousFile ? () => playAdjacent(previousFile) : undefined} open={playerOpen} title={localStream ? localTitle : videoTitle} stream={localStream ?? selectedStream} subtitles={subtitles} subtitleLanguage={settings.subtitleLanguage}
       progressKey={localStream?.localPath ? `file:${localStream.localPath}` : (videoId ? `${selected?.type ?? "movie"}:${videoId}` : undefined)}
       progressPoster={localStream ? localPoster : selected?.poster}
       favorite={localStream?.localPath ? libraryFavorites.includes(localStream.localPath) : inWatchlist(selected?.type, selected?.id)}
