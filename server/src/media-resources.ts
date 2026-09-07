@@ -57,10 +57,51 @@ export class MediaResources {
   private creationWindows = new Map<string, { at: number; count: number }>();
   private bindings = new WeakMap<StreamItem, string>();
   private bytes = 0;
-  constructor(private now = Date.now, private maxEntries = 2000, private maxBytes = 16 * 1024 * 1024, private creationsPerMinute = 600) {}
+  private prunedAt = Number.NEGATIVE_INFINITY;
+  constructor(private now = Date.now, private maxEntries = 20_000, private maxBytes = 64 * 1024 * 1024,
+    private creationsPerMinute = 1200, private maxSessions = 500) {}
 
-  private prune() {
-    for (const record of this.entries.values()) if (record.expiresAt <= this.now()) this.remove(record.id, true);
+  private prune(force = false) {
+    if (!force && this.now() - this.prunedAt < 1000) return;
+    this.prunedAt = this.now();
+    for (const record of [...this.entries.values()]) if (record.expiresAt <= this.now()) this.remove(record.id, true);
+  }
+
+  private fits(bytes: number) {
+    return this.entries.size < this.maxEntries && this.bytes + bytes <= this.maxBytes;
+  }
+
+  /**
+   * A selection is re-created the moment the user opens the list again, so a full
+   * registry drops the oldest ones instead of refusing the request. Playback claims
+   * and everything hanging off them are never evicted -- they cannot be re-created
+   * without interrupting what is already running.
+   */
+  private reserve(bytes: number) {
+    if (this.fits(bytes)) return;
+    this.prune(true);
+    for (const record of [...this.entries.values()]) {
+      if (this.fits(bytes)) return;
+      if (record.scope === "media" || record.parent) continue;
+      this.remove(record.id, true);
+    }
+    if (!this.fits(bytes)) throw new ResourceError(429, "RESOURCE_LIMIT");
+  }
+
+  /**
+   * One listing hands out a resource per stream plus one per subtitle track, and the
+   * subtitle count is the provider's choice rather than the user's. Only the streams
+   * are charged, so a well-stocked catalogue cannot spend the window on its own.
+   */
+  private charge(sid: string) {
+    for (const [key, window] of this.creationWindows) if (window.at + 60_000 <= this.now()) this.creationWindows.delete(key);
+    if (!this.creationWindows.has(sid)) {
+      while (this.creationWindows.size >= this.maxSessions) this.creationWindows.delete(this.creationWindows.keys().next().value!);
+    }
+    const window = this.creationWindows.get(sid) ?? { at: this.now(), count: 0 };
+    if (window.count >= this.creationsPerMinute) throw new ResourceError(429, "RESOURCE_LIMIT");
+    window.count++;
+    this.creationWindows.set(sid, window);
   }
 
   add(stream: StreamItem, owner: ResourceOwner, scope: ResourceScope, parent?: string, unique = false): string {
@@ -72,16 +113,9 @@ export class MediaResources {
     const key = createHash("sha256").update(JSON.stringify([owner.sid, scope, parent, serialized, unique ? randomBytes(16).toString("hex") : ""])).digest("hex");
     const existing = this.dedup.get(key);
     if (existing) return existing;
-    if (scope !== "media" && !parent) {
-      for (const [sid, window] of this.creationWindows) if (window.at + 60_000 <= this.now()) this.creationWindows.delete(sid);
-      if (!this.creationWindows.has(owner.sid) && this.creationWindows.size >= this.maxEntries) throw new ResourceError(429, "RESOURCE_LIMIT");
-      const window = this.creationWindows.get(owner.sid) ?? { at: this.now(), count: 0 };
-      if (window.count >= this.creationsPerMinute) throw new ResourceError(429, "RESOURCE_LIMIT");
-      window.count++;
-      this.creationWindows.set(owner.sid, window);
-    }
+    if (scope === "source") this.charge(owner.sid);
     const bytes = Buffer.byteLength(serialized) + 512;
-    if (this.entries.size >= this.maxEntries || this.bytes + bytes > this.maxBytes) throw new ResourceError(429, "RESOURCE_LIMIT");
+    this.reserve(bytes);
     const id = randomBytes(32).toString("base64url");
     const expiresAt = Math.min(owner.expiresAt, scope === "media" || parent ? owner.expiresAt : this.now() + 30 * 60_000);
     this.entries.set(id, { id, owner: { ...owner }, scope, stream: normalized, expiresAt, parent, bytes, key });
@@ -112,7 +146,7 @@ export class MediaResources {
     this.entries.delete(id); this.dedup.delete(record.key); this.bytes -= record.bytes;
     if (expired) {
       this.expired.set(id, { sid: record.owner.sid, scope: record.scope });
-      if (this.expired.size > this.maxEntries) this.expired.delete(this.expired.keys().next().value!);
+      while (this.expired.size > Math.min(this.maxEntries, 5_000)) this.expired.delete(this.expired.keys().next().value!);
     }
     for (const child of this.entries.values()) if (child.parent === id) this.remove(child.id, expired);
   }

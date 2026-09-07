@@ -18,7 +18,7 @@ import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog,
 import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
-import { clearedCookie, createSession, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
+import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
@@ -222,15 +222,32 @@ app.post("/api/auth/setup", asyncRoute(async (req, res) => {
   log("INFO", "Account created on first run", { username });
   res.status(201).json({ username });
 }));
+const logins = new LoginThrottle();
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
   const username = String(req.body.username ?? "");
   const password = String(req.body.password ?? "");
   const remember = Boolean(req.body.remember);
+  const from = req.ip ?? "unknown";
+  const wait = logins.retryAfterMs(from);
+  if (wait > 0) {
+    const seconds = Math.ceil(wait / 1000);
+    log("WARN", "Sign-in refused after repeated failures", { username, from, waitSeconds: seconds });
+    res.setHeader("retry-after", String(seconds));
+    return res.status(429).json({ error: `Příliš mnoho neúspěšných pokusů, zkuste to za ${seconds} s.` });
+  }
   const stored = store.auth();
   const fromEnv = envCredentials();
-  const bySettings = Boolean(stored) && username === stored!.username && await verifyPassword(password, stored!.passwordHash);
-  const byEnv = Boolean(fromEnv && username === fromEnv.username && password === fromEnv.password);
-  if (!bySettings && !byEnv) { log("WARN", "Failed sign-in", { username }); return res.status(401).json({ error: "Nesprávné jméno nebo heslo." }); }
+  // The hash is always computed, even for a name nobody has: a short circuit here
+  // would answer an unknown name faster and hand out the list of real ones.
+  const passwordMatches = await verifyPassword(password, stored?.passwordHash ?? DECOY_HASH);
+  const bySettings = passwordMatches && Boolean(stored) && secretEquals(username, stored?.username ?? "");
+  const byEnv = Boolean(fromEnv) && secretEquals(username, fromEnv?.username ?? "") && secretEquals(password, fromEnv?.password ?? "");
+  if (!bySettings && !byEnv) {
+    logins.fail(from);
+    log("WARN", "Failed sign-in", { username, from });
+    return res.status(401).json({ error: "Nesprávné jméno nebo heslo." });
+  }
+  logins.succeed(from);
   const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
   res.setHeader("set-cookie", sessionCookie(createSession(secret(), username, expiresAt), remember, isSecure(req)));
   log("INFO", "Sign-in", { username, remember, viaEnvCredentials: byEnv && !bySettings });

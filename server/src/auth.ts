@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
@@ -16,6 +16,14 @@ export interface AuthState {
 export interface SessionInfo { username: string; sid: string; expiresAt: number }
 
 const equals = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b);
+
+/** Comparing through a digest keeps the time constant whatever the two lengths are. */
+export const secretEquals = (a: string, b: string) =>
+  equals(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+
+/** A guess at a name that has no account has to cost the same scrypt round as a
+ *  guess at the real one, otherwise the answer arrives sooner and says so. */
+export const DECOY_HASH = `scrypt$${randomBytes(16).toString("hex")}$${randomBytes(64).toString("hex")}`;
 
 /** Heslo se neukládá, jen jeho scrypt otisk s náhodnou solí. */
 export async function hashPassword(password: string): Promise<string> {
@@ -86,3 +94,42 @@ export function sessionCookie(token: string, remember: boolean, secure: boolean)
 }
 
 export const clearedCookie = () => `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+
+/**
+ * Sign-in has no other cost to an attacker, so repeated failures have to buy time.
+ * The pause doubles with every failure past the free attempts and is capped low
+ * enough that a mistyped password never locks the household out -- behind a reverse
+ * proxy every request arrives from the same address, so a long lock would hit the
+ * legitimate user as hard as anyone else.
+ */
+export class LoginThrottle {
+  private failures = new Map<string, { count: number; until: number; at: number }>();
+
+  constructor(private now = Date.now, private freeAttempts = 5, private lockMs = 1000,
+    private maxLockMs = 60_000, private forgetMs = 15 * 60_000, private maxKeys = 5000) {}
+
+  private prune() {
+    for (const [key, entry] of this.failures) if (entry.at + this.forgetMs <= this.now()) this.failures.delete(key);
+    while (this.failures.size > this.maxKeys) this.failures.delete(this.failures.keys().next().value!);
+  }
+
+  /** Milliseconds the caller has to wait, or 0 when the attempt may proceed. */
+  retryAfterMs(key: string): number {
+    this.prune();
+    return Math.max(0, (this.failures.get(key)?.until ?? 0) - this.now());
+  }
+
+  fail(key: string) {
+    this.prune();
+    const entry = this.failures.get(key) ?? { count: 0, until: 0, at: this.now() };
+    entry.count += 1;
+    entry.at = this.now();
+    const over = entry.count - this.freeAttempts;
+    entry.until = over > 0 ? this.now() + Math.min(this.maxLockMs, this.lockMs * 2 ** (over - 1)) : 0;
+    this.failures.set(key, entry);
+  }
+
+  succeed(key: string) {
+    this.failures.delete(key);
+  }
+}

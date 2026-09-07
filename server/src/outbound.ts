@@ -6,7 +6,9 @@ import { safeFetch } from "./security.js";
  * this module: a dead addon fails instantly instead of costing a full timeout on
  * every search. The concurrency cap only stops requests from piling up without
  * bound; it sits high enough not to slow down a normal fan-out, because one addon
- * routinely serves a dozen catalogs from a single host. Spacing requests apart is
+ * routinely serves a dozen catalogs from a single host. The queue behind it holds a
+ * whole search fan-out -- a waiting entry is a closure, so refusing one costs the
+ * user a missing catalogue while keeping it costs nothing. Spacing requests apart is
  * off unless a provider actually asks for it.
  *
  * Media transfers deliberately do not go through here -- they are long-lived by
@@ -34,7 +36,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv = process.env): GuardConfig
     enabled: env.ADDON_GUARD !== "0",
     maxConcurrent: Math.max(1, number(env.ADDON_MAX_CONCURRENT, 8, 1)),
     minIntervalMs: number(env.ADDON_MIN_INTERVAL_MS, 0),
-    maxQueue: Math.max(1, number(env.ADDON_MAX_QUEUE, 32, 1)),
+    maxQueue: Math.max(1, number(env.ADDON_MAX_QUEUE, 256, 1)),
     failureThreshold: Math.max(1, number(env.ADDON_BREAKER_FAILURES, 5, 1)),
     cooldownMs: Math.max(1000, number(env.ADDON_BREAKER_COOLDOWN_MS, 30_000, 1000)),
     maxCooldownMs: Math.max(1000, number(env.ADDON_BREAKER_MAX_COOLDOWN_MS, 300_000, 1000)),
