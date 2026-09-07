@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 const poster = (color: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="360"><rect width="240" height="360" fill="${color}"/><circle cx="120" cy="130" r="70" fill="#ffffff22"/><path d="M0 360L130 170L240 360" fill="#00000033"/></svg>`)}`;
 const folder = { kind: "folder", path: "Seriály", name: "Seriály", fileCount: 8, size: 8e9, poster: poster("#38516d"), favorite: true };
-const file = { kind: "file", path: "Film.mkv", label: "Cesta za obzor", size: 2e9, season: null, episode: null, modified: "2026-09-01", poster: poster("#936347"), favorite: true };
+const file = { kind: "file", path: "Film.mkv", label: "Cesta za obzor a další dobrodružství na konci světa", size: 2e9, season: null, episode: null, modified: "2026-09-01", poster: poster("#936347"), favorite: true };
 const episode = { ...file, path: "Seriály/01/epizoda.mkv", label: "Dlouhý název epizody, který se musí vejít i na telefonu", season: 1, episode: 1, progress: { position: 120, duration: 2400 } };
 
 test("library cards, favorites and folder navigation", async ({ page }, testInfo) => {
@@ -18,6 +18,16 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   const box = (await art.boundingBox())!;
   expect(box.height / box.width).toBeCloseTo(1.5, 1);
   await expect(page.locator(".library-page button button")).toHaveCount(0);
+  const rows = await page.locator(".browse-grid .library-open").evaluateAll((cards) => cards.map((card) => ({
+    top: card.getBoundingClientRect().top,
+    metadata: card.querySelector(".library-copy small")!.getBoundingClientRect().top,
+    action: card.querySelector(".library-action")!.getBoundingClientRect().top,
+  })));
+  for (const card of rows) {
+    const first = rows.find((other) => Math.abs(other.top - card.top) < 1)!;
+    expect(Math.abs(card.metadata - first.metadata)).toBeLessThan(1);
+    expect(Math.abs(card.action - first.action)).toBeLessThan(1);
+  }
   await expect(page).toHaveScreenshot("library-cards.png", { fullPage: true });
   await page.getByRole("button", { name: "Možnosti: Seriály", exact: true }).click();
   await expect(page.getByRole("button", { name: "Odebrat z oblíbených", exact: true })).toBeVisible();
