@@ -19,7 +19,14 @@ export interface Stream {
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }
-export interface Download { id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed"; target: string; received: number; total?: number; speed: number; error?: string; order: number; createdAt: string; updatedAt: string; pending?: boolean }
+export interface QueueHalt { reason: "storage"; at: string; message: string }
+export interface Download {
+  id: string; title: string; status: "queued" | "downloading" | "paused" | "completed" | "failed";
+  target: string; received: number; total?: number; speed: number; error?: string; order: number;
+  pauseReason?: "user" | "storage"; pending?: boolean;
+  createdAt: string; updatedAt: string;
+}
+export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
 
 export type PlaybackMode = "direct" | "remux" | "transcode";
 export type TileSize = "compact" | "small" | "medium" | "large";
@@ -39,7 +46,7 @@ export interface Diagnostics {
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     sessions: DiagnosticsSession[];
   };
-  downloads: { total: number; byStatus: Record<string, number>; failed: Array<{ id: string; title: string; error?: string }> };
+  downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string }> };
   addons: Array<{ name: string; role: string; enabled: boolean }>;
   outbound: Array<{ host: string; state: "closed" | "open" | "half-open"; active: number; queued: number; failures: number; rejected: number; opened: number; opensInSeconds?: number }>;
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;
