@@ -122,6 +122,11 @@ in front of it or use a VPN; once the server sees `X-Forwarded-Proto: https` it
 marks the cookie `Secure` itself.
 
 - The server never runs addon code; it only reads their JSON APIs.
+- Secure mode (**Settings -> Privacy**, on by default) keeps the browser talking
+  only to this instance: posters, backdrops and addon logos are fetched and
+  cached by the server, so no provider learns who is browsing what, and no
+  artwork address leaves the machine. See
+  [Configuration](docs/configuration.md#secure-mode).
 - Manifests and streams aimed at a private network are blocked by default. For
   your own LAN addons, set `ALLOW_ADDON_HOSTS`, or `ALLOW_PRIVATE_ADDONS=1` if
   you know why.

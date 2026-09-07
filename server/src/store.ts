@@ -9,6 +9,8 @@ export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
+  /** Artwork is fetched by the server, so no provider ever sees the browser. */
+  secureMode: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
   /** Stored locally; never returned by GET /api/settings. */
   realDebridToken: string;
@@ -27,7 +29,7 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** Rozkoukané: klíč titulu na pozici v sekundách. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
 
 /** Settings written before the interface spoke anything but Czech. Defaulting them
  *  to the new English default would flip a running install on upgrade. */

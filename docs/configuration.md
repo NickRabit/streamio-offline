@@ -23,6 +23,29 @@ same list with short comments.
 | `LOG_MAX_BYTES` | `5242880` | Size of one log file before it rotates to `app.log.1`. |
 | `LOG_RETENTION_DAYS` | `7` | Age at which records are dropped. `0` disables cleanup. |
 
+## Secure mode
+
+Posters, backdrops, episode stills and addon logos used to be loaded by the
+browser straight from the provider's CDN, which handed that provider every
+viewer's address and the title they were looking at. In secure mode the server
+fetches each image once, caches it under `DATA_PATH/images` and hands the page an
+opaque link, so no artwork address ever reaches the machine the browser runs on.
+A Content-Security-Policy enforces it: the page may load nothing but this
+instance.
+
+The switch lives in **Settings -> Privacy**, not in the environment: it is the
+kind of thing worth trying both ways without recreating the container. It is on
+for a new install and stays on across upgrades; turning it off makes the browser
+load artwork straight from the provider again.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `IMAGE_CACHE_MB` | `512` | Disk the cached artwork may take before the oldest images are dropped. |
+
+The first visit to a catalogue is slower, because the server is fetching those
+posters; after that they are served from the cache. Dropping an image only frees
+the bytes, never the link the page already holds.
+
 ## Addon access
 
 | Variable | Default | Meaning |

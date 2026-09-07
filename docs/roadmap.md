@@ -14,6 +14,7 @@ These used to be open notes. They are in `main` now.
 - Local library: browse and play downloaded files from disk.
 - Continue watching and My list, including cleanup when a title is deleted from the library.
 - Image workflow is manual (`workflow_dispatch`) plus version tags. It does not build on every commit. Building on merge to `main` can wait until the branch workflow settles.
+- Secure mode: artwork from addons is fetched and cached by the server, the page gets an opaque link, and a Content-Security-Policy keeps the browser from loading anything else.
 - Settings export/import, including installed addons and their save rules. Tokens in addon URLs mean the file is a secret.
 - Subtitle cue background no longer fights the player chrome when the timeline shows or hides.
 - Fullscreen keeps HTML subtitles visible on Windows Chrome/Brave (the video is no longer promoted over the cue layer).

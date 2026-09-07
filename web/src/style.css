@@ -554,3 +554,6 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
   .settings-page .setting-actions button{flex:1 1 auto}
 }
 .restricted-chip{font-size:11px;font-weight:700;color:#e7b867;border:1px solid #e7b86755;background:#2a2113;border-radius:99px;padding:5px 10px;letter-spacing:.04em;white-space:nowrap}
+
+/* Artwork the server could not fetch keeps its box, never the broken-image glyph. */
+img.broken{visibility:hidden}
