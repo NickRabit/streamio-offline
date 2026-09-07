@@ -26,6 +26,14 @@ The single set of rules for any coding agent working in this repository.
   directly to `main`.
 - After committing, push the task branch and open a pull request targeting
   `main`. Leave the merge to the user.
+- Keep the pull request mergeable without the user's help. Before opening it,
+  and again whenever another branch lands on `main`, `git fetch origin main`,
+  rebase the task branch onto it and resolve every conflict yourself. Never
+  leave a conflicting pull request behind, and never ask the user to resolve
+  one. Two conflicts are routine: the version bump, where the branch takes the
+  next patch after the one now on `main`, and `package-lock.json`, which is
+  regenerated rather than merged by hand. Rerun the checks below on the rebased
+  state -- a conflict resolved by hand is code nobody has run yet.
 - When that pull request ships a user-facing feature or fix, bump the patch
   version in the same PR before opening it. Keep `package.json`,
   `server/package.json`, `web/package.json`, and `package-lock.json` in sync.
