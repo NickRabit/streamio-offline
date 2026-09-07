@@ -155,7 +155,7 @@ export class DownloadQueue {
       job.notBefore = undefined;
     }
     if (this.jobs.some((job) => job.status === "paused" && job.pauseReason === "storage")) {
-      this.halt = { reason: "storage", at: new Date().toISOString(), message: "There is no space left on the disk.", messageKey: "err.noSpace" };
+      this.halt = { reason: "storage", at: new Date().toISOString(), message: "No space left on the disk.", messageKey: "err.noSpace" };
       this.ensureSpaceWatch();
     }
     await this.save();
@@ -173,7 +173,7 @@ export class DownloadQueue {
     // protože uniqueTarget té druhé úloze ochotně přidělí jméno s "(2)".
     const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
-    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new AppError("This source is already downloaded in the library.", "err.sourceDownloaded");
+    if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
     const extension = streamExtension(stream);
     const { directory, base } = targetPath(media, title, extension, targetSettings);
     const target = await this.uniqueTarget(directory, base, extension);
@@ -222,7 +222,7 @@ export class DownloadQueue {
       if (await exists(full) || await exists(`${full}.part`)) continue;
       return relative;
     }
-    throw new AppError("No free file name could be found.", "err.noFreeName");
+    throw new AppError("Could not find a free file name.", "err.noFreeName");
   }
 
   async pause(id: string) {
@@ -245,7 +245,7 @@ export class DownloadQueue {
     if (!(["paused", "failed"] as DownloadStatus[]).includes(job.status)) throw new AppError("This item cannot be resumed.", "err.cannotResume");
     if (this.halt || job.pauseReason === "storage") {
       const space = await this.freeSpace(this.downloadDir);
-      if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "There is no space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
+      if (!this.hasRoom(space)) throw new AppError(this.halt?.message ?? "No space left on the disk.", this.halt?.messageKey ?? "err.noSpace");
       this.releaseStorageHalt();
     }
     this.pauseRequested.delete(id);
@@ -293,7 +293,7 @@ export class DownloadQueue {
     this.debridBusy.add(id);
     try {
       if (this.now() - Date.parse(job.createdAt) > this.debridTimeoutMs) {
-        job.status = "failed"; this.setError(job, "The Real-Debrid torrent did not finish in time.", "err.debridTimeout"); job.updatedAt = new Date().toISOString();
+        job.status = "failed"; this.setError(job, "Real-Debrid did not finish the torrent in time.", "err.debridTimeout"); job.updatedAt = new Date().toISOString();
         await this.save();
         return;
       }
@@ -304,7 +304,7 @@ export class DownloadQueue {
       }
       const infoHash = job.stream?.infoHash;
       if (!infoHash) {
-        job.status = "failed"; this.setError(job, "The job has no infoHash.", "err.jobNoInfoHash"); job.updatedAt = new Date().toISOString();
+        job.status = "failed"; this.setError(job, "The torrent has no infoHash.", "err.jobNoInfoHash"); job.updatedAt = new Date().toISOString();
         await this.save();
         return;
       }
@@ -417,7 +417,7 @@ export class DownloadQueue {
     const space = await this.freeSpace(this.downloadDir);
     if (space.freeBytes == null) return;
     if (space.freeBytes < needed + storageHeadroom(space.totalBytes)) {
-      throw new StorageError("There is no space left on the disk.", "ENOSPC");
+      throw new StorageError("No space left on the disk.", "ENOSPC");
     }
   }
 
@@ -614,7 +614,7 @@ export class DownloadQueue {
         const wait = this.retryDelay(job.retryCount, error instanceof HttpSourceError ? error.retryAfterMs : undefined);
         job.notBefore = this.now() + wait;
         job.status = "queued";
-        this.setError(job, `Connection dropped, retrying (${job.retryCount}/3)\u2026`, "err.retryingAfterDrop", { attempt: job.retryCount, of: 3 });
+        this.setError(job, `Connection dropped, retry ${job.retryCount}/3\u2026`, "err.retryingAfterDrop", { attempt: job.retryCount, of: 3 });
         retryScheduled = true;
         log("WARN", "The transfer broke off, it will be retried", { id: job.id, reason: message, retry: job.retryCount, waitMs: wait });
         if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -624,7 +624,7 @@ export class DownloadQueue {
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
         job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.retryCount = 0; job.notBefore = undefined;
-        job.status = "queued"; this.setError(job, `The source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
+        job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, 2000);

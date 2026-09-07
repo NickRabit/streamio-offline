@@ -28,7 +28,7 @@ test("disk errors halt the queue instead of hopping to the next source", () => {
   assert.equal(classifyFailure(new StorageError("Na disku není místo.", "ENOSPC")), "storage");
   assert.equal(classifyFailure(Object.assign(new Error("write"), { code: "EDQUOT" })), "storage");
   assert.equal(classifyFailure(Object.assign(new Error("read"), { code: "ESTALE" })), "storage");
-  assert.deepEqual(storageMessage(enospc), { message: "There is no space left on the disk.", key: "err.noSpace" });
+  assert.deepEqual(storageMessage(enospc), { message: "No space left on the disk.", key: "err.noSpace" });
 });
 
 test("Content-Range start and total are parsed", () => {

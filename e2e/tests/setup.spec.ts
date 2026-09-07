@@ -11,12 +11,12 @@ test("first run: pick a language, create the account and install an addon", asyn
   const form = page.locator("form.login-card");
   // A fresh install with no stored language follows the browser, which Playwright
   // runs in English, so the first screen anyone sees is English.
-  await expect(form).toContainText("This server has no account yet");
+  await expect(form).toContainText("No account exists yet");
 
   const language = form.getByLabel("Language");
   await expect(language).toHaveValue("en");
   await language.selectOption("cs");
-  await expect(form).toContainText("Server zatím nemá žádný účet");
+  await expect(form).toContainText("Zatím tu není žádný účet");
 
   await form.getByLabel("Uživatelské jméno").fill("e2e-admin");
   await form.getByLabel("Heslo", { exact: true }).fill("e2e-password");

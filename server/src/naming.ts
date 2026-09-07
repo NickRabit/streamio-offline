@@ -43,8 +43,8 @@ export function safeSubfolder(value: unknown): string {
   if (!raw) return "";
   if (/^[\\/]/.test(raw) || /^[a-z]:/i.test(raw)) throw new AppError("The subfolder has to be relative to /downloads.", "err.subfolderRelative");
   const segments = raw.split(/[\\/]+/).filter(Boolean);
-  if (segments.length > 8) throw new AppError("The subfolder may be at most 8 levels deep.", "err.subfolderDepth");
-  if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder must contain neither a . nor a .. segment.", "err.subfolderDots");
+  if (segments.length > 8) throw new AppError("The subfolder can be at most 8 levels deep.", "err.subfolderDepth");
+  if (segments.some((segment) => segment === "." || segment === "..")) throw new AppError("The subfolder cannot contain . or .. segments.", "err.subfolderDots");
   return segments.map(safeName).join(path.sep);
 }
 

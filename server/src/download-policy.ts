@@ -103,7 +103,7 @@ export function retryDelayMs(retryCount: number, retryAfterMs?: number): number 
 export function storageMessage(error: unknown): { message: string; key: string } {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (code === "ENOSPC" || /no space left/i.test(message)) return { message: "There is no space left on the disk.", key: "err.noSpace" };
+  if (code === "ENOSPC" || /no space left/i.test(message)) return { message: "No space left on the disk.", key: "err.noSpace" };
   if (code === "EDQUOT" || /quota/i.test(message)) return { message: "The disk quota is used up.", key: "err.quotaSpent" };
   return { message: "The storage is not responding.", key: "err.storageUnresponsive" };
 }

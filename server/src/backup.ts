@@ -73,14 +73,14 @@ function parseSettings(value: unknown): Settings {
 
 export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "exportedAt"> & { exportedAt?: string } {
   const root = object(value);
-  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new AppError("The file is not a supported Stremio Offline settings backup.", "err.backupUnsupported");
+  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new AppError("This is not a Stremio Offline settings backup.", "err.backupUnsupported");
   if (!Array.isArray(root.addons) || root.addons.length > 100) throw new AppError("The addon list in the backup is not valid.", "err.backupAddons");
   const addons = root.addons.map((raw, index): BackupAddon => {
     const item = object(raw);
     const manifestUrl = typeof item.manifestUrl === "string" ? item.manifestUrl.trim() : "";
-    if (!manifestUrl) throw new AppError(`Addon no. ${index + 1} has no manifest address.`, "err.backupAddonUrl");
+    if (!manifestUrl) throw new AppError("An addon in the backup has no manifest URL.", "err.backupAddonUrl");
     const role = item.role as AddonRole;
-    if (!ROLES.has(role)) throw new AppError(`Addon no. ${index + 1} has an invalid role.`, "err.backupAddonRole");
+    if (!ROLES.has(role)) throw new AppError("An addon in the backup has an invalid role.", "err.backupAddonRole");
     return {
       manifestUrl,
       role,

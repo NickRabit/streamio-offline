@@ -194,7 +194,7 @@ test("a clean close without a known size is not treated as finished", async () =
     await waitFor(queue, () => queue.list()[0].status === "failed" || queue.list()[0].retryCount === 3);
     const job = queue.list()[0];
     assert.notEqual(job.status, "completed");
-    assert.match(job.error ?? "", /ended early|does not match|retrying/);
+    assert.match(job.error ?? "", /ended early|does not match|retry/);
   } finally {
     queue.stop();
     server.close();

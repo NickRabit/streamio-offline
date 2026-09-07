@@ -37,7 +37,7 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
   try { url = new URL(raw.replace(/^stremio:\/\//i, "https://")); }
   catch { throw new AppError("Invalid URL.", "err.invalidUrl"); }
   if (!["http:", "https:"].includes(url.protocol)) throw new AppError("Only HTTP(S) addresses are supported.", "err.onlyHttp");
-  if (url.username || url.password) throw new AppError("Credentials must not sit in the authority part of a URL.", "err.credentialsInUrl");
+  if (url.username || url.password) throw new AppError("The URL must not contain a username or password.", "err.credentialsInUrl");
 
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (process.env.ALLOW_PRIVATE_ADDONS === "1" || allowedHosts.has(host)) return url;

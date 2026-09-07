@@ -129,8 +129,8 @@ describe("describeError", () => {
   });
 
   it("fills the values the server sent along", async () => {
-    fetchMock.mockResolvedValue(json({ error: "Too many failed attempts, try again in 30 s.", messageKey: "err.tooManyAttempts", vars: { seconds: 30 } }, 429));
+    fetchMock.mockResolvedValue(json({ error: "Too many failed attempts. Try again in 30 s.", messageKey: "err.tooManyAttempts", vars: { seconds: 30 } }, 429));
     const error = await api.addons().catch((value) => value);
-    expect(describeError(error)).toBe("Too many failed attempts, try again in 30 s.");
+    expect(describeError(error)).toBe("Too many failed attempts. Try again in 30 s.");
   });
 });

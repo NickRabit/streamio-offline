@@ -127,7 +127,7 @@ const sourceOf = (req: express.Request): StreamItem => {
 const httpSourceOf = async (req: express.Request): Promise<StreamItem> => {
   const stream = sourceOf(req);
   if (stream.url) return stream;
-  throw new AppError("A torrent cannot be played directly. Queue it with the To library button.", "err.torrentNotPlayable", 409);
+  throw new AppError("A torrent cannot be played directly. Add it with To library.", "err.torrentNotPlayable", 409);
 };
 const internalMediaRequest = (req: express.Request) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
@@ -220,7 +220,7 @@ app.get("/api/auth/me", (req, res) => {
 
 /** Založení účtu při prvním spuštění. Jde jen do chvíle, než nějaký účet existuje. */
 app.post("/api/auth/setup", asyncRoute(async (req, res) => {
-  if (!needsSetup()) throw new AppError("Sign-in is already set up.", "err.setupDone");
+  if (!needsSetup()) throw new AppError("An account already exists.", "err.setupDone");
   const username = String(req.body.username ?? "").trim();
   const password = String(req.body.password ?? "");
   if (username.length < 3) throw new AppError("The username needs at least 3 characters.", "auth.usernameTooShort");
@@ -249,7 +249,7 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
     const seconds = Math.ceil(wait / 1000);
     log("WARN", "Sign-in refused after repeated failures", { username, from, waitSeconds: seconds });
     res.setHeader("retry-after", String(seconds));
-    return res.status(429).json({ error: `Too many failed attempts, try again in ${seconds} s.`, messageKey: "err.tooManyAttempts", vars: { seconds } });
+    return res.status(429).json({ error: `Too many failed attempts. Try again in ${seconds} s.`, messageKey: "err.tooManyAttempts", vars: { seconds } });
   }
   const stored = store.auth();
   const fromEnv = envCredentials();
@@ -310,7 +310,7 @@ app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)))
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
   const addon = await loadAddon(String(req.body.url ?? ""), role);
-  if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest has already been added.", "err.manifestExists");
+  if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
   await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddon(addon));
 }));
 // Pořadí doplňků je zároveň jejich priorita při řazení zdrojů.
@@ -632,7 +632,7 @@ app.get("/api/watchlist", (_req, res) => {
 app.post("/api/watchlist", asyncRoute(async (req, res) => {
   const type = String(req.body.type ?? "movie");
   const id = String(req.body.id ?? "").trim();
-  if (!id) throw new AppError("The title id is missing.", "err.missingTitleId");
+  if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
   const key = `${type}:${id}`;
   const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
@@ -664,7 +664,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "").trim();
   const position = Number(req.body.position) || 0;
   const duration = Number(req.body.duration) || 0;
-  if (!key) throw new AppError("The title key is missing.", "err.missingTitleKey");
+  if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
   await store.update((state) => {
     const all = { ...state.progress };
     // Skoro dokoukané ani úplný začátek nemá smysl držet.
@@ -922,7 +922,7 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "");
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
-  if (!key) throw new AppError("The folder is missing.", "err.missingFolder");
+  if (!key) throw new AppError("Missing folder.", "err.missingFolder");
   await store.update((state) => {
     const next = { ...state.libraryMeta };
     if (id) next[key] = { type, id }; else delete next[key];
@@ -1031,8 +1031,8 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const poster = String(parent.poster ?? "").trim() || undefined;
   const metaType = String(parent.metaType ?? type).trim() || type;
   const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
-  if (!episodes.length) throw new AppError("The episode list is missing.", "err.missingEpisodes");
-  if (episodes.length > 500) throw new AppError("At most 500 episodes can be added at once.", "err.tooManyEpisodes");
+  if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
+  if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
   let added = 0, skipped = 0;
   for (const episode of episodes) {
     const videoId = String(episode.id ?? "").trim();
