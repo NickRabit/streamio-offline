@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { AddonRecord, AddonRole, CatalogDefinition, MetaItem, StremioManifest, StreamItem, SubtitleItem } from "./types.js";
 import { validateRemoteUrl } from "./security.js";
@@ -18,7 +19,7 @@ async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS): Promise<T> 
   });
   if (!response.ok) throw new Error(`Doplněk odpověděl HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("json")) throw new Error("Doplněk nevrátil JSON.");
+  if (!contentType.includes("json")) throw new AppError("The addon did not return JSON.", "err.addonNotJson");
   return response.json() as Promise<T>;
 }
 
@@ -28,7 +29,7 @@ export async function loadAddon(rawUrl: string, role: AddonRole): Promise<AddonR
     url.pathname = `${url.pathname.replace(/\/$/, "")}/manifest.json`;
   }
   const manifest = await jsonFetch<StremioManifest>(url.toString());
-  if (!manifest.id || !manifest.name || !manifest.version) throw new Error("Manifest nemá povinné údaje id, name a version.");
+  if (!manifest.id || !manifest.name || !manifest.version) throw new AppError("The manifest is missing id, name or version.", "err.manifestIncomplete");
   return {
     key: randomUUID(), manifestUrl: url.toString(), role, enabled: true,
     addedAt: new Date().toISOString(), manifest, downloadSettings: defaultDownloadSettings(),

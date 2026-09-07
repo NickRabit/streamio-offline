@@ -4,7 +4,7 @@ import { App } from "./App";
 import "./style.css";
 import { classifyClientError, report } from "./diagnostics";
 
-// Chyba v rozhraní jinak skončí v konzoli prohlížeče, kterou uživatel na televizi neotevře.
+// An interface error would otherwise land in the browser console, which nobody opens on a TV.
 window.addEventListener("error", (event) => {
   const stack = event.error instanceof Error ? event.error.stack : undefined;
   const level = classifyClientError({ message: event.message, filename: event.filename, stack });

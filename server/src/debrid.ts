@@ -23,20 +23,20 @@ const INFRINGING = new Set(["infringing_file", "virus_file"]);
 const FATAL = new Set([...INFRINGING, "bad_token", "expired_token", "account_blocked", "need_premium", "traffic_exhausted", "fair_usage_limit"]);
 
 const rdError = (status: number, code?: string, errorCode?: number) => {
-  if (status === 401 || code === "bad_token" || errorCode === 8) return new DebridError("Token Real-Debrid není platný.", 401, code ?? "bad_token");
-  if (status === 403 && code !== "traffic_exhausted") return new DebridError("Real-Debrid tento účet k API nepustil.", 403, code);
+  if (status === 401 || code === "bad_token" || errorCode === 8) return new DebridError("The Real-Debrid token is not valid.", 401, code ?? "bad_token");
+  if (status === 403 && code !== "traffic_exhausted") return new DebridError("Real-Debrid did not let this account use the API.", 403, code);
   if (INFRINGING.has(code ?? "") || errorCode === 16) {
-    return new DebridError("Real-Debrid tenhle torrent odmítl.", 451, "infringing_file");
+    return new DebridError("Real-Debrid refused this torrent.", 451, "infringing_file");
   }
-  if (code === "traffic_exhausted" || errorCode === 29) return new DebridError("Na účtu Real-Debrid došel traffic.", 403, "traffic_exhausted");
+  if (code === "traffic_exhausted" || errorCode === 29) return new DebridError("The Real-Debrid account is out of traffic.", 403, "traffic_exhausted");
   if (code === "too_many_torrents" || errorCode === 21) {
-    return new DebridError("Na účtu Real-Debrid je moc torrentů. Některé smažte na real-debrid.com/torrents.", 400, code);
+    return new DebridError("The Real-Debrid account holds too many torrents. Delete some at real-debrid.com/torrents.", 400, code);
   }
   if (status === 429 || status === 509 || code === "too_many_active_downloads" || errorCode === 26) {
-    return new DebridError("Real-Debrid má plné sloty, zkusím to znovu.", status === 429 ? 429 : 509, code);
+    return new DebridError("Real-Debrid has no free slot, trying again.", status === 429 ? 429 : 509, code);
   }
   if (status === 503 || status === 408 || code === "service_unavailable") {
-    return new DebridError("Real-Debrid teď neodpovídá, zkusím to znovu.", status === 408 ? 408 : 503, code ?? "service_unavailable");
+    return new DebridError("Real-Debrid is not answering right now, trying again.", status === 408 ? 408 : 503, code ?? "service_unavailable");
   }
   return new DebridError(code ? `Real-Debrid: ${code}` : `Real-Debrid odpověděl chybou (${status}).`, status, code);
 };
@@ -58,7 +58,7 @@ async function rdRequest(token: string, path: string, body?: Record<string, stri
     response = await fetchImpl(`${RD_API}${path}`, init);
   } catch (error) {
     log("WARN", "Real-Debrid request failed", { path, reason: error instanceof Error ? error.message : String(error) });
-    throw new DebridError("Real-Debrid teď neodpovídá, zkusím to znovu.", 408, "network");
+    throw new DebridError("Real-Debrid is not answering right now, trying again.", 408, "network");
   }
   if (response.ok) return response;
   let code: string | undefined;
@@ -80,7 +80,7 @@ export async function verifyRealDebridToken(token: string, fetchImpl: FetchLike 
   const response = await rdRequest(value, "/user", undefined, fetchImpl);
   const body = await response.json() as { username?: string; type?: string; premium?: number };
   const premium = body.type === "premium" || Number(body.premium) > 0;
-  if (!premium) throw new DebridError("Účet Real-Debrid není premium.");
+  if (!premium) throw new DebridError("The Real-Debrid account is not premium.");
   return { username: String(body.username ?? ""), premium };
 }
 
@@ -90,7 +90,7 @@ const FAILED = new Set(["error", "virus", "dead", "magnet_error"]);
 
 export function magnetFromHash(infoHash: string): string {
   const hash = infoHash.trim().toLowerCase();
-  if (!INFO_HASH.test(hash)) throw new DebridError("Torrent nemá platný infoHash.");
+  if (!INFO_HASH.test(hash)) throw new DebridError("The torrent has no valid infoHash.");
   return `magnet:?xt=urn:btih:${hash}`;
 }
 
@@ -108,7 +108,7 @@ export interface UnrestrictedLink { download: string; filename?: string; filesiz
 export async function addMagnet(token: string, magnet: string, fetchImpl: FetchLike = guardedFetch): Promise<string> {
   const response = await rdRequest(token, "/torrents/addMagnet", { magnet }, fetchImpl);
   const body = await response.json() as { id?: string };
-  if (!body.id) throw new DebridError("Real-Debrid nevrátil identifikátor torrentu.");
+  if (!body.id) throw new DebridError("Real-Debrid returned no torrent id.");
   return body.id;
 }
 
@@ -124,7 +124,7 @@ export async function torrentInfo(token: string, torrentId: string, fetchImpl: F
 export async function unrestrictLink(token: string, link: string, fetchImpl: FetchLike = guardedFetch): Promise<UnrestrictedLink> {
   const response = await rdRequest(token, "/unrestrict/link", { link }, fetchImpl);
   const body = await response.json() as UnrestrictedLink;
-  if (!body.download) throw new DebridError("Real-Debrid nevrátil stažitelnou adresu.");
+  if (!body.download) throw new DebridError("Real-Debrid returned no downloadable address.");
   return body;
 }
 
@@ -143,7 +143,7 @@ export function videoFileIds(files: DebridFile[] | undefined, fileIdx?: number):
 
 export function linkForFile(info: DebridTorrent, fileIdx?: number): string {
   const links = (info.links ?? []).filter(Boolean);
-  if (!links.length) throw new DebridError("Real-Debrid torrent nemá žádný odkaz.");
+  if (!links.length) throw new DebridError("The Real-Debrid torrent has no link.");
   const selected = (info.files ?? []).filter((file) => file.selected);
   if (fileIdx != null) {
     const wanted = (info.files ?? [])[fileIdx] ?? (info.files ?? []).find((file) => file.id === fileIdx + 1);

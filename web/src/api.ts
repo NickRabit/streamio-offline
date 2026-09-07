@@ -1,9 +1,18 @@
+import { serverText, t } from "./i18n";
 import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSnapshot, Inspection, BrowseResult, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, SearchResult, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
-/** Stavový kód musí projít až nahoru, jinak nepoznáme odhlášení od běžné chyby. */
+/** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code?: string) { super(message); }
+  constructor(message: string, readonly status: number, readonly code?: string,
+    /** Catalogue key for the message, so it can be shown in the reader's language. */
+    readonly messageKey?: string, readonly vars?: Record<string, string | number>) { super(message); }
 }
+
+/** Every failure the interface shows goes through here: a known key wins, the
+ *  server's English text is the fallback. */
+export const describeError = (error: unknown): string => error instanceof ApiError
+  ? serverText(error.messageKey, error.message, error.vars)
+  : error instanceof Error ? error.message : String(error);
 
 /** Every call gets a deadline. A stalled connection would otherwise be held until the
  * operating system gives up, which takes minutes, and six of those exhaust the browser's
@@ -18,16 +27,16 @@ async function request<T>(url: string, options?: RequestInit & { timeoutMs?: num
       headers: { "content-type": "application/json", ...init.headers },
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError("Server neodpověděl včas.", 408);
+    if (error instanceof DOMException && error.name === "TimeoutError") throw new ApiError(t("api.timeout"), 408, "REQUEST_TIMEOUT");
     throw error;
   }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({} as { error?: string; code?: string }));
-    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code);
+    const body = await response.json().catch(() => ({} as { error?: string; code?: string; messageKey?: string; vars?: Record<string, string | number> }));
+    throw new ApiError(body.error ?? `HTTP ${response.status}`, response.status, body.code, body.messageKey, body.vars);
   }
   return response.status === 204 ? undefined as T : response.json();
 }
-/** Restart převodu si počká na první segmenty a jednou to zkusí znovu. */
+/** A conversion restart waits for the first segments and retries once. */
 const PLAYBACK_RESTART_MS = 120_000;
 const PLAYBACK_START_MS = 180_000;
 
@@ -70,8 +79,9 @@ export const api = {
       .then(async (response) => { if (!response.ok) throw new Error(`HTTP ${response.status}`); return response.text(); }),
   clearLogs: () => request<void>("/api/logs", { method: "DELETE" }),
   diagnostics: () => request<Diagnostics>("/api/diagnostics"),
-  // Start čeká na sondu zdroje (až 20 s rychlá a 45 s hloubková) a pak na první segmenty
-  // FFmpeg (až 40 s). Kratší lhůta relaci nezruší, jen ji nechá běžet bez diváka.
+  // Start waits for the source probe (up to 20 s quick, 45 s deep) and then for FFmpeg's
+  // first segments (up to 40 s). A shorter deadline does not cancel the session, it only
+  // leaves it running with nobody watching.
   startPlayback: (stream: Stream, capabilities: Capabilities, time = 0, subtitleIds: string[] = []) => request<PlaybackSession>("/api/playback", { method: "POST", body: JSON.stringify({ sourceId: stream.sourceId, capabilities, time, subtitleIds }), timeoutMs: PLAYBACK_START_MS }),
   setTrack: (id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time: number }) => request<PlaybackSession>(`/api/playback/${id}/track`, { method: "POST", body: JSON.stringify(changes), timeoutMs: PLAYBACK_RESTART_MS }),
   seekPlayback: (id: string, time: number) => request<PlaybackSession>(`/api/playback/${id}/seek`, { method: "POST", body: JSON.stringify({ time }), timeoutMs: PLAYBACK_RESTART_MS }),
@@ -108,7 +118,7 @@ export const api = {
     request<LibraryPage>(`/api/library/entry?${q({ key, query: query || undefined, skip: skip || undefined, limit })}`),
   status: () => request<BuildInfo>("/api/status"),
   me: () => request<AuthStatus>("/api/auth/me"),
-  setup: (username: string, password: string) => request<Session>("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password }) }),
+  setup: (username: string, password: string, language: string) => request<Session>("/api/auth/setup", { method: "POST", body: JSON.stringify({ username, password, language }) }),
   login: (username: string, password: string, remember: boolean) => request<Session>("/api/auth/login", { method: "POST", body: JSON.stringify({ username, password, remember }) }),
   logout: (everywhere = false) => request<void>("/api/auth/logout", { method: "POST", body: JSON.stringify({ everywhere }) }),
   changeCredentials: (payload: { username?: string; currentPassword?: string; newPassword: string }) => request<Session>("/api/auth/password", { method: "PATCH", body: JSON.stringify(payload) }),

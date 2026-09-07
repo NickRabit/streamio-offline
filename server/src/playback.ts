@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { access, mkdir, readFile, rm, stat } from "node:fs/promises";
@@ -107,16 +108,17 @@ const RETIRED_MS = 15_000;
 /** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
 const NOISE = /you should use tag|deprecated|Last message repeated|^\s*$/i;
-export const SOURCE_UNREACHABLE = "Zdroj se nepodařilo otevřít, neodpověděl nebo spojení odmítl.";
+export const SOURCE_UNREACHABLE = "The source could not be opened: it did not answer, or it refused the connection.";
 
 export const describeFailure = (stderr: string, code: number | null) => {
   const lines = redact(stderr).split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !NOISE.test(line));
-  // "Server returned 400 Bad Request" je odpověď naší proxy na zdroj, který mlčí nebo odmítl
-  // spojení. Beze slova o zdroji to vypadá jako chyba převodu, kterou nemá smysl hledat u nás.
+  // "Server returned 400 Bad Request" is our own proxy answering for a source that stays
+  // silent or refuses the connection. Without a word about the source it reads like a
+  // conversion error, which is the wrong place to go looking.
   if (lines.some((line) => /Error opening input/i.test(line)) && lines.some((line) => /Server returned \d{3}/i.test(line))) {
     return SOURCE_UNREACHABLE;
   }
-  return lines.length ? lines.slice(-2).join(" ") : `FFmpeg skončil s kódem ${code}.`;
+  return lines.length ? lines.slice(-2).join(" ") : `FFmpeg exited with code ${code}.`;
 };
 
 export class PlaybackManager {
@@ -170,7 +172,7 @@ export class PlaybackManager {
 
   /** Zjistí stopy zdroje bez spuštění přehrávání; výsledek chvíli držíme, ať se zdroj neotravuje. */
   async inspect(stream: StreamItem): Promise<MediaInfo | undefined> {
-    if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
+    if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const key = this.inspectionKey(stream);
     const cached = this.inspected.get(key);
     if (cached && Date.now() - cached.at < 10 * 60_000) return cached.info;
@@ -206,7 +208,7 @@ export class PlaybackManager {
   }
 
   async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
-    if (!stream.url) throw new Error("Tento zdroj nemá přímou adresu pro přehrání.");
+    if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const id = crypto.randomUUID();
     const source = this.proxyPath(stream);
     // Přes inspect(), ať se seznam zdrojů a přehrávač nikdy nerozejdou v tom, co soubor obsahuje.
@@ -367,12 +369,12 @@ export class PlaybackManager {
 
   private require(id: string) {
     const session = this.sessions.get(id);
-    if (!session || session.stopped) throw new Error("Relace přehrávání už neexistuje.");
+    if (!session || session.stopped) throw new AppError("The playback session no longer exists.", "err.playbackSessionGone");
     return session;
   }
 
   private assertActive(session: Session) {
-    if (session.stopped || this.sessions.get(session.id) !== session) throw new Error("Relace přehrávání už neexistuje.");
+    if (session.stopped || this.sessions.get(session.id) !== session) throw new AppError("The playback session no longer exists.", "err.playbackSessionGone");
   }
 
   private describe(session: Session, url: string): PlaybackDescriptor {
@@ -583,7 +585,7 @@ export class PlaybackManager {
         }
       }
     }
-    throw new Error(session.error || "Převod videa se nepodařilo spustit.");
+    throw new AppError(session.error || "The video conversion could not be started.", "err.conversionFailed");
   }
 
   private async run(session: Session, offset: number, directory: string, hardware: boolean) {
@@ -623,7 +625,7 @@ export class PlaybackManager {
       if (finished) break;
       await sleep(100);
     }
-    if (!finished) { child.kill("SIGKILL"); session.error ||= "Převod se nerozeběhl do 40 sekund."; }
+    if (!finished) { child.kill("SIGKILL"); session.error ||= "The conversion did not get going within 40 seconds."; }
     session.error ||= describeFailure(stderr, exitCode);
     log("ERROR", "The conversion could not be started", {
       id: session.id, offset: Math.round(offset), mode: session.mode, hardware, exitCode,

@@ -4,6 +4,8 @@ export interface QueueHalt {
   reason: "storage";
   at: string;
   message: string;
+  /** Catalogue key for `message`; the interface renders it in the reader's language. */
+  messageKey?: string;
 }
 
 export class HttpSourceError extends Error {
@@ -16,8 +18,8 @@ export class HttpSourceError extends Error {
 export class IncompleteDownloadError extends Error {
   constructor(received: number, total?: number) {
     super(total
-      ? `Stažená velikost nesouhlasí (${received} / ${total}).`
-      : `Přenos skončil předčasně (${received} B) a zdroj neposlal velikost.`);
+      ? `The downloaded size does not match (${received} / ${total}).`
+      : `The transfer ended early (${received} B) and the source sent no size.`);
     this.name = "IncompleteDownloadError";
   }
 }
@@ -98,12 +100,12 @@ export function retryDelayMs(retryCount: number, retryAfterMs?: number): number 
   return Math.max(fromCount, fromHeader);
 }
 
-export function storageMessage(error: unknown): string {
+export function storageMessage(error: unknown): { message: string; key: string } {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (code === "ENOSPC" || /no space left/i.test(message)) return "Na disku není místo.";
-  if (code === "EDQUOT" || /quota/i.test(message)) return "Vyčerpaná disková kvóta.";
-  return "Úložiště neodpovídá.";
+  if (code === "ENOSPC" || /no space left/i.test(message)) return { message: "No space left on the disk.", key: "err.noSpace" };
+  if (code === "EDQUOT" || /quota/i.test(message)) return { message: "The disk quota is used up.", key: "err.quotaSpent" };
+  return { message: "The storage is not responding.", key: "err.storageUnresponsive" };
 }
 
 export function expectedSize(...candidates: Array<number | undefined>): number | undefined {

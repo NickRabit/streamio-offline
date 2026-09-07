@@ -3,10 +3,11 @@ import path from "node:path";
 import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
+import type { UiLanguage } from "./language.js";
 
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Settings {
-  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  concurrentDownloads: number; parallelPerProvider: number; uiLanguage: UiLanguage; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
   /** Stored locally; never returned by GET /api/settings. */
@@ -26,7 +27,14 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** Rozkoukané: klíč titulu na pozici v sekundách. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, audioLanguage: "cs", subtitleLanguage: "cs", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+
+/** Settings written before the interface spoke anything but Czech. Defaulting them
+ *  to the new English default would flip a running install on upgrade. */
+function migrate(loaded?: Partial<Settings>): Partial<Settings> | undefined {
+  if (!loaded || loaded.uiLanguage) return loaded;
+  return { ...loaded, uiLanguage: "cs" };
+}
 
 export const defaultSettings = (): Settings => structuredClone(initialState.settings);
 
@@ -38,7 +46,7 @@ export class Store {
     await mkdir(path.dirname(this.filename), { recursive: true });
     try {
       const loaded = JSON.parse(await readFile(this.filename, "utf8")) as Partial<State>;
-      this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...loaded.settings } };
+      this.state = { ...structuredClone(initialState), ...loaded, settings: { ...initialState.settings, ...migrate(loaded.settings) } };
       this.state.addons = this.state.addons.map((addon) => ({ ...addon, downloadSettings: normalizeDownloadSettings(addon.downloadSettings) }));
     }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }

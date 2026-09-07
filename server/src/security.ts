@@ -1,3 +1,4 @@
+import { AppError } from "./errors.js";
 import dns from "node:dns/promises";
 import net from "node:net";
 import { log } from "./logger.js";
@@ -10,20 +11,20 @@ function privateReason(ip: string): string | undefined {
 
   if (net.isIPv4(address)) {
     const [a, b] = address.split(".").map(Number);
-    if (a === 0) return "neurčená adresa";
-    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "privátní síť";
+    if (a === 0) return "an unspecified address";
+    if (a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)) return "a private network";
     if (a === 127) return "localhost";
     if (a === 169 && b === 254) return "link-local a metadata cloudu";
     if (a === 100 && b >= 64 && b <= 127) return "CGNAT";
-    if (a === 198 && (b === 18 || b === 19)) return "testovací rozsah";
-    if (a >= 224) return "multicast nebo rezervovaný rozsah";
+    if (a === 198 && (b === 18 || b === 19)) return "a test range";
+    if (a >= 224) return "a multicast or reserved range";
     return undefined;
   }
 
   const normalized = address.toLowerCase();
   if (normalized === "::1") return "localhost";
-  if (normalized === "::") return "neurčená adresa";
-  if (/^f[cd]/.test(normalized)) return "privátní síť";
+  if (normalized === "::") return "an unspecified address";
+  if (/^f[cd]/.test(normalized)) return "a private network";
   if (normalized.startsWith("fe80:")) return "link-local";
   if (normalized.startsWith("ff")) return "multicast";
   return undefined;
@@ -34,9 +35,9 @@ const allowedHosts = new Set((process.env.ALLOW_ADDON_HOSTS ?? "").split(",").ma
 export async function validateRemoteUrl(raw: string): Promise<URL> {
   let url: URL;
   try { url = new URL(raw.replace(/^stremio:\/\//i, "https://")); }
-  catch { throw new Error("Neplatná URL."); }
-  if (!["http:", "https:"].includes(url.protocol)) throw new Error("Podporované jsou pouze HTTP(S) adresy.");
-  if (url.username || url.password) throw new Error("Přihlašovací údaje nesmí být v authority části URL.");
+  catch { throw new AppError("Invalid URL.", "err.invalidUrl"); }
+  if (!["http:", "https:"].includes(url.protocol)) throw new AppError("Only HTTP(S) addresses are supported.", "err.onlyHttp");
+  if (url.username || url.password) throw new AppError("The URL must not contain a username or password.", "err.credentialsInUrl");
 
   const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (process.env.ALLOW_PRIVATE_ADDONS === "1" || allowedHosts.has(host)) return url;
@@ -74,12 +75,12 @@ export async function safeFetch(raw: string, init: RequestInit = {}, maxRedirect
     const location = response.headers.get("location");
     await response.body?.cancel();
     if (!location) throw new Error("Source redirect has no destination.");
-    if (redirect === maxRedirects) throw new Error("Zdroj překročil povolený počet přesměrování.");
+    if (redirect === maxRedirects) throw new Error("The source exceeded the allowed number of redirects.");
     const next = await validateRemoteUrl(new URL(location, url).toString());
     headers = redirectedHeaders(headers, url, next);
     url = next;
   }
-  throw new Error("Nepodařilo se zpracovat přesměrování zdroje.");
+  throw new Error("The source redirect could not be followed.");
 }
 
 export function redirectedHeaders(input: HeadersInit, from: URL, to: URL): Headers {

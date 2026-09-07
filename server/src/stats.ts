@@ -6,9 +6,9 @@ import path from "node:path";
 export type TrafficSource = "download" | "catalog" | "library";
 
 export const SOURCE_LABEL: Record<TrafficSource, string> = {
-  download: "Stahování",
-  catalog: "Přehrávání z katalogu",
-  library: "Přehrávání z knihovny",
+  download: "Downloads",
+  catalog: "Catalogue playback",
+  library: "Library playback",
 };
 
 export const isExternal = (event: TrafficEvent) => event.source !== "library";

@@ -1,3 +1,4 @@
+import type { Locale } from "./i18n";
 export type DownloadLayout = "flat" | "structured";
 export interface DownloadTargetSettings { subfolder: string; layout: DownloadLayout }
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
@@ -19,10 +20,11 @@ export interface Stream {
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
   behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
 }
-export interface QueueHalt { reason: "storage"; at: string; message: string }
+export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 export interface Download {
   id: string; title: string; status: "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
-  target: string; received: number; total?: number; speed: number; error?: string; order: number;
+  target: string; received: number; total?: number; speed: number; order: number;
+  error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
   pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   createdAt: string; updatedAt: string;
 }
@@ -46,7 +48,7 @@ export interface Diagnostics {
     vaapi: { device?: string; scaling: boolean; bitrate: boolean; failures: number };
     sessions: DiagnosticsSession[];
   };
-  downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string }> };
+  downloads: { total: number; byStatus: Record<string, number>; halt: QueueHalt | null; failed: Array<{ id: string; title: string; error?: string; errorKey?: string }> };
   addons: Array<{ name: string; role: string; enabled: boolean }>;
   outbound: Array<{ host: string; state: "closed" | "open" | "half-open"; active: number; queued: number; failures: number; rejected: number; opened: number; opensInSeconds?: number }>;
   storage: Array<{ path: string; freeBytes?: number; totalBytes?: number }>;
@@ -63,7 +65,7 @@ export interface StatsSummary {
   since?: string;
 }
 export interface Settings {
-  concurrentDownloads: number; parallelPerProvider: number; audioLanguage: string; subtitleLanguage: string;
+  concurrentDownloads: number; parallelPerProvider: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
 }
@@ -79,9 +81,10 @@ export interface PlaybackSession {
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
 }
 
-export interface Session { username: string }
-/** Čerstvá instalace vrátí místo relace pokyn k založení účtu. */
-export type AuthStatus = Session | { setup: true };
+export interface Session { username: string; language?: Locale }
+/** A fresh install answers with the setup order instead of a session. Both carry the
+ *  stored language: the sign-in and setup screens render before any other call. */
+export type AuthStatus = (Session | { setup: true }) & { language?: Locale };
 
 export interface LibraryFile { path: string; label: string; season: number | null; episode: number | null; size: number; modified: string }
 export interface LibrarySummary {

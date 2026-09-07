@@ -13,7 +13,7 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   await detail.locator(".stream-list button").first().click();
   await detail.getByRole("button", { name: "Do knihovny" }).click();
 
-  await expect(page.getByText("Přidáno do stahovací fronty.")).toBeVisible();
+  await expect(page.getByText("Přidáno do fronty.")).toBeVisible();
 
   await page.getByRole("button", { name: "Stahování", exact: true }).click();
   const row = page.locator(".download-row", { hasText: "Zkušební film" });

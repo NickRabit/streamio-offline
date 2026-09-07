@@ -138,8 +138,8 @@ test("the same source cannot be queued twice", async () => {
     const url = "http://127.0.0.1:1/film.mkv";
     const first = await queue.add("Film", { url });
     await queue.pause(first.id);
-    await assert.rejects(() => queue.add("Film", { url }), /už ve frontě je/);
-    await assert.rejects(() => queue.add("A different title", { url }), /už ve frontě je/, "the source decides, not the title");
+    await assert.rejects(() => queue.add("Film", { url }), /already in the queue/);
+    await assert.rejects(() => queue.add("A different title", { url }), /already in the queue/, "the source decides, not the title");
     const other = await queue.add("Another film", { url: "http://127.0.0.1:1/other.mkv" });
     await queue.pause(other.id);
     assert.equal(queue.list().length, 2);
@@ -194,7 +194,7 @@ test("a clean close without a known size is not treated as finished", async () =
     await waitFor(queue, () => queue.list()[0].status === "failed" || queue.list()[0].retryCount === 3);
     const job = queue.list()[0];
     assert.notEqual(job.status, "completed");
-    assert.match(job.error ?? "", /předčasně|nesouhlasí|opakuji/);
+    assert.match(job.error ?? "", /ended early|does not match|retry/);
   } finally {
     queue.stop();
     server.close();
@@ -428,7 +428,7 @@ test("the same infoHash is not queued twice", async () => {
   });
   try {
     await queue.add("Film", { infoHash: HASH, fileIdx: 0 });
-    await assert.rejects(queue.add("Film", { infoHash: HASH, fileIdx: 0 }), /už ve frontě/);
+    await assert.rejects(queue.add("Film", { infoHash: HASH, fileIdx: 0 }), /already in the queue/);
   } finally {
     queue.stop();
     await rm(directory, { recursive: true, force: true });

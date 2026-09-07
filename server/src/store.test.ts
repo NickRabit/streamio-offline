@@ -57,3 +57,33 @@ test("the Real-Debrid token stays on disk and is stripped from the public view",
     assert.equal("realDebridToken" in published, false);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
+
+test("an install from before the interface was translated keeps Czech", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    await writeFile(path.join(directory, "state.json"), JSON.stringify({ addons: [], defaultsInstalled: true, settings: { concurrentDownloads: 2, audioLanguage: "cs" } }));
+    const store = new Store(directory); await store.load();
+    assert.equal(store.settings().uiLanguage, "cs");
+    assert.equal(store.settings().audioLanguage, "cs");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a fresh install starts in English", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const store = new Store(directory); await store.load();
+    assert.equal(store.settings().uiLanguage, "en");
+    assert.equal(store.settings().audioLanguage, "en");
+    assert.equal(store.settings().subtitleLanguage, "en");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a stored language survives a reload", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
+  try {
+    const first = new Store(directory); await first.load();
+    await first.update((state) => { state.settings.uiLanguage = "cs"; });
+    const second = new Store(directory); await second.load();
+    assert.equal(second.settings().uiLanguage, "cs");
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});

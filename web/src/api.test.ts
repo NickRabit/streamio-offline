@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ApiError, api } from "./api";
+import { describeError, ApiError, api } from "./api";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -112,5 +112,25 @@ describe("settings", () => {
     await api.updateSettings({ realDebridToken: "rd-secret" });
     expect(fetchMock.mock.calls[0][0]).toBe("/api/settings");
     expect(JSON.parse(String(optionsOf().body))).toEqual({ realDebridToken: "rd-secret" });
+  });
+});
+
+describe("describeError", () => {
+  it("translates a failure the server tagged with a key", async () => {
+    fetchMock.mockResolvedValue(json({ error: "The addon was not found.", messageKey: "err.addonNotFound" }, 400));
+    const error = await api.addons().catch((value) => value);
+    expect(describeError(error)).toBe("The addon was not found.");
+  });
+
+  it("falls back to the server's own text for a key it does not know", async () => {
+    fetchMock.mockResolvedValue(json({ error: "Something new broke.", messageKey: "err.notShippedYet" }, 400));
+    const error = await api.addons().catch((value) => value);
+    expect(describeError(error)).toBe("Something new broke.");
+  });
+
+  it("fills the values the server sent along", async () => {
+    fetchMock.mockResolvedValue(json({ error: "Too many failed attempts. Try again in 30 s.", messageKey: "err.tooManyAttempts", vars: { seconds: 30 } }, 429));
+    const error = await api.addons().catch((value) => value);
+    expect(describeError(error)).toBe("Too many failed attempts. Try again in 30 s.");
   });
 });

@@ -24,7 +24,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import type { ClientCapabilities, PlaybackOptions } from "./playback.js";
 import type { MediaInfo } from "./naming.js";
 import { defaultDownloadSettings, deviceFilename, normalizeDownloadSettings, safeName } from "./naming.js";
-import { LANGUAGE_NAMES, normalizeLanguage } from "./language.js";
+import { LANGUAGE_NAMES, isUiLanguage, normalizeLanguage } from "./language.js";
+import { AppError, messageKeyOf } from "./errors.js";
 import type { AddonRole, MetaItem, StreamItem } from "./types.js";
 import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
@@ -44,7 +45,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 const stats = new StatsLog();
 
 /** Poskytovatele bereme z adresy zdroje; doplněk ji může mít u každého streamu jiný. */
-const providerOf = (url?: string) => { try { return url ? new URL(url).hostname : "neznámý"; } catch { return "neznámý"; } };
+const providerOf = (url?: string) => { try { return url ? new URL(url).hostname : "unknown"; } catch { return "unknown"; } };
 
 const statMeta = (job: { source?: TrafficMeta["source"]; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficMeta => ({
   source: job.source ?? "download",
@@ -126,7 +127,7 @@ const sourceOf = (req: express.Request): StreamItem => {
 const httpSourceOf = async (req: express.Request): Promise<StreamItem> => {
   const stream = sourceOf(req);
   if (stream.url) return stream;
-  throw Object.assign(new Error("Torrent nelze přehrát přímo. Přidejte ho do fronty tlačítkem Do knihovny."), { status: 409 });
+  throw new AppError("A torrent cannot be played directly. Add it with To library.", "err.torrentNotPlayable", 409);
 };
 const internalMediaRequest = (req: express.Request) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
@@ -198,7 +199,7 @@ const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
   if (internalMediaRequest(req)) return next();
-  if (!currentUser(req)) return res.status(401).json({ error: "Nepřihlášeno." });
+  if (!currentUser(req)) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn" });
   next();
 });
 
@@ -208,25 +209,34 @@ setInterval(() => {
 }, 1000).unref();
 
 app.get("/api/auth/me", (req, res) => {
-  if (needsSetup()) return res.json({ setup: true });
+  // The language rides along on the one call the sign-in and setup screens can make
+  // unauthenticated; without it they would render before knowing which one to use.
+  const language = store.settings().uiLanguage;
+  if (needsSetup()) return res.json({ setup: true, language });
   const user = currentUser(req);
-  if (!user) return res.status(401).json({ error: "Nepřihlášeno." });
-  res.json({ username: user });
+  if (!user) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn", language });
+  res.json({ username: user, language });
 });
 
 /** Založení účtu při prvním spuštění. Jde jen do chvíle, než nějaký účet existuje. */
 app.post("/api/auth/setup", asyncRoute(async (req, res) => {
-  if (!needsSetup()) throw new Error("Přihlášení už je nastavené.");
+  if (!needsSetup()) throw new AppError("An account already exists.", "err.setupDone");
   const username = String(req.body.username ?? "").trim();
   const password = String(req.body.password ?? "");
-  if (username.length < 3) throw new Error("Uživatelské jméno musí mít aspoň 3 znaky.");
-  if (password.length < 6) throw new Error("Heslo musí mít aspoň 6 znaků.");
+  if (username.length < 3) throw new AppError("The username needs at least 3 characters.", "auth.usernameTooShort");
+  if (password.length < 6) throw new AppError("The password needs at least 6 characters.", "auth.passwordTooShort");
+  const language = isUiLanguage(req.body.language) ? req.body.language : undefined;
   const passwordHash = await hashPassword(password);
   const nextSecret = randomBytes(32).toString("hex");
-  await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
+  await store.update((state) => {
+    state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} };
+    // The first-run language choice is also the best guess at which audio and
+    // subtitles this household wants. Both stay editable in Settings afterwards.
+    if (language) state.settings = { ...state.settings, uiLanguage: language, audioLanguage: language, subtitleLanguage: language };
+  });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
-  log("INFO", "Account created on first run", { username });
-  res.status(201).json({ username });
+  log("INFO", "Account created on first run", { username, language });
+  res.status(201).json({ username, language: store.settings().uiLanguage });
 }));
 const logins = new LoginThrottle();
 app.post("/api/auth/login", asyncRoute(async (req, res) => {
@@ -239,7 +249,7 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
     const seconds = Math.ceil(wait / 1000);
     log("WARN", "Sign-in refused after repeated failures", { username, from, waitSeconds: seconds });
     res.setHeader("retry-after", String(seconds));
-    return res.status(429).json({ error: `Příliš mnoho neúspěšných pokusů, zkuste to za ${seconds} s.` });
+    return res.status(429).json({ error: `Too many failed attempts. Try again in ${seconds} s.`, messageKey: "err.tooManyAttempts", vars: { seconds } });
   }
   const stored = store.auth();
   const fromEnv = envCredentials();
@@ -251,7 +261,7 @@ app.post("/api/auth/login", asyncRoute(async (req, res) => {
   if (!bySettings && !byEnv) {
     logins.fail(from);
     log("WARN", "Failed sign-in", { username, from });
-    return res.status(401).json({ error: "Nesprávné jméno nebo heslo." });
+    return res.status(401).json({ error: "Wrong username or password.", messageKey: "err.badCredentials" });
   }
   logins.succeed(from);
   const expiresAt = Date.now() + (remember ? REMEMBER_DAYS : 1) * 24 * 60 * 60 * 1000;
@@ -279,11 +289,11 @@ app.post("/api/auth/logout", asyncRoute(async (req, res) => {
 }));
 app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   const stored = store.auth();
-  if (!stored) throw new Error("Účet zatím není založený.");
+  if (!stored) throw new AppError("No account has been created yet.", "err.noAccount");
   const current = String(req.body.currentPassword ?? "");
-  if (!await verifyPassword(current, stored.passwordHash)) throw new Error("Stávající heslo nesouhlasí.");
+  if (!await verifyPassword(current, stored.passwordHash)) throw new AppError("The current password is wrong.", "err.wrongCurrentPassword");
   const nextPassword = String(req.body.newPassword ?? "");
-  if (nextPassword.length < 6) throw new Error("Nové heslo musí mít aspoň 6 znaků.");
+  if (nextPassword.length < 6) throw new AppError("The new password needs at least 6 characters.", "auth.newPasswordTooShort");
   const username = String(req.body.username ?? stored.username).trim() || stored.username;
   const passwordHash = await hashPassword(nextPassword);
   // Nové tajemství zneplatní všechny dosud vydané známky, včetně cizích zařízení.
@@ -300,7 +310,7 @@ app.get("/api/addons", (_req, res) => res.json(store.addons().map(publicAddon)))
 app.post("/api/addons", asyncRoute(async (req, res) => {
   const role = (["catalog", "source", "both"].includes(req.body.role) ? req.body.role : "both") as AddonRole;
   const addon = await loadAddon(String(req.body.url ?? ""), role);
-  if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new Error("Tento manifest už je přidaný.");
+  if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
   await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddon(addon));
 }));
 // Pořadí doplňků je zároveň jejich priorita při řazení zdrojů.
@@ -308,7 +318,7 @@ app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
   const direction = Number(req.body.direction) < 0 ? -1 : 1;
   await store.update((state) => {
     const index = state.addons.findIndex((addon) => addon.key === req.params.key);
-    if (index < 0) throw new Error("Doplněk nebyl nalezen.");
+    if (index < 0) throw new AppError("The addon was not found.", "err.addonNotFound");
     const next = Math.max(0, Math.min(state.addons.length - 1, index + direction));
     if (next === index) return;
     const [addon] = state.addons.splice(index, 1);
@@ -320,12 +330,12 @@ app.delete("/api/addons/:key", asyncRoute(async (req, res) => { await store.upda
 // Úplný záznam včetně adresy s tokenem. Rozhraní ji jinak skrývá, tady je vydání záměrné.
 app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.params.key);
-  if (!addon) throw new Error("Doplněk nebyl nalezen.");
+  if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
   res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
 }));
 app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   const existing = store.addons().find((a) => a.key === req.params.key);
-  if (!existing) throw new Error("Doplněk nebyl nalezen.");
+  if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
   const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
   // Jiná adresa znamená načíst manifest znovu. Klíč, pořadí i nastavení ukládání zůstávají,
   // takže po překonfigurování doplňku není nutné ho mazat a přidávat.
@@ -337,7 +347,7 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
   await store.update((state) => {
     const addon = state.addons.find((a) => a.key === req.params.key);
-    if (!addon) throw new Error("Doplněk nebyl nalezen.");
+    if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
     if (typeof req.body.enabled === "boolean") addon.enabled = req.body.enabled;
     if (downloadSettings) addon.downloadSettings = downloadSettings;
     addon.role = role;
@@ -348,12 +358,12 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
 }));
 app.get("/api/catalogs", (_req, res) => res.json(store.addons().filter((a) => a.enabled && a.role !== "source").flatMap((addon) => (addon.manifest.catalogs ?? []).map((item) => ({ ...item, addonKey: addon.key, addonName: addon.manifest.name })) )));
 app.get("/api/catalog", asyncRoute(async (req, res) => {
-  const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new Error("Doplněk nebyl nalezen.");
+  const addon = store.addons().find((a) => a.key === req.query.addon); if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
   res.json(await catalog(addon, String(req.query.type), String(req.query.id), req.query.search ? String(req.query.search) : undefined, Number(req.query.skip) || 0, req.query.genre ? String(req.query.genre) : undefined));
 }));
 app.get("/api/search", asyncRoute(async (req, res) => {
   const query = String(req.query.query ?? "").trim();
-  if (!query) throw new Error("Zadejte hledaný výraz.");
+  if (!query) throw new AppError("Enter a search term.", "err.emptyQuery");
   const type = req.query.type ? String(req.query.type) : undefined;
   res.json(await searchAll(store.addons(), query, type, req.query.cursor ? String(req.query.cursor) : undefined, req.query.addon ? String(req.query.addon) : undefined));
 }));
@@ -622,7 +632,7 @@ app.get("/api/watchlist", (_req, res) => {
 app.post("/api/watchlist", asyncRoute(async (req, res) => {
   const type = String(req.body.type ?? "movie");
   const id = String(req.body.id ?? "").trim();
-  if (!id) throw new Error("Chybí id titulu.");
+  if (!id) throw new AppError("Missing title id.", "err.missingTitleId");
   const key = `${type}:${id}`;
   const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
@@ -654,7 +664,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "").trim();
   const position = Number(req.body.position) || 0;
   const duration = Number(req.body.duration) || 0;
-  if (!key) throw new Error("Chybí klíč titulu.");
+  if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
   await store.update((state) => {
     const all = { ...state.progress };
     // Skoro dokoukané ani úplný začátek nemá smysl držet.
@@ -684,7 +694,7 @@ app.delete("/api/progress/:key", asyncRoute(async (req, res) => {
 
 app.post("/api/library/favorite", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
-  if (!relative || !resolveInside(DOWNLOAD_DIR, relative)) throw new Error("Neplatná cesta.");
+  if (!relative || !resolveInside(DOWNLOAD_DIR, relative)) throw new AppError("Invalid path.", "err.invalidPath");
   const wanted = Boolean(req.body.favorite);
   await store.update((state) => {
     const current = new Set(state.favorites ?? []);
@@ -774,9 +784,9 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
 app.delete("/api/library/item", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
   const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(target).catch(() => undefined);
-  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
   await rm(target, { recursive: true, force: true });
   await rm(dataArtworkFile(relative), { force: true });
   await rm(dataArtworkFile(`dir:${relative}`), { force: true });
@@ -803,16 +813,16 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
 app.post("/api/library/rename", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "").trim();
   const source = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new Error("Neplatná cesta.");
+  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
   const info = await stat(source).catch(() => undefined);
-  if (!info) throw new Error("Soubor nebo složka neexistuje.");
+  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
 
   const extension = info.isDirectory() ? "" : path.extname(relative);
   const wanted = safeName(String(req.body.name ?? "").replace(/\.[^.]+$/, ""));
   const nextRelative = path.join(path.dirname(relative), `${wanted}${extension}`);
   const target = resolveInside(DOWNLOAD_DIR, nextRelative);
-  if (!target) throw new Error("Neplatné jméno.");
-  if (target !== source && await fileExists(target)) throw new Error("Soubor s tímto jménem už existuje.");
+  if (!target) throw new AppError("Invalid name.", "err.invalidName");
+  if (target !== source && await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
   await rename(source, target);
   // Všechny stavové vazby používají relativní cestu; při přesunu musí zůstat konzistentní.
@@ -912,7 +922,7 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const key = String(req.body.key ?? "");
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
-  if (!key) throw new Error("Chybí složka.");
+  if (!key) throw new AppError("Missing folder.", "err.missingFolder");
   await store.update((state) => {
     const next = { ...state.libraryMeta };
     if (id) next[key] = { type, id }; else delete next[key];
@@ -944,7 +954,7 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
       source: { kind: "local", path: relative },
     };
   } else {
-    if (!stream?.url || stream.url.startsWith("file://")) throw new Error("Stáhnout do zařízení lze pouze přímý HTTP stream.");
+    if (!stream?.url || stream.url.startsWith("file://")) throw new AppError("Only a direct HTTP stream can be saved to a device.", "err.deviceNeedsHttp");
     await validateRemoteUrl(stream.url);
     const title = String(req.body.title ?? "video");
     const media = req.body.media as MediaInfo | undefined;
@@ -965,16 +975,16 @@ app.post("/api/device-download", asyncRoute(async (req, res) => {
 app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   pruneDeviceDownloadTickets();
   const ticket = deviceDownloadTickets.get(String(req.params.id));
-  if (!ticket || ticket.owner.sid !== ownerOf(req).sid) return res.status(404).json({ error: "Odkaz ke stažení vypršel. Spusťte stažení znovu." });
+  if (!ticket || ticket.owner.sid !== ownerOf(req).sid) return res.status(404).json({ error: "The download link expired. Start the download again.", messageKey: "err.downloadTicketExpired" });
 
   res.setHeader("cache-control", "private, no-store");
   trackMedia(ticket.owner, res);
   if (ticket.source.kind === "local") {
     const target = await libraryTarget(ticket.source.path);
-    if (!target) return res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
+    if (!target) return res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
     countBytes(res, { source: "library", provider: "knihovna", title: ticket.filename, kind: "other" });
     return void res.download(path.basename(target), ticket.filename, { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
-      if (error && !res.headersSent) res.status(404).json({ error: "Soubor v knihovně nebyl nalezen." });
+      if (error && !res.headersSent) res.status(404).json({ error: "The file was not found in the library.", messageKey: "err.libraryFileMissing" });
     });
   }
 
@@ -1014,15 +1024,15 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
 }));
 // Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.
 app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
-  const title = String(req.body.title ?? "").trim() || "Seriál";
+  const title = String(req.body.title ?? "").trim() || "Show";
   const type = String(req.body.type ?? "series");
   const parent = req.body.media && typeof req.body.media === "object" ? req.body.media as Record<string, unknown> : {};
   const parentId = String(parent.id ?? "").trim() || undefined;
   const poster = String(parent.poster ?? "").trim() || undefined;
   const metaType = String(parent.metaType ?? type).trim() || type;
   const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
-  if (!episodes.length) throw new Error("Chybí seznam epizod.");
-  if (episodes.length > 500) throw new Error("Najednou lze přidat nejvýše 500 epizod.");
+  if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
+  if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
   let added = 0, skipped = 0;
   for (const episode of episodes) {
     const videoId = String(episode.id ?? "").trim();
@@ -1030,7 +1040,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const season = episode.season == null ? undefined : Number(episode.season);
     const number = episode.episode == null ? undefined : Number(episode.episode);
     const episodeTitle = episode.title ? String(episode.title) : undefined;
-    const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Díl ${number ?? "?"}`)}`;
+    const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
     const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
     const job = await queue.addPending(jobTitle, { type, videoId }, media);
     if (job) added += 1; else skipped += 1;
@@ -1104,7 +1114,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     downloads: {
       total: jobs.length, byStatus,
       halt: queue.haltInfo(),
-      failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error })),
+      failed: jobs.filter((job) => job.status === "failed").slice(0, 10).map((job) => ({ id: job.id, title: job.title, error: job.error, errorKey: job.errorKey })),
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
@@ -1156,8 +1166,9 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
   await store.update((state) => {
     if (req.body.concurrentDownloads !== undefined) state.settings.concurrentDownloads = Math.max(1, Math.min(8, Number(req.body.concurrentDownloads) || 1));
     if (req.body.parallelPerProvider !== undefined) state.settings.parallelPerProvider = Math.max(1, Math.min(8, Number(req.body.parallelPerProvider) || 1));
-    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? "cs";
-    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? "cs";
+    if (req.body.uiLanguage !== undefined && isUiLanguage(req.body.uiLanguage)) state.settings.uiLanguage = req.body.uiLanguage;
+    if (req.body.audioLanguage !== undefined) state.settings.audioLanguage = normalizeLanguage(String(req.body.audioLanguage)) ?? state.settings.audioLanguage;
+    if (req.body.subtitleLanguage !== undefined) state.settings.subtitleLanguage = normalizeLanguage(String(req.body.subtitleLanguage)) ?? state.settings.subtitleLanguage;
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
@@ -1397,6 +1408,7 @@ app.use((error: unknown, req: express.Request, res: express.Response, _next: exp
   res.status(hideDetails ? 502 : status).json({
     error: hideDetails ? "Media source request failed." : message,
     code: error instanceof ResourceError ? error.code : undefined,
+    messageKey: hideDetails ? undefined : messageKeyOf(error),
   });
 });
 process.on("unhandledRejection", (reason) => {

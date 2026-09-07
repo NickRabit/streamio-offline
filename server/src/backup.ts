@@ -1,7 +1,8 @@
 import type { AddonDownloadSettings, AddonRecord, AddonRole } from "./types.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import { defaultSettings, type Settings } from "./store.js";
-import { normalizeLanguage } from "./language.js";
+import { isUiLanguage, normalizeLanguage } from "./language.js";
+import { AppError } from "./errors.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 export const BACKUP_VERSION = 1;
@@ -26,7 +27,7 @@ export interface SettingsBackup {
 }
 
 const object = (value: unknown): Record<string, unknown> => {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Soubor zálohy nemá platný formát.");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new AppError("The backup file has an invalid format.", "err.backupFormat");
   return value as Record<string, unknown>;
 };
 
@@ -47,6 +48,9 @@ function parseSettings(value: unknown): Settings {
   const fallback = defaultSettings();
   const number = (name: keyof Settings, maximum: number) => Math.max(1, Math.min(maximum, Number(source[name]) || fallback[name] as number));
   const boolean = (name: keyof Settings) => typeof source[name] === "boolean" ? source[name] as boolean : fallback[name] as boolean;
+  // A backup taken before the interface was translated restores as Czech, the
+  // only language it could have been written in.
+  const uiLanguage = isUiLanguage(source.uiLanguage) ? source.uiLanguage : "cs";
   const audioLanguage = normalizeLanguage(String(source.audioLanguage ?? "")) ?? fallback.audioLanguage;
   const subtitleLanguage = normalizeLanguage(String(source.subtitleLanguage ?? "")) ?? fallback.subtitleLanguage;
   const streamSort = String(source.streamSort ?? "");
@@ -55,7 +59,7 @@ function parseSettings(value: unknown): Settings {
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
-    audioLanguage, subtitleLanguage,
+    uiLanguage, audioLanguage, subtitleLanguage,
     mergeByName: boolean("mergeByName"),
     streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,
     artworkLocation: source.artworkLocation === "media" ? "media" : "data",
@@ -69,14 +73,14 @@ function parseSettings(value: unknown): Settings {
 
 export function parseSettingsBackup(value: unknown): Omit<SettingsBackup, "exportedAt"> & { exportedAt?: string } {
   const root = object(value);
-  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new Error("Soubor není podporovaná záloha nastavení Stremio Offline.");
-  if (!Array.isArray(root.addons) || root.addons.length > 100) throw new Error("Seznam doplňků v záloze není platný.");
+  if (root.format !== BACKUP_FORMAT || root.version !== BACKUP_VERSION) throw new AppError("This is not a Stremio Offline settings backup.", "err.backupUnsupported");
+  if (!Array.isArray(root.addons) || root.addons.length > 100) throw new AppError("The addon list in the backup is not valid.", "err.backupAddons");
   const addons = root.addons.map((raw, index): BackupAddon => {
     const item = object(raw);
     const manifestUrl = typeof item.manifestUrl === "string" ? item.manifestUrl.trim() : "";
-    if (!manifestUrl) throw new Error(`Doplněk č. ${index + 1} nemá adresu manifestu.`);
+    if (!manifestUrl) throw new AppError("An addon in the backup has no manifest URL.", "err.backupAddonUrl");
     const role = item.role as AddonRole;
-    if (!ROLES.has(role)) throw new Error(`Doplněk č. ${index + 1} má neplatnou úlohu.`);
+    if (!ROLES.has(role)) throw new AppError("An addon in the backup has an invalid role.", "err.backupAddonRole");
     return {
       manifestUrl,
       role,
