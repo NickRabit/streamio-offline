@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSession, hashPassword, LoginThrottle, parseCookies, pruneRevoked, readSession, sessionCookie, verifyPassword } from "./auth.js";
+import { createSession, DECOY_HASH, hashPassword, LoginThrottle, parseCookies, pruneRevoked, readSession, secretEquals, sessionCookie, verifyPassword } from "./auth.js";
 
 test("otisk hesla neobsahuje heslo a stejné heslo dá pokaždé jiný otisk", async () => {
   const first = await hashPassword("tajneheslo");
@@ -112,4 +112,18 @@ test("a forgotten address starts over and the record does not grow without bound
   for (const address of ["a", "b", "c", "d"]) throttle.fail(address);
   assert.equal(throttle.retryAfterMs("a"), 0, "the oldest records are dropped once the map is full");
   assert.equal(throttle.retryAfterMs("d"), 1000);
+});
+
+test("secrets compare in constant time whatever their length", () => {
+  assert.equal(secretEquals("heslo", "heslo"), true);
+  assert.equal(secretEquals("heslo", "heslx"), false);
+  assert.equal(secretEquals("heslo", "heslo-delsi"), false);
+  assert.equal(secretEquals("", ""), true);
+  assert.equal(secretEquals("", "x"), false);
+});
+
+test("the decoy hash costs a real scrypt round and never matches", async () => {
+  assert.match(DECOY_HASH, /^scrypt\$[0-9a-f]{32}\$[0-9a-f]{128}$/);
+  assert.equal(await verifyPassword("", DECOY_HASH), false);
+  assert.equal(await verifyPassword("admin", DECOY_HASH), false);
 });

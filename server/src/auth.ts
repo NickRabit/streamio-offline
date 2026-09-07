@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
@@ -16,6 +16,14 @@ export interface AuthState {
 export interface SessionInfo { username: string; sid: string; expiresAt: number }
 
 const equals = (a: Buffer, b: Buffer) => a.length === b.length && timingSafeEqual(a, b);
+
+/** Comparing through a digest keeps the time constant whatever the two lengths are. */
+export const secretEquals = (a: string, b: string) =>
+  equals(createHash("sha256").update(a).digest(), createHash("sha256").update(b).digest());
+
+/** A guess at a name that has no account has to cost the same scrypt round as a
+ *  guess at the real one, otherwise the answer arrives sooner and says so. */
+export const DECOY_HASH = `scrypt$${randomBytes(16).toString("hex")}$${randomBytes(64).toString("hex")}`;
 
 /** Heslo se neukládá, jen jeho scrypt otisk s náhodnou solí. */
 export async function hashPassword(password: string): Promise<string> {
