@@ -509,3 +509,33 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .player-head .player-star{margin-left:auto}
 .player-head .player-star span{display:none}
 @media(max-width:380px){.player-overlay .player-controls{gap:2px}.player-overlay .player-controls button{padding:6px}.player-overlay .player-controls button svg{width:20px}}
+
+/* Settings use one reading order at every viewport width. */
+.settings-page{max-width:1040px;container-type:inline-size}
+.settings-page .settings-title{margin-bottom:24px;flex-wrap:wrap;gap:12px}
+.settings-page .settings-grid{grid-template-columns:minmax(0,1fr);gap:18px}
+.settings-page .settings-section{grid-column:1;padding:22px 24px}
+.settings-page .settings-section-head{margin-bottom:16px}
+.settings-page .settings-section-head small,.settings-page .setting-control small{font-size:12px;line-height:1.5}
+.settings-page .setting-control{grid-template-columns:minmax(0,1fr) minmax(180px,260px);padding:14px 0;gap:24px}
+.settings-page .setting-control strong{font-size:13px}
+.settings-page .setting-control select,.settings-page .setting-control button{font-size:13px;min-height:42px}
+.settings-page .setting-control input{min-height:42px}
+.settings-page .playback-settings{display:block}
+.settings-page .storage-path{margin-top:10px;flex-direction:row;align-items:center}
+.settings-page .storage-section p,.settings-page .backup-section>p,.settings-page .setting-note{font-size:12px}
+.settings-page .debrid-status{font-size:12px;margin-bottom:14px}
+.debrid-credentials{display:flex;align-items:flex-end;gap:12px}
+.settings-page .debrid-field{flex:1;min-width:0;margin:0}
+.settings-page .debrid-field span{font-size:12px}
+.settings-page .debrid-credentials .setting-actions{border:0;padding:0;flex-shrink:0}
+.settings-page .setting-actions button{min-height:42px;font-size:12px}
+.settings-page .diagnostics-section .settings-section-head{margin:0}
+@container(max-width:560px){
+  .settings-page .settings-section{padding:18px 16px}
+  .settings-page .setting-control{grid-template-columns:minmax(0,1fr);gap:10px}
+  .debrid-credentials{align-items:stretch;flex-direction:column}
+  .settings-page .settings-title>span{white-space:normal;width:fit-content;margin:0}
+  .settings-page .setting-actions{gap:10px}
+  .settings-page .setting-actions button{flex:1 1 auto}
+}
