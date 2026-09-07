@@ -528,7 +528,7 @@ export function App() {
     const groups = new Map<string, Meta>();
     for (const item of list) {
       const year = String(item.releaseInfo ?? item.year ?? "").slice(0, 4);
-      const key = `${item.type}|${item.name.trim().toLowerCase()}|${year}`;
+      const key = `${item.type}|${String(item.name ?? item.id ?? "").trim().toLowerCase()}|${year}`;
       const sources = item.sources ?? [item.addonName].filter(Boolean) as string[];
       const existing = groups.get(key);
       if (!existing) { groups.set(key, { ...item, sources: [...sources] }); continue; }

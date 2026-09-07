@@ -34,7 +34,7 @@ test("an empty token is rejected before any request", async () => {
   let called = false;
   await assert.rejects(
     verifyRealDebridToken("   ", async () => { called = true; return json({}); }),
-    /Zadejte API token/,
+    /Enter the Real-Debrid API token/,
   );
   assert.equal(called, false);
 });

@@ -116,7 +116,7 @@ export class OutboundGuard {
       if (this.now() < entry.openUntil) {
         entry.rejected += 1;
         throw new GuardRejection(
-          `${host} opakovaně neodpovídá, další pokus za ${seconds(entry.openUntil - this.now())} s.`,
+          `${host} keeps not answering, the next attempt is in ${seconds(entry.openUntil - this.now())} s.`,
           host, entry.openUntil - this.now(),
         );
       }
