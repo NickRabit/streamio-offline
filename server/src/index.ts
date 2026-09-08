@@ -244,7 +244,10 @@ app.post("/api/auth/setup", asyncRoute(async (req, res) => {
     state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} };
     // The first-run language choice is also the best guess at which audio and
     // subtitles this household wants. Both stay editable in Settings afterwards.
-    if (language) state.settings = { ...state.settings, uiLanguage: language, audioLanguage: language, subtitleLanguage: language };
+    // A client that sends no language leaves the interface where it is, and the
+    // tracks still follow it -- otherwise they would keep the English default.
+    const chosen = language ?? state.settings.uiLanguage;
+    state.settings = { ...state.settings, uiLanguage: chosen, audioLanguage: chosen, subtitleLanguage: chosen };
   });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
   log("INFO", "Account created on first run", { username, language });
