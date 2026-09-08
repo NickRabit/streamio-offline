@@ -28,6 +28,8 @@ export interface Download {
   target: string; received: number; total?: number; speed: number; order: number;
   error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
   pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
+  /** How many connections the file is being split across; missing while it runs over one. */
+  segments?: number;
   createdAt: string; updatedAt: string;
 }
 export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
@@ -67,7 +69,7 @@ export interface StatsSummary {
   since?: string;
 }
 export interface Settings {
-  concurrentDownloads: number; parallelPerProvider: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
+  concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean;
   secureMode: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;

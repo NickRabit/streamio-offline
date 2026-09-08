@@ -49,6 +49,23 @@ is moving again, the retry budget is restored.
 one source. Providers usually cap concurrent connections and kill or starve the
 extras, so one transfer per source is the safest default.
 
+### Segmented downloads
+
+One file can also be pulled over several connections at once, each fetching its
+own byte range. **Settings → Segments per file** sets how many; the default is
+2, and 1 turns the split off.
+
+A file is split only when the source answers a range request with `206` and the
+full size, and only while every part stays at least 16 MiB — anything else falls
+back to a single stream. The plan is part of the queue state, so a pause, a
+restart, or a dropped connection resumes each part at its own offset. While a
+file is split, the `.part` on disk already has the final size.
+
+Segments multiply the connections a provider sees: `concurrent per source ×
+segments`. Raise them only for a provider that tolerates it — one that does not
+answers `429` or drops the extra connections, and the transfer then spends its
+retry budget instead of going faster.
+
 ## To library vs. to device
 
 The selected source and the player offer two destinations:

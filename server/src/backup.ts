@@ -59,6 +59,7 @@ function parseSettings(value: unknown): Settings {
   return {
     concurrentDownloads: number("concurrentDownloads", 8),
     parallelPerProvider: number("parallelPerProvider", 8),
+    downloadSegments: number("downloadSegments", 8),
     uiLanguage, audioLanguage, subtitleLanguage,
     mergeByName: boolean("mergeByName"),
     streamSort: STREAM_SORTS.has(streamSort) ? streamSort : fallback.streamSort,

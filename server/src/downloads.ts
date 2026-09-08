@@ -1,6 +1,6 @@
 import { AppError } from "./errors.js";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
-import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -16,6 +16,9 @@ import {
   type QueueHalt,
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
+import {
+  planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
+} from "./download-segments.js";
 
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
@@ -33,6 +36,9 @@ export interface DownloadJob {
   errorVars?: Record<string, string | number>;
   retryCount?: number; pauseReason?: PauseReason; notBefore?: number;
   debrid?: { torrentId?: string; progress?: number; status?: string };
+  /** Present only while a segmented transfer is unfinished; it is what lets each connection
+   *  pick up at its own offset after a restart. */
+  segments?: Segment[];
   createdAt: string; updatedAt: string;
 }
 export type StreamResolver = (type: string, videoId: string, tried: string[]) => Promise<{ stream: StreamItem; settings: AddonDownloadSettings } | undefined>;
@@ -47,6 +53,8 @@ export interface QueueHooks {
   stallInitialMs?: number;
   stallTransferMs?: number;
   spaceCheckMs?: number;
+  /** How many connections one file is split across. */
+  segments?: () => number;
   retryDelay?: (retryCount: number, retryAfterMs?: number) => number;
   debrid?: DebridEngine;
   debridPollMs?: number;
@@ -85,6 +93,7 @@ export class DownloadQueue {
   private readonly stallInitialMs: number;
   private readonly stallTransferMs: number;
   private readonly spaceCheckMs: number;
+  private readonly segments: () => number;
   private readonly retryDelay: (retryCount: number, retryAfterMs?: number) => number;
   private debrid?: DebridEngine;
   private readonly debridPollMs: number;
@@ -113,6 +122,7 @@ export class DownloadQueue {
     this.stallInitialMs = hooks.stallInitialMs ?? 15_000;
     this.stallTransferMs = hooks.stallTransferMs ?? 30_000;
     this.spaceCheckMs = hooks.spaceCheckMs ?? 30_000;
+    this.segments = hooks.segments ?? (() => 1);
     this.retryDelay = hooks.retryDelay ?? retryDelayMs;
     this.debrid = hooks.debrid;
     this.debridPollMs = hooks.debridPollMs ?? 15_000;
@@ -378,8 +388,8 @@ export class DownloadQueue {
 
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
-  private publicJob({ stream, source, notBefore: _notBefore, debrid, ...job }: DownloadJob) {
-    return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress };
+  private publicJob({ stream, source, notBefore: _notBefore, debrid, segments, ...job }: DownloadJob) {
+    return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
    *  rename then has nothing to move. A failed state write must not bring the server down either. */
@@ -515,6 +525,76 @@ export class DownloadQueue {
     log("INFO", "Download source selected", { id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1 });
   }
 
+  /** A file is split only when the source serves byte ranges and the whole size is known.
+   *  Anything less and the transfer runs over one stream, exactly as it always did. */
+  private async segmentPlan(job: DownloadJob, stream: StreamItem, partSize: number, controller: AbortController) {
+    // A plan already on disk is finished as a plan: its parts sit at their own offsets, so a
+    // linear resume would append the rest over the top of them.
+    const restored = usableSegments(job.segments, job.total);
+    if (restored && partSize === job.total) return restored;
+    if (partSize > 0) return undefined;
+    const wanted = segmentCount(this.segments());
+    if (wanted < 2) return undefined;
+    const total = await this.probeRanges(job, stream, controller);
+    const plan = total ? planSegments(total, wanted) : [];
+    if (plan.length < 2) return undefined;
+    job.total = total;
+    log("INFO", "The file will be downloaded in segments", { id: job.id, segments: plan.length, total });
+    return plan;
+  }
+
+  /** One byte is enough to learn both answers: a source that serves ranges says 206 and names
+   *  the full size in Content-Range. */
+  private async probeRanges(job: DownloadJob, stream: StreamItem, controller: AbortController) {
+    const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}), range: "bytes=0-0" };
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const response = await safeFetch(stream.url!, { headers, signal: controller.signal });
+      const range = parseContentRange(response.headers.get("content-range"));
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status !== 206 || !range?.total) {
+        log("INFO", "The source does not serve ranges, one stream will be used", { id: job.id, httpStatus: response.status });
+        return undefined;
+      }
+      return range.total;
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      log("WARN", "The source could not be asked about ranges", { id: job.id, reason: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    } finally { clearTimeout(timer); }
+  }
+
+  private async transferSegment(stream: StreamItem, handle: FileHandle, segment: Segment, controller: AbortController, note: (bytes: number) => void) {
+    const size = segmentSize(segment);
+    if (segment.received >= size) return;
+    const from = segment.start + segment.received;
+    const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}), range: `bytes=${from}-${segment.end}` };
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    let response: Response;
+    try { response = await safeFetch(stream.url!, { headers, signal: controller.signal }); } finally { clearTimeout(timer); }
+    if (response.status !== 206 || !response.body) {
+      const wait = retryAfterMs(response.headers.get("retry-after"), this.now());
+      await response.body?.cancel().catch(() => undefined);
+      throw new HttpSourceError(response.status, `The source answered HTTP ${response.status} to a range request.`, wait);
+    }
+    const range = parseContentRange(response.headers.get("content-range"));
+    if (range && range.start !== from) throw new IncompleteDownloadError(segment.received, size);
+    const body = Readable.fromWeb(response.body as never);
+    let position = from;
+    try {
+      for await (const chunk of body as AsyncIterable<Buffer>) {
+        // A source that ignores the end of the range would otherwise write over the next segment.
+        const room = segment.end + 1 - position;
+        const piece = chunk.length > room ? chunk.subarray(0, room) : chunk;
+        await handle.write(piece, 0, piece.length, position);
+        position += piece.length; segment.received += piece.length;
+        note(piece.length);
+        if (position > segment.end) break;
+      }
+    } finally { body.destroy(); }
+    if (segment.received < size) throw new IncompleteDownloadError(segment.received, size);
+  }
+
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
@@ -534,46 +614,22 @@ export class DownloadQueue {
       const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
       await mkdir(path.dirname(target), { recursive: true });
       let offset = 0; try { offset = (await stat(partial)).size; } catch { /* new download */ }
-      const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) }; if (offset) headers.range = `bytes=${offset}-`;
-      const headerTimer = setTimeout(() => controller.abort(), 30_000); let response: Response;
-      try { response = await safeFetch(stream.url, { headers, signal: controller.signal }); } finally { clearTimeout(headerTimer); }
-      if (!response.ok || !response.body) {
-        const wait = retryAfterMs(response.headers.get("retry-after"), this.now());
-        await response.body?.cancel().catch(() => undefined);
-        throw new HttpSourceError(response.status, `The source answered HTTP ${response.status}.`, wait);
-      }
-      log("INFO", "Source connected", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
-      const range = parseContentRange(response.headers.get("content-range"));
-      let resumed = false;
-      if (offset > 0 && response.status === 206) {
-        if (range?.start === offset) resumed = true;
-        else if (range?.start === 0 || !range) offset = 0;
-        else throw new IncompleteDownloadError(offset, range.total);
-      } else if (offset > 0) {
-        offset = 0;
+      // A segmented file is written at its full size from the first byte. If the part file no
+      // longer has that size, the plan describes something that is not there any more.
+      if (job.segments && offset !== job.total) {
+        await unlink(partial).catch(() => undefined);
+        job.segments = undefined; job.received = 0; offset = 0;
       }
       const hinted = Number(stream.behaviorHints?.videoSize) || undefined;
-      job.total = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined, hinted);
-      job.received = offset;
-      if (job.total) await this.admitStorage(job.total - offset);
       // Three attempts should mean "it failed three times in a row", not "three times ever".
       // Once a resumed transfer is properly under way the earlier drop is settled and the budget
       // comes back; otherwise a large file would die of a few hiccups an hour.
       const recoveredAt = 50 * MiB; let recovered = false; let firstByte = false;
-      let received = offset; let lastProgressAt = this.now(); let lastSpeedAt = lastProgressAt; let lastBytes = received; let lastLog = received;
-      const stallPollMs = Math.min(5_000, Math.max(200, Math.min(this.stallInitialMs, this.stallTransferMs) / 2));
-      inactivity = setInterval(() => {
-        const limit = firstByte ? this.stallTransferMs : this.stallInitialMs;
-        if (this.now() - lastProgressAt > limit) {
-          stalled = true;
-          log("WARN", "The transfer has not moved", { id: job.id, received, idleMs: this.now() - lastProgressAt });
-          controller.abort();
-        }
-      }, stallPollMs);
-      const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
-        received += chunk.byteLength; job.received = received; firstByte = true; lastProgressAt = this.now();
-        this.onProgress?.(job, chunk.byteLength);
-        if (!recovered && received - offset >= recoveredAt) { recovered = true; job.retryCount = 0; }
+      let base = 0; let received = 0; let lastProgressAt = this.now(); let lastSpeedAt = lastProgressAt; let lastBytes = 0; let lastLog = 0;
+      const note = (bytes: number) => {
+        received += bytes; job.received = received; firstByte = true; lastProgressAt = this.now();
+        this.onProgress?.(job, bytes);
+        if (!recovered && received - base >= recoveredAt) { recovered = true; job.retryCount = 0; }
         const now = this.now();
         if (now - lastSpeedAt > 800) {
           job.speed = (received - lastBytes) / ((now - lastSpeedAt) / 1000);
@@ -583,16 +639,79 @@ export class DownloadQueue {
           log("INFO", "Download progress", { id: job.id, received, total: job.total, speed: Math.round(job.speed) });
           lastLog = received;
         }
-        output.enqueue(chunk);
-      } });
-      await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
-      clearInterval(inactivity); inactivity = undefined;
+      };
+      const watchStall = (idleSince: () => number) => {
+        const stallPollMs = Math.min(5_000, Math.max(200, Math.min(this.stallInitialMs, this.stallTransferMs) / 2));
+        inactivity = setInterval(() => {
+          const limit = firstByte ? this.stallTransferMs : this.stallInitialMs;
+          if (this.now() - idleSince() > limit) {
+            stalled = true;
+            log("WARN", "The transfer has not moved", { id: job.id, received, idleMs: this.now() - idleSince() });
+            controller.abort();
+          }
+        }, stallPollMs);
+      };
+      const start = (bytes: number) => { base = bytes; received = bytes; lastBytes = bytes; lastLog = bytes; job.received = bytes; };
+
+      const plan = await this.segmentPlan(job, stream, offset, controller);
+      if (plan) {
+        job.segments = plan;
+        start(segmentedBytes(plan));
+        if (job.total) await this.admitStorage(job.total - base);
+        const resumed = offset === job.total;
+        const handle = await open(partial, resumed ? "r+" : "w+");
+        try {
+          if (!resumed) await handle.truncate(job.total!);
+          // A connection that dies quietly must not hold the others up, so every segment is
+          // watched on its own; a finished one is out of the running.
+          const touched = plan.map(() => this.now());
+          let failure: unknown;
+          watchStall(() => Math.min(...touched));
+          await Promise.all(plan.map((segment, index) => this
+            .transferSegment(stream, handle, segment, controller, (bytes) => { touched[index] = this.now(); note(bytes); })
+            .then(() => { touched[index] = Number.POSITIVE_INFINITY; })
+            .catch((error: unknown) => { touched[index] = Number.POSITIVE_INFINITY; failure ??= error; controller.abort(); })));
+          if (failure) throw failure;
+          await handle.sync();
+        } finally { await handle.close(); }
+        clearInterval(inactivity); inactivity = undefined;
+      } else {
+        const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) }; if (offset) headers.range = `bytes=${offset}-`;
+        const headerTimer = setTimeout(() => controller.abort(), 30_000); let response: Response;
+        try { response = await safeFetch(stream.url, { headers, signal: controller.signal }); } finally { clearTimeout(headerTimer); }
+        if (!response.ok || !response.body) {
+          const wait = retryAfterMs(response.headers.get("retry-after"), this.now());
+          await response.body?.cancel().catch(() => undefined);
+          throw new HttpSourceError(response.status, `The source answered HTTP ${response.status}.`, wait);
+        }
+        log("INFO", "Source connected", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
+        const range = parseContentRange(response.headers.get("content-range"));
+        let resumed = false;
+        if (offset > 0 && response.status === 206) {
+          if (range?.start === offset) resumed = true;
+          else if (range?.start === 0 || !range) offset = 0;
+          else throw new IncompleteDownloadError(offset, range.total);
+        } else if (offset > 0) {
+          offset = 0;
+        }
+        job.total = expectedSize(range?.total, (Number(response.headers.get("content-length")) || 0) + offset || undefined, hinted);
+        start(offset);
+        if (job.total) await this.admitStorage(job.total - offset);
+        lastProgressAt = this.now();
+        watchStall(() => lastProgressAt);
+        const monitor = new TransformStream<Uint8Array, Uint8Array>({ transform: (chunk, output) => {
+          note(chunk.byteLength);
+          output.enqueue(chunk);
+        } });
+        await pipeline(Readable.fromWeb(response.body.pipeThrough(monitor) as never), this.createWriteStream(partial, { flags: resumed ? "a" : "w" }), { signal: controller.signal });
+        clearInterval(inactivity); inactivity = undefined;
+        const handle = await open(partial, "r+");
+        try { await handle.sync(); } finally { await handle.close(); }
+      }
       const expected = expectedSize(job.total, hinted);
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
-      const handle = await open(partial, "r+");
-      try { await handle.sync(); } finally { await handle.close(); }
       await rename(partial, target);
-      job.status = "completed"; job.speed = 0; job.retryCount = 0; this.setError(job);
+      job.status = "completed"; job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
       log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
       try { await this.onCompleted?.(job); }
       catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
@@ -608,7 +727,7 @@ export class DownloadQueue {
       } else if (kind === "transient" && (job.retryCount ?? 0) < 3) {
         if (error instanceof HttpSourceError && error.httpStatus === 416 && job.target) {
           await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
-          job.received = 0; job.total = undefined;
+          job.received = 0; job.total = undefined; job.segments = undefined;
         }
         job.retryCount = (job.retryCount ?? 0) + 1;
         const wait = this.retryDelay(job.retryCount, error instanceof HttpSourceError ? error.retryAfterMs : undefined);
@@ -623,7 +742,7 @@ export class DownloadQueue {
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
-        job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.retryCount = 0; job.notBefore = undefined;
+        job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);
