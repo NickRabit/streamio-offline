@@ -136,14 +136,28 @@ export async function searchAll(addons: AddonRecord[], query: string, type: stri
   };
 }
 
+function fillMissingMeta(base: MetaItem, extra: MetaItem): MetaItem {
+  return {
+    ...base,
+    ...(!base.description && extra.description ? { description: extra.description } : {}),
+    ...(!base.poster && extra.poster ? { poster: extra.poster } : {}),
+    ...(!base.background && extra.background ? { background: extra.background } : {}),
+    ...(base.year == null && extra.year != null ? { year: extra.year } : {}),
+    ...(!base.releaseInfo && extra.releaseInfo ? { releaseInfo: extra.releaseInfo } : {}),
+  };
+}
+
 export async function metadata(addons: AddonRecord[], type: string, id: string) {
+  let best: MetaItem | null = null;
   for (const addon of addons.filter((a) => a.enabled && a.role !== "source" && supports(a, "meta", type, id))) {
     try {
       const response = await jsonFetch<{ meta?: MetaItem }>(resourceUrl(addon, "meta", type, id));
-      if (response.meta) return response.meta;
+      if (!response.meta) continue;
+      best = best ? fillMissingMeta(best, response.meta) : response.meta;
+      if (best.description) return best;
     } catch { /* try next metadata provider */ }
   }
-  return null;
+  return best;
 }
 
 /** Doplňky, které pro tenhle titul umí vrátit streamy. Klient se jich pak ptá jednoho po druhém. */

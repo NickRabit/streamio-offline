@@ -213,8 +213,7 @@ export function cacheFieldsFromMeta(meta: MetaItem | null | undefined): { name?:
 export function needsBackfill(raw?: LibraryMetaRecord): boolean {
   const viewed = viewMeta(raw);
   if (!viewed?.id) return false;
-  if (!raw?.name) return true;
-  return raw.year == null && raw.description == null;
+  return !raw?.name || raw.year == null || !raw.description;
 }
 
 export function browseMeta(
