@@ -204,6 +204,7 @@ export const en = {
   "catalog.needQueryText": "This catalog only returns results for a search term.",
   "catalog.emptyTitle": "The catalog is empty",
   "catalog.emptyText": "Try a search, or another catalog.",
+  "catalog.description": "Description",
   "catalog.noDescription": "No description.",
   "catalog.pickTitle": "Pick a title",
   "catalog.pickText": "Details, episodes and sources from every active addon appear here.",

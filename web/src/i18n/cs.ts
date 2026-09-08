@@ -200,6 +200,7 @@ export const cs: Catalog = {
   "catalog.needQueryText": "Tenhle katalog vrací výsledky jen na hledaný výraz.",
   "catalog.emptyTitle": "Katalog je prázdný",
   "catalog.emptyText": "Zkuste vyhledávání nebo jiný katalog.",
+  "catalog.description": "Popis",
   "catalog.noDescription": "Bez popisu.",
   "catalog.pickTitle": "Vyberte titul",
   "catalog.pickText": "Objeví se tu podrobnosti, epizody a zdroje ze všech aktivních doplňků.",
