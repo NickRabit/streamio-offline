@@ -76,6 +76,7 @@ push / ntfy out of the browser.
 
 ### Library and discovery
 
+- **Library metadata**: posters and descriptions for folders that did not arrive through the download queue. Spec in [library-metadata.md](library-metadata.md). Path parser, title units and scoring ship first; Identify, the scan job and library chrome follow.
 - **Follow show**: daily check for new episodes, enqueue as lazy jobs. The lazy-job plumbing exists; the watch list and scheduler do not.
 - Search: live input (~400 ms debounce), recent queries, suggestions from already loaded catalogs, optional rank-by-title-match.
 

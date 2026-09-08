@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, isPathWithin, isVideo, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -189,6 +189,19 @@ test("oblíbené se filtrují před stránkováním", async () => {
     const result = await browseDirectory(root, "kolekce", "", 0, 60, "name", false, "", new Set([wanted]));
     assert.equal(result.total, 1);
     assert.deepEqual(result.items.map((item) => item.path), [wanted]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("listVideos walks the same tree scanLibrary uses", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-videos-"));
+  try {
+    await mkdir(path.join(root, "Show", "01 serie"), { recursive: true });
+    await writeFile(path.join(root, "Show", "01 serie", "01.mkv"), "");
+    await writeFile(path.join(root, "note.txt"), "");
+    const found = await listVideos(root);
+    assert.deepEqual(found.map((item) => item.relative), [path.join("Show", "01 serie", "01.mkv")]);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
