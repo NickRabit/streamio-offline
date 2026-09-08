@@ -1,3 +1,4 @@
+import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
@@ -238,22 +239,29 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const subtitlesHiddenRef = useRef(false);
   const applySubtitleVisibilityRef = useRef<(() => void) | null>(null);
   const [mobileLandscape, setMobileLandscape] = useState(false);
-  const [cssFullscreen, setCssFullscreen] = useState(false);
+  const [fullscreenSupported, setFullscreenSupported] = useState(false);
+  const [fullscreenUnavailable, setFullscreenUnavailable] = useState(false);
+  const [cursorHidden, setCursorHidden] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const controlsTimerRef = useRef<number | undefined>(undefined);
   const automaticFullscreenRef = useRef(false);
   useEffect(() => {
-    if (!open) { setSettingsOpen(false); return; }
+    if (!open) { setSettingsOpen(false); setBrowserFullscreen(false); setFullscreenUnavailable(false); return; }
     const bottom = bottomRef.current;
     if (!bottom) return;
     const measure = () => overlayRef.current?.style.setProperty("--player-bottom-height", `${bottom.getBoundingClientRect().height}px`);
     const observer = new ResizeObserver(measure);
     observer.observe(bottom);
     measure();
-    const sync = () => setBrowserFullscreen(document.fullscreenElement === overlayRef.current);
-    document.addEventListener("fullscreenchange", sync);
+    setFullscreenSupported(supportsPlayerFullscreen(overlayRef.current));
+    const sync = () => setBrowserFullscreen(playerIsFullscreen(overlayRef.current));
+    const events = ["fullscreenchange", "webkitfullscreenchange"];
+    for (const event of events) document.addEventListener(event, sync);
     sync();
-    return () => { observer.disconnect(); document.removeEventListener("fullscreenchange", sync); };
+    return () => {
+      observer.disconnect();
+      for (const event of events) document.removeEventListener(event, sync);
+    };
   }, [open]);
   // The resumed-at notice should inform, not get in the way; it leaves after five seconds.
   useEffect(() => {
@@ -701,39 +709,41 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return clearControlsTimer;
   }, [open, paused, buffering, error, scrub]);
 
-  /** Fullscreen has to contain our whole layer. On iOS a video only gets the system
-   * player, which does not know the full length of an HLS stream still being produced. */
-  const enterBrowserFullscreen = async () => {
-    if (document.fullscreenElement) return true;
-    const node = overlayRef.current as (HTMLElement & { webkitRequestFullscreen?: () => Promise<void> | void }) | null;
-    try {
-      if (node?.requestFullscreen) {
-        await node.requestFullscreen();
-        return true;
-      }
-      if (node?.webkitRequestFullscreen) {
-        await node.webkitRequestFullscreen();
-        return true;
-      }
-    } catch { /* Without a user gesture the browser may refuse automatic fullscreen. */ }
-    return false;
-  };
+  useEffect(() => {
+    setCursorHidden(false);
+    if (!open || !browserFullscreen) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      setCursorHidden(false);
+      clearTimeout(timer);
+      timer = setTimeout(() => setCursorHidden(true), 10_000);
+    };
+    const move = (event: PointerEvent) => { if (event.pointerType === "mouse") reset(); };
+    const overlay = overlayRef.current;
+    overlay?.addEventListener("pointermove", move);
+    overlay?.addEventListener("pointerdown", reset);
+    window.addEventListener("keydown", reset);
+    reset();
+    return () => {
+      clearTimeout(timer);
+      overlay?.removeEventListener("pointermove", move);
+      overlay?.removeEventListener("pointerdown", reset);
+      window.removeEventListener("keydown", reset);
+    };
+  }, [open, browserFullscreen]);
 
   const toggleFullscreen = async () => {
-    if (document.fullscreenElement === overlayRef.current) {
-      await document.exitFullscreen().catch(() => undefined);
-      return;
+    setFullscreenUnavailable(false);
+    if (playerIsFullscreen(overlayRef.current)) {
+      await exitPlayerFullscreen();
+    } else if (!await enterPlayerFullscreen(overlayRef.current)) {
+      setFullscreenUnavailable(true);
     }
-    if (cssFullscreen) { setCssFullscreen(false); return; }
-    // Safari on iPhone does not support fullscreen for an ordinary element. Instead of
-    // handing over to the native video player we use a compact layer over the whole viewport.
-    if (!await enterBrowserFullscreen()) setCssFullscreen(true);
   };
 
-  /** Turning the phone to landscape maximises the player and, if the browser allows it,
-   * enters native fullscreen too. The CSS variant always works. */
+  // Rotation may enter fullscreen only for our complete player overlay.
   useEffect(() => {
-    if (!open) { setMobileLandscape(false); setCssFullscreen(false); automaticFullscreenRef.current = false; return; }
+    if (!open) { setMobileLandscape(false); automaticFullscreenRef.current = false; return; }
     const orientation = window.matchMedia("(orientation: landscape)");
     let previous = false;
     const update = () => {
@@ -741,14 +751,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       const landscape = orientation.matches && Math.min(window.innerWidth, window.innerHeight) <= 700 && Math.max(window.innerWidth, window.innerHeight) <= 1200;
       setMobileLandscape(landscape);
       if (landscape && touchDevice && !previous) {
-        window.setTimeout(() => void enterBrowserFullscreen().then((entered) => {
+        window.setTimeout(() => void enterPlayerFullscreen(overlayRef.current).then((entered) => {
           automaticFullscreenRef.current = entered;
-          if (!entered) setCssFullscreen(true);
         }), 80);
       } else if (!landscape && previous) {
-        if (automaticFullscreenRef.current && document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+        if (automaticFullscreenRef.current) void exitPlayerFullscreen();
         automaticFullscreenRef.current = false;
-        setCssFullscreen(false);
+
       }
       previous = landscape;
     };
@@ -781,13 +790,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     videoRef.current?.pause();
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
-    setCssFullscreen(false);
-    const fullscreen = document.fullscreenElement;
+
+    const fullscreen = playerIsFullscreen(overlayRef.current);
     onClose();
     // The overlay goes first, fullscreen second. Otherwise Safari slides its tabs out
     // over the video when the close button is up there.
     if (fullscreen) window.setTimeout(() => {
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => undefined);
+      void exitPlayerFullscreen();
     }, 80);
   };
 
@@ -814,7 +823,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, time, duration, cssFullscreen, settingsOpen]);
+  }, [open, time, duration, browserFullscreen, settingsOpen]);
 
   if (!open) return null;
   const position = scrub ?? time;
@@ -823,7 +832,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     ? `embedded:${session.subtitleTrack}`
     : addonSubtitle ? `addon:${addonSubtitles.indexOf(addonSubtitle)}` : "off";
 
-  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape || cssFullscreen ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}`} role="dialog" aria-modal="true" onPointerMove={revealControls} onPointerDown={revealControls} onFocusCapture={revealControls} onBlurCapture={revealControls}>
+  return <div ref={overlayRef} className={`player-overlay${nativeSubtitles ? " native-subtitles" : ""}${mobileLandscape ? " mobile-landscape" : ""}${controlsVisible ? "" : " controls-hidden"}${cursorHidden ? " cursor-hidden" : ""}`} role="dialog" aria-modal="true" onPointerMove={(event) => { if (event.pointerType !== "touch") revealControls(); }} onPointerDown={(event) => { if (!(event.target as HTMLElement).closest(".player-host")) revealControls(); }} onFocusCapture={revealControls} onBlurCapture={revealControls}>
     <div className="player-head">
       <div><small>{t(session ? MODE_KEY[session.mode] : "player.mode.preparing")}{session?.mode === "transcode" ? ` · ${t(session.hardware ? "player.hardware" : "player.software")}` : ""}</small><strong>{title}</strong></div>
       {onToggleFavorite && <button className={`player-star ${favorite ? "on" : ""}`} aria-label={favorite ? t("favorite.remove") : t("favorite.add")} aria-pressed={Boolean(favorite)} title={favorite ? t("favorite.remove") : t("favorite.add")} onClick={onToggleFavorite}>
@@ -831,7 +840,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       </button>}
       <button className="icon-button" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
     </div>
-    <div className="player-host">
+    <div className="player-host" onClick={(event) => {
+      if ((event.target as HTMLElement).closest("button, input, select, a")) return;
+      setSettingsOpen(false);
+      if (settingsOpen || controlsVisible) { clearControlsTimer(); setControlsVisible(false); }
+      else revealControls();
+    }}>
       <video ref={videoRef} playsInline
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
         onTimeUpdate={(event) => {
@@ -875,21 +889,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         <span>{fmt(duration)}</span>
       </div>
       <div className="player-controls">
-        <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
-        <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
-        <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
-        {(onPrevious || onNext) && <div className="episode-navigation">
+        <div className={`transport-controls${onPrevious || onNext ? " has-episodes" : ""}`}>
           {onPrevious && <button className="previous-episode" disabled={nextBusy} aria-label={t("player.previousEpisode")} title={t("player.previousEpisodeTitle", { title: previousTitle ?? "" })} onClick={() => void onPrevious()}><SkipBack /></button>}
-        {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
-        </div>}
+        <button className="seek-step" onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
+        <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
+        <button className="seek-step" onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
+          {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
+        </div>
         <Volume2 />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
         <button className="player-settings-toggle" aria-label={t("player.settings")} title={t("player.settings")} aria-expanded={settingsOpen} aria-controls="player-settings" onClick={() => setSettingsOpen(!settingsOpen)}><Settings /></button>
-        <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{cssFullscreen || browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(cssFullscreen || browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>
+        {fullscreenSupported && <button className="player-action fullscreen-action" onClick={() => void toggleFullscreen()} title={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")} aria-label={t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}>{browserFullscreen ? <Minimize/> : <Maximize/>} <span>{t(browserFullscreen ? "player.exitFullscreen" : "player.fullscreen")}</span></button>}
       </div>
     </div>
+    {fullscreenUnavailable && <div className="fullscreen-notice" role="status">{t("player.fullscreenUnavailable")}</div>}
     {settingsOpen && <div id="player-settings" className="player-settings" role="region" aria-label={t("player.settings")}>
       <div className="player-settings-head"><strong>{t("player.settings")}</strong><button aria-label={t("player.closeSettings")} onClick={() => setSettingsOpen(false)}><X /></button></div>
       {session && <label className="track-picker" title={t("player.quality")}>

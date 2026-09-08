@@ -43,8 +43,8 @@ test("player keeps its picture stable and its overlay controls reachable", async
   const overflow = await overlay.locator(".player-controls").evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(overflow).toBe(false);
   const settingsButton = await overlay.locator(".player-settings-toggle").boundingBox();
-  const fullscreenButton = await overlay.locator(".fullscreen-action").boundingBox();
-  expect(fullscreenButton!.x - settingsButton!.x - settingsButton!.width).toBeLessThanOrEqual(8);
+  const fullscreenButton = await overlay.locator(".fullscreen-action").count() ? await overlay.locator(".fullscreen-action").boundingBox() : null;
+  if (fullscreenButton) expect(fullscreenButton.x - settingsButton!.x - settingsButton!.width).toBeLessThanOrEqual(8);
 
   for (const button of await overlay.locator(".player-controls button").all()) {
     const box = await button.boundingBox();
@@ -54,7 +54,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   }
   await overlay.getByRole("button", { name: "Zavřít nastavení přehrávání" }).click();
   await page.screenshot({ path: `test-results/player-${test.info().project.name}.png` });
-  await overlay.locator(".fullscreen-action").click();
+  if (await overlay.locator(".fullscreen-action").count()) await overlay.locator(".fullscreen-action").click();
   await overlay.dispatchEvent("pointermove");
   const maximized = await video.boundingBox();
   await expect(overlay).toHaveClass(/controls-hidden/, { timeout: 8000 });
@@ -62,4 +62,55 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await overlay.dispatchEvent("pointermove");
   await overlay.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();
   await expect(overlay).toHaveCount(0);
+});
+
+test("video clicks dismiss controls and settings; fullscreen hides an idle cursor", async ({ page, request }) => {
+  await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Katalog", exact: true }).click();
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
+  await page.getByRole("button", { name: /Zkušební film/ }).click();
+  await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const overlay = page.locator(".player-overlay");
+  const video = overlay.locator("video");
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime), { timeout: 15_000 }).toBeGreaterThan(0);
+  await video.evaluate((element: HTMLVideoElement) => { element.loop = true; });
+  await video.dispatchEvent("click");
+  await expect(overlay).toHaveClass(/controls-hidden/);
+  await video.dispatchEvent("click");
+  await expect(overlay).not.toHaveClass(/controls-hidden/);
+  await overlay.getByRole("button", { name: "Nastavení přehrávání", exact: true }).click();
+  await expect(overlay.locator(".player-settings")).toBeVisible();
+  await video.dispatchEvent("click");
+  await expect(overlay.locator(".player-settings")).toHaveCount(0);
+  await expect(overlay).toHaveClass(/controls-hidden/);
+  await video.dispatchEvent("click");
+  const supportsFullscreen = await overlay.evaluate((element) => Boolean(
+    (typeof element.requestFullscreen === "function" && document.fullscreenEnabled)
+    || (element as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen,
+  ));
+  if (!supportsFullscreen) {
+    await expect(overlay.locator(".fullscreen-action")).toHaveCount(0);
+    await expect(video).toBeVisible();
+    return;
+  }
+  await page.evaluate(async () => { if (document.fullscreenElement) await document.exitFullscreen(); });
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await overlay.locator(".fullscreen-action").click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains("player-overlay"))).toBe(true);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date());
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await page.clock.fastForward(9999);
+  await expect(overlay).not.toHaveClass(/cursor-hidden/);
+  await page.clock.fastForward(1);
+  await expect(overlay).toHaveClass(/cursor-hidden/);
+  await expect(video).toHaveCSS("cursor", "none");
+  await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await expect(overlay).not.toHaveClass(/cursor-hidden/);
+  await overlay.locator(".fullscreen-action").click();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  await page.clock.fastForward(10_000);
+  await expect(overlay).not.toHaveClass(/cursor-hidden/);
 });
