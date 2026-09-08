@@ -94,11 +94,25 @@ export interface LibrarySummary {
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
-export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string }
-export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number } }
+export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
+export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string; year?: string; description?: string; catalogName?: string; match?: LibraryMatch }
+export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number }; year?: string; description?: string; catalogName?: string; match?: LibraryMatch }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile);
+export interface IdentityPreview {
+  path: string; key: string; kind: "movie" | "series";
+  parsed: { title: string; query: string; year?: number };
+  match: LibraryMatch;
+  suggestion?: { type: string; id: string; name: string; year?: number; score: number };
+}
+export interface ScanState {
+  status: "idle" | "running" | "paused" | "completed" | "failed";
+  pauseReason?: "playback" | "download" | "breaker";
+  startedAt?: string; finishedAt?: string; updatedAt?: string;
+  total: number; done: number; matched: number; skipped: number; failed: number;
+  current?: string; remaining: string[]; error?: string;
+}
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }
