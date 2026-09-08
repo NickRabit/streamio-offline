@@ -221,7 +221,7 @@ test("a unit searched in vain is remembered and skipped, until a forced rescan",
     await h.scan.start();
     await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().total === 0);
     assert.equal(searches.length, 1);
-    await h.scan.start(true);
+    await h.scan.start({ force: true });
     await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().done === 1);
     assert.equal(searches.length, 2);
   } finally { await h.close(); }
@@ -255,5 +255,39 @@ test("missing paths skip and persist without an addon call", async () => {
     assert.equal(h.searches.length, 0);
     const saved = JSON.parse(await readFile(path.join(h.dataDir, "library-scan.json"), "utf8")) as { skipped: number };
     assert.equal(saved.skipped, 1);
+  } finally { await h.close(); }
+});
+
+test("a scan for one item leaves the rest of the library alone", async () => {
+  const searches: string[] = [];
+  const h = await harness({
+    listVideos: async () => [
+      { relative: "Foo/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
+      { relative: "Bar/b.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" },
+    ],
+    titleUnits: () => [movie("Foo"), movie("Bar")],
+    searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
+  });
+  try {
+    await h.scan.start({ path: "Bar" });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().total, 1);
+    assert.deepEqual(searches, ["Bar"]);
+    // Asking for one item overrides the memory of an earlier fruitless search.
+    await h.scan.start({ path: "Bar" });
+    await waitFor(() => h.scan.snapshot().status === "completed" && h.scan.snapshot().done === 1);
+    assert.deepEqual(searches, ["Bar", "Bar"]);
+  } finally { await h.close(); }
+});
+
+test("a scan for one file covers the title unit that holds it", async () => {
+  const searches: string[] = [];
+  const h = await harness({
+    searchAll: async (_addons, query) => { searches.push(query); return { items: [] }; },
+  });
+  try {
+    await h.scan.start({ path: path.join("Foo", "a.mkv") });
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.deepEqual(searches, ["Foo"]);
   } finally { await h.close(); }
 });

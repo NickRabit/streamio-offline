@@ -124,6 +124,18 @@ export async function listVideos(root: string, relative = "", depth = 0): Promis
   return found;
 }
 
+/** A cheap stamp of the whole tree. The automatic scan compares it before doing anything,
+ *  so an unchanged library asks the catalogues nothing. */
+export function libraryFingerprint(files: FoundFile[]): string {
+  let size = 0;
+  let newest = "";
+  for (const file of files) {
+    size += file.size;
+    if (file.modified > newest) newest = file.modified;
+  }
+  return `${files.length}:${size}:${newest}`;
+}
+
 /** One folder is one title. Several files in it are versions or episodes of the same thing, not separate items. */
 export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
   const groups = new Map<string, FoundFile[]>();

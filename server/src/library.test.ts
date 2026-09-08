@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -249,4 +249,12 @@ test("a browsed file is numbered from its own name, not only from a season folde
     assert.equal(file?.episode, 3);
     assert.deepEqual(numberedEpisode(path.join("Ted", "Ted.S02E03.mkv")), { season: 2, episode: 3 });
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the fingerprint moves with a new, a resized or a touched file", () => {
+  const base = [file("Foo/a.mkv", 10), file("Bar/b.mkv", 20)];
+  assert.equal(libraryFingerprint(base), libraryFingerprint([...base].reverse()), "order is not a change");
+  assert.notEqual(libraryFingerprint(base), libraryFingerprint([...base, file("Baz/c.mkv")]));
+  assert.notEqual(libraryFingerprint(base), libraryFingerprint([file("Foo/a.mkv", 11), base[1]!]));
+  assert.notEqual(libraryFingerprint(base), libraryFingerprint([{ ...base[0]!, modified: "2026-02-02T00:00:00.000Z" }, base[1]!]));
 });

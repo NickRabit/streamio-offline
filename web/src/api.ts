@@ -101,7 +101,8 @@ export const api = {
   librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
   dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
   libraryScan: () => request<ScanState>("/api/library/scan"),
-  startLibraryScan: (force = false) => request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify({ force }) }),
+  startLibraryScan: (body: { force?: boolean; path?: string } = {}) =>
+    request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify(body) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
   setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>

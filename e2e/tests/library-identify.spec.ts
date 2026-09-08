@@ -109,3 +109,17 @@ test("each episode of a matched series shows its own plot", async ({ page }) => 
   await expect(first.locator(".library-desc")).toContainText("V prvním dílu");
   await expect(second.locator(".library-desc")).toContainText("Ve druhém dílu");
 });
+
+test("find metadata on one item matches just that item", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await expect(fixtureTile(page)).toBeVisible();
+  await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  if (await page.getByRole("button", { name: "Zrušit přiřazení" }).isVisible()) {
+    await page.getByRole("button", { name: "Zrušit přiřazení" }).click();
+    await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  }
+  await page.getByRole("button", { name: "Najít metadata" }).click();
+  await expect(page.getByText("Hledám metadata…")).toBeVisible();
+  await expect(fixtureTile(page).locator(".library-desc")).toContainText("Film, který existuje jen pro testy.", { timeout: 20_000 });
+});
