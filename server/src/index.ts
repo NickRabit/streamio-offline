@@ -24,6 +24,8 @@ import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, l
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
+import { LibraryAutoScan } from "./library-autoscan.js";
+import { watchLibrary } from "./library-watch.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
@@ -1074,6 +1076,20 @@ const libraryScan = new LibraryScan({
   gapMs: Number.isFinite(scanGapMs) ? scanGapMs : 3_000,
 });
 
+const autoScanIntervalMs = Number(process.env.LIBRARY_AUTO_SCAN_INTERVAL_MS);
+// The switch in Settings is the user's; this one keeps a whole install (or a test
+// run) from ever reaching out on its own.
+const autoScanAllowed = process.env.LIBRARY_AUTO_SCAN !== "0";
+const libraryAutoScan = new LibraryAutoScan({
+  enabled: () => autoScanAllowed && store.settings().libraryAutoScan,
+  files: () => libraryFiles(),
+  status: () => libraryScan.snapshot(),
+  start: () => libraryScan.start(),
+  busy: () => playbackBusy() || queue.list().some((job) => job.status === "downloading"),
+  watch: (onChange) => watchLibrary(DOWNLOAD_DIR, () => { invalidateLibrary(); onChange(); }),
+  ...(Number.isFinite(autoScanIntervalMs) ? { intervalMs: autoScanIntervalMs } : {}),
+});
+
 const rememberTitle = async (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (!media?.id) return;
   const key = titleKey(target, media, flat);
@@ -1117,6 +1133,7 @@ queue.setDebrid({
 });
 await queue.load();
 await libraryScan.load();
+if (autoScanAllowed) libraryAutoScan.start();
 await stats.load();
 // History comes from the queue so the statistics do not start empty; finished jobs can
 // be deleted, though, so from now on a record of our own is kept. Only what predates that
@@ -1251,7 +1268,14 @@ app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
-app.post("/api/library/scan", asyncRoute(async (req, res) => res.json(await libraryScan.start(req.body?.force === true))));
+app.post("/api/library/scan", asyncRoute(async (req, res) => {
+  const requested = String(req.body?.path ?? "").trim();
+  if (requested && !resolveInside(DOWNLOAD_DIR, requested)) throw new AppError("Invalid path.", "err.invalidPath");
+  const state = await libraryScan.start({ force: req.body?.force === true, path: requested });
+  // A manual run covers the same ground, so the automatic one starts from here too.
+  void libraryAutoScan.remember();
+  res.json(state);
+}));
 app.post("/api/library/scan/stop", asyncRoute(async (_req, res) => { await libraryScan.stop(); res.status(204).end(); }));
 app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {
   const source = mediaResources.get(String(req.params.sourceId), ownerOf(req).sid, "source").stream;
@@ -1509,6 +1533,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.mergeByName !== undefined) state.settings.mergeByName = Boolean(req.body.mergeByName);
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
+    if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.artworkLocation !== undefined) {
       state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";

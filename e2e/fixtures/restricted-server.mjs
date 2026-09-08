@@ -61,6 +61,7 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     RESTRICTED_MODE: "1",
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? "WARN",
     LOG_STDOUT: "1",
+    LIBRARY_AUTO_SCAN: "0",
   },
 });
 

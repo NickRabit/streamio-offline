@@ -8,7 +8,7 @@ import {
   type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
-import type { FoundFile } from "./library.js";
+import { isPathWithin, type FoundFile } from "./library.js";
 import type { AddonRecord, MetaItem } from "./types.js";
 
 export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
@@ -28,6 +28,8 @@ export interface ScanState {
   current?: string;
   remaining: string[];
   error?: string;
+  /** Set when the run covers one item instead of the whole library. */
+  scope?: string;
 }
 
 export interface LibraryScanOpts {
@@ -122,7 +124,9 @@ export class LibraryScan {
 
   /** `force` throws away the memory of earlier fruitless searches and asks the
    *  catalogues about every unbound title again. */
-  async start(force = false): Promise<ScanState> {
+  /** `force` throws away the memory of earlier fruitless searches; `path` narrows the
+   *  run to one item, which the interface uses for "find metadata" on a single title. */
+  async start({ force = false, path: scope = "" }: { force?: boolean; path?: string } = {}): Promise<ScanState> {
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
     const files = await this.opts.listVideos(this.opts.downloadDir);
     const units = this.opts.titleUnits(files);
@@ -130,11 +134,16 @@ export class LibraryScan {
     this.cancelled = false;
     const records = this.opts.libraryMeta();
     const suggestions = this.opts.librarySuggestions();
-    const queued = units.filter((unit) => {
+    const wanted = scope
+      ? units.filter((unit) => isPathWithin(unit.key, scope) || isPathWithin(scope, unit.key))
+      : units;
+    // Asking for one item is a deliberate act, so it ignores the searched-in-vain memory.
+    const again = force || Boolean(scope);
+    const queued = wanted.filter((unit) => {
       if (lookupSkipped(unit.key, records) || scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
-      return force || !scannedRecently(suggestions[unit.key]);
+      return again || !scannedRecently(suggestions[unit.key]);
     });
-    if (force) await this.opts.updateMeta((_meta, current) => { for (const unit of units) delete current[unit.key]; });
+    if (again) await this.opts.updateMeta((_meta, current) => { for (const unit of wanted) delete current[unit.key]; });
     this.state = {
       status: "running",
       startedAt: nowIso(),
@@ -143,9 +152,10 @@ export class LibraryScan {
       done: 0, matched: 0, skipped: 0, failed: 0,
       remaining: queued.map((unit) => unit.key),
       current: queued[0]?.key,
+      ...(scope ? { scope } : {}),
     };
     await this.save();
-    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force });
+    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force, ...(scope ? { path: scope } : {}) });
     this.schedulePump();
     return this.snapshot();
   }

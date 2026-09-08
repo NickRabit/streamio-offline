@@ -498,6 +498,36 @@ POST /api/library/scan/stop → cancel; remaining dropped; 204
 
 No 409. The library page polls `GET /api/library/scan` every **2 s while the library view is open** and `status` is `running` or `paused`. That is not the download-queue cadence (downloads poll at 1.2 s on the downloads view and 5 s otherwise).
 
+### Automatic scan
+
+A file copied into the download folder is the one way a title arrives without the
+queue knowing about it, so nothing would ever look it up. `LibraryAutoScan`
+(`server/src/library-autoscan.ts`) closes that gap:
+
+- **A periodic check** (every six hours, plus one two minutes after start-up)
+  compares `libraryFingerprint()` -- file count, total size, newest `mtime` -- with
+  the last one it acted on. An unchanged tree ends there, with no request to any
+  addon. A changed one calls the ordinary `start()`, which skips bound, excluded
+  and already-searched units, so only genuinely new titles are looked up.
+- **A filesystem watch** (`server/src/library-watch.ts`) makes that prompt where
+  the platform allows it: recursive `fs.watch`, debounced by 30 s so a long copy
+  settles first. It is an accelerator, never the guarantee -- an SMB or NFS mount
+  delivers no events, and Linux has no recursive watch, in which case the watch
+  reports itself inactive and the periodic check carries the feature alone.
+- The fingerprint is recorded only once a scan actually started, so a failure
+  against a sleeping addon is retried at the next check. It lives in memory: after
+  a restart the first check scans, which costs nothing when nothing is new and
+  picks up whatever was copied in while the server was down.
+- A run is skipped while a scan is already going, while something is playing or
+  downloading, and when the user switched it off (`libraryAutoScan` in Settings,
+  default on) or the install did (`LIBRARY_AUTO_SCAN=0`).
+- A manual scan becomes the baseline too (`remember()`), so the automatic one does
+  not repeat what the user just ran.
+
+`POST /api/library/scan` also takes a `path`, which narrows the run to one title
+unit -- the "Find metadata" action in the item menu. Asking for one item is
+deliberate, so it ignores the searched-in-vain memory for that item.
+
 ### Manual Identify / Rematch
 
 From the existing three-dot menu (`browse-actions` in `web/src/App.tsx`) on a folder or a file:
@@ -641,7 +671,7 @@ Do not open a catalog-style detail sheet from the tile. Library stays a file bro
 | GET | `/api/library/suggestions` | **New.** `{ items: [{ key, label, suggestion }], total }` -- scan results nobody has confirmed. |
 | DELETE | `/api/library/suggestion` | **New.** `?key=` drops one suggestion, keeping the searched-in-vain memory. |
 | GET | `/api/library/scan` | **New.** Current `ScanState`. |
-| POST | `/api/library/scan` | **New.** `start()`; `{ force: true }` forgets earlier fruitless searches. Running or paused → current state, 200. |
+| POST | `/api/library/scan` | **New.** `start()`; `{ force: true }` forgets earlier fruitless searches, `{ path }` narrows the run to one item (and forgets that item's memory). Running or paused → current state, 200. |
 | POST | `/api/library/scan/stop` | **New.** Cancel. |
 | GET | `/api/search` | Unchanged; Identify uses it (already `images.rewriteMeta`). |
 | GET | `/api/library` | Unused by the web client. Not a fill path. If left working, attach meta via `knownTitle()` (parent walk) so nested units are visible; do not rely on it. |

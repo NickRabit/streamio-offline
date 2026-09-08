@@ -94,7 +94,7 @@ export function App() {
   const [episodesOpen, setEpisodesOpen] = useState(true);
   const [season, setSeason] = useState<number | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -222,10 +222,10 @@ export function App() {
       void loadSuggestionCount();
     }
   };
-  const startScan = async (force = false) => {
+  const startScan = async (options: { force?: boolean } = {}) => {
     try {
       scanWanted.current = true;
-      const state = await api.startLibraryScan(force);
+      const state = await api.startLibraryScan(options);
       scanStatus.current = state.status;
       applyScanState(state);
     } catch (error) { scanWanted.current = false; fail(error); }
@@ -256,6 +256,13 @@ export function App() {
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
+  const scanItem = async (itemPath: string) => {
+    setMenuFor(null);
+    try {
+      await api.startLibraryScan({ path: itemPath });
+      notify(t("library.scanItemStarted"));
+    } catch (error) { fail(error); }
+  };
   const matchActions = (item: BrowseItem) => {
     const match = item.match ?? "unmatched";
     const skipped = Boolean(item.skipLookup);
@@ -269,7 +276,10 @@ export function App() {
           <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
           <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
         </>
-        : <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>}
+        : <>
+          <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>
+          <button onClick={() => void scanItem(item.path)}><Search/> {t("library.scanItem")}</button>
+        </>}
       {skipped
         ? <button onClick={() => void setCatalogLookup(item.path, true)}><Search/> {t("library.allowLookup")}</button>
         : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
@@ -1068,7 +1078,7 @@ export function App() {
                 <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
                   <Sparkles/> {t("library.scan")}
                 </button>
-                <button title={t("library.rescanHint")} onClick={() => void startScan(true)} disabled={scanning}>
+                <button title={t("library.rescanHint")} onClick={() => void startScan({ force: true })} disabled={scanning}>
                   <RefreshCw/> {t("library.rescan")}
                 </button>
               </div>
@@ -1284,6 +1294,10 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
         <SettingControl title={t("settings.resumeRow")} text={t("settings.resumeRowHint")}>
           <select aria-label={t("settings.resumeRowLabel")} disabled={restricted} value={settings.showResumeRow ? "1" : "0"} onChange={(event) => void onSave({ showResumeRow: event.target.value === "1" })}>
             <option value="1">{t("settings.show")}</option><option value="0">{t("settings.hide")}</option>
+          </select></SettingControl>
+        <SettingControl title={t("settings.autoScan")} text={t("settings.autoScanHint")}>
+          <select aria-label={t("settings.autoScanLabel")} disabled={restricted} value={settings.libraryAutoScan ? "1" : "0"} onChange={(event) => void onSave({ libraryAutoScan: event.target.value === "1" })}>
+            <option value="1">{t("settings.autoScanOn")}</option><option value="0">{t("settings.autoScanOff")}</option>
           </select></SettingControl>
       </section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>

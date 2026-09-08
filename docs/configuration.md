@@ -67,6 +67,16 @@ Details in [Troubleshooting](troubleshooting.md#when-an-addon-stops-answering).
 | `ADDON_BREAKER_COOLDOWN_MS` | `30000` | First cooldown; each further outage doubles it. |
 | `ADDON_BREAKER_MAX_COOLDOWN_MS` | `300000` | Ceiling for that doubling. |
 
+## Library metadata
+
+The scan is described in [Library metadata](library-metadata.md).
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `LIBRARY_SCAN_GAP_MS` | `3000` | Gap between two catalogue lookups while a scan runs. |
+| `LIBRARY_AUTO_SCAN` | `1` | `0` stops the server ever scanning on its own, whatever the switch in Settings says. |
+| `LIBRARY_AUTO_SCAN_INTERVAL_MS` | `21600000` | How often the automatic scan checks whether the library changed. A check on an unchanged tree asks the addons nothing. |
+
 ## Conversion
 
 Details in [Playback](playback.md) and

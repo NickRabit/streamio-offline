@@ -40,6 +40,8 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? "WARN",
     LOG_STDOUT: "1",
     LIBRARY_SCAN_GAP_MS: "0",
+    // The tests drive the scan themselves; an automatic one would rematch titles mid-run.
+    LIBRARY_AUTO_SCAN: "0",
   },
 });
 
