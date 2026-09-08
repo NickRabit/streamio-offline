@@ -570,20 +570,24 @@ const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMet
 const PLAYBACK_IDLE_SECONDS = 300;
 const playbackBusy = () => playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS);
 const metaBackfill = new ArtworkQueue();
+const metaBackfillTried = new Set<string>();
 const scheduleMetaBackfill = (type: string, id: string) => {
-  if (!id || playbackBusy()) return false;
-  metaBackfill.run(`${type}:${id}`, async () => {
+  const key = `${type}:${id}`;
+  if (!id || playbackBusy() || metaBackfillTried.has(key)) return false;
+  metaBackfill.run(key, async () => {
     if (playbackBusy()) return;
     const meta = await cachedMeta(type, id);
+    metaBackfillTried.add(key);
     const fields = cacheFieldsFromMeta(meta);
     if (!fields.name && !fields.year && !fields.description) return;
     await store.update((state) => {
       const next = { ...state.libraryMeta };
-      for (const [key, record] of Object.entries(next)) {
-        if (record.type === type && record.id === id) next[key] = { ...record, ...fields };
+      for (const [pathKey, record] of Object.entries(next)) {
+        if (record.type === type && record.id === id) next[pathKey] = { ...record, ...fields };
       }
       state.libraryMeta = next;
     });
+    invalidateLibrary();
   });
   return true;
 };

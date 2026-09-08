@@ -171,7 +171,8 @@ test("browse copy uses cached fields and a normalised catalog name", () => {
   assert.equal(browseMeta("Practical Magic", "practical magic", records).catalogName, undefined);
   assert.equal(browseMeta("Practical Magic", "Kouzla", records).catalogName, "Practical Magic");
   assert.equal(needsBackfill({ type: "movie", id: "tt1" }), true);
-  assert.equal(needsBackfill({ type: "movie", id: "tt1", name: "X", year: "1998" }), false);
+  assert.equal(needsBackfill({ type: "movie", id: "tt1", name: "X", year: "1998" }), true);
+  assert.equal(needsBackfill({ type: "movie", id: "tt1", name: "X", year: "1998", description: "Hi" }), false);
   assert.deepEqual(cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film", releaseInfo: "2024", description: "Hi" }), {
     name: "Film", year: "2024", description: "Hi",
   });
