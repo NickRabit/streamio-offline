@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import {
-  autoAccept, isExtraName, matchKeyFor, pickSuggestion, scanSkipReason, scoreHit, titleUnits, viewMeta,
+  autoAccept, browseMeta, cacheFieldsFromMeta, dropKeyed, isExtraName, knownTitleOf, matchKeyFor, matchStatus,
+  needsBackfill, pickSuggestion, remapKeyed, scanSkipReason, scoreHit, titleUnits, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -127,4 +128,39 @@ test("legacy libraryMeta rows are download and locked", () => {
   assert.equal(scanSkipReason({ type: "movie", id: "tt1", source: "scan", locked: false }), "bound");
   assert.equal(scanSkipReason({ type: "movie", id: "", source: "user", locked: true }), "locked");
   assert.equal(scanSkipReason(undefined), undefined);
+});
+
+test("knownTitleOf ignores unmatch sentinels and walks parents", () => {
+  const records = {
+    "Father Ted": { type: "series", id: "tt0111958", name: "Father Ted", year: "1995" },
+    "xxx": { type: "movie", id: "", source: "user" as const, locked: true },
+  };
+  assert.equal(knownTitleOf("Father Ted/01 serie/01.mkv", records)?.id, "tt0111958");
+  assert.equal(knownTitleOf("xxx/one.mp4", records), undefined);
+  assert.equal(matchStatus("Father Ted", records), "matched");
+  assert.equal(matchStatus("xxx", records), "rejected");
+  assert.equal(matchStatus("orphan", records, { orphan: { type: "movie", id: "tt1", name: "Orphan", score: 90 } }), "suggested");
+  assert.equal(matchStatus("missing", records), "unmatched");
+});
+
+test("browse copy uses cached fields and a normalised catalog name", () => {
+  const records = {
+    "Practical Magic": { type: "movie", id: "tt1", name: "Practical Magic", year: "1998", description: "A witch." },
+  };
+  assert.deepEqual(browseMeta("Practical Magic", "Practical Magic", records), {
+    match: "matched", year: "1998", description: "A witch.",
+  });
+  assert.equal(browseMeta("Practical Magic", "practical magic", records).catalogName, undefined);
+  assert.equal(browseMeta("Practical Magic", "Kouzla", records).catalogName, "Practical Magic");
+  assert.equal(needsBackfill({ type: "movie", id: "tt1" }), true);
+  assert.equal(needsBackfill({ type: "movie", id: "tt1", name: "X", year: "1998" }), false);
+  assert.deepEqual(cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film", releaseInfo: "2024", description: "Hi" }), {
+    name: "Film", year: "2024", description: "Hi",
+  });
+});
+
+test("suggestions remap and drop like libraryMeta", () => {
+  const suggestions = { "Foo/Bar": { type: "movie", id: "tt1", name: "Foo", score: 90 } };
+  assert.deepEqual(remapKeyed(suggestions, "Foo", "Baz")["Baz/Bar"]?.id, "tt1");
+  assert.deepEqual(dropKeyed(suggestions, "Foo"), {});
 });
