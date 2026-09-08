@@ -18,7 +18,7 @@ export interface CatalogDefinition {
   id: string;
   name?: string;
   extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }>;
-  /** Starší zápis téhož, doplňky ho pořád posílají. */
+  /** An older spelling of the same thing, which addons still send. */
   extraSupported?: string[];
   extraRequired?: string[];
 }

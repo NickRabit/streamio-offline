@@ -1,6 +1,6 @@
-/** Řádek logu ze serveru: čas, úroveň, zpráva a volitelný kontext v JSON. */
+/** One log line from the server: time, level, message and optional context as JSON. */
 export interface LogLine { at: string; level: string; message: string; context?: string; raw: string }
-/** Stejné chyby se seskupují dohromady, ať je vidět "tohle se stalo 40×", ne 40 řádků. */
+/** Identical errors are grouped together, so it reads "this happened 40 times" rather than 40 lines. */
 export interface LogGroup { key: string; level: string; message: string; count: number; first: string; last: string; samples: LogLine[] }
 
 const LINE = /^(\d{4}-\d{2}-\d{2}T\S+)\s+(DEBUG|INFO|WARN|ERROR)\s+([\s\S]*)$/;
@@ -19,7 +19,7 @@ export function parseLog(text: string): LogLine[] {
   });
 }
 
-// Identifikátory relací, cesty a čísla se v každém výskytu liší, ale jde pořád o tutéž chybu.
+// Session ids, paths and numbers differ in every occurrence, but the error is still the same one.
 const fingerprint = (message: string) => message
   .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "<id>")
   .replace(/\b\d+([.,]\d+)?\b/g, "<n>")
@@ -27,7 +27,7 @@ const fingerprint = (message: string) => message
 
 const RANK: Record<string, number> = { ERROR: 3, WARN: 2, INFO: 1, DEBUG: 0 };
 
-/** Seskupí stejné záznamy a seřadí je od nejzávažnějších a nejčerstvějších. */
+/** Groups identical entries and orders them from the most severe and most recent. */
 export function groupLog(lines: LogLine[], levels = ["WARN", "ERROR"]): LogGroup[] {
   const groups = new Map<string, LogGroup>();
   for (const line of lines) {
@@ -38,7 +38,7 @@ export function groupLog(lines: LogLine[], levels = ["WARN", "ERROR"]): LogGroup
     else {
       group.count += 1;
       group.last = line.at;
-      // Stačí pár posledních výskytů; ty starší už nic nového neřeknou.
+      // A few of the latest occurrences are enough; the older ones say nothing new.
       group.samples = [line, ...group.samples].slice(0, 3);
     }
   }

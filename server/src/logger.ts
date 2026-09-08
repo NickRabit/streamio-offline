@@ -28,8 +28,8 @@ export async function initLogger(dataDir = process.env.DATA_DIR ?? "/data") {
   threshold = ORDER[parseLevel(process.env.LOG_LEVEL) ?? "INFO"];
   maxBytes = Math.max(64 * 1024, Number(process.env.LOG_MAX_BYTES) || DEFAULT_MAX_BYTES);
   mirror = process.env.LOG_STDOUT !== "0";
-  // Nula úklid vypne, jinak se starší záznamy zahazují. Bez toho log jen roste
-  // a k ničemu už není: nikdo nedohledá chybu z minulého týdne mezi milionem řádků.
+  // Zero switches the cleanup off, otherwise older entries are dropped. Without it the log
+  // only grows and stops being of any use: nobody finds last week's error among a million lines.
   retentionDays = Math.max(0, Number(process.env.LOG_RETENTION_DAYS ?? DEFAULT_RETENTION_DAYS) || 0);
   await mkdir(dataDir, { recursive: true });
   written = await stat(filename).then((info) => info.size, () => 0);
@@ -98,7 +98,7 @@ export const flushLog = () => chain;
 const levelOf = (line: string): LogLevel | undefined => parseLevel(line.split(" ")[1]);
 const timeOf = (line: string) => { const value = Date.parse(line.slice(0, 24)); return Number.isNaN(value) ? undefined : value; };
 
-/** Smaže celý záznam včetně otočené generace. */
+/** Deletes the whole log, the rotated generation included. */
 export async function clearLog() {
   chain = chain.then(async () => {
     await writeFile(filename, "", { mode: 0o600 });
@@ -108,8 +108,8 @@ export async function clearLog() {
   await chain;
 }
 
-/** Zahodí záznamy starší než retenční lhůta. Řádek bez rozpoznaného času si necháváme,
- * ať se kvůli neznámému formátu neztratí něco podstatného. */
+/** Drops entries older than the retention period. A line with no recognised timestamp is kept,
+ * so an unknown format does not lose something that matters. */
 export async function pruneLog(days = retentionDays) {
   if (!days) return 0;
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
@@ -131,7 +131,7 @@ export async function pruneLog(days = retentionDays) {
   return removed;
 }
 
-/** Úklid běží při startu a pak jednou za šest hodin; častěji nemá co dělat. */
+/** The cleanup runs at start-up and then every six hours; more often it would have nothing to do. */
 export function startLogMaintenance() {
   if (!retentionDays) return;
   void pruneLog();
@@ -157,8 +157,8 @@ export async function readLog(options: { tail?: number; level?: LogLevel; hours?
   }
   if (options.tail && lines.length > options.tail) lines = lines.slice(-options.tail);
   if (lines.length) return `${lines.join("\n")}\n`;
-  // Prázdný výsledek filtru není totéž co prázdný log; hláška by se v rozhraní
-  // tvářila jako další záznam.
+  // An empty filter result is not the same as an empty log; a message would look like
+  // just another entry in the interface.
   const filtered = Boolean(options.level || options.hours || options.search);
   return filtered ? "" : "The log has no entries yet.\n";
 }

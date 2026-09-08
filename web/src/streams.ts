@@ -1,12 +1,12 @@
 import { guessLanguages } from "./languages";
 import type { Stream } from "./types";
 
-/** Vše, co doplněk o zdroji napsal. Jazyk ani velikost strukturovaně neposílá, bývají tady. */
+/** Everything the addon wrote about the source. It sends neither language nor size as data; they tend to be in here. */
 export const streamText = (stream: Stream) =>
   [stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ");
 
 const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3 };
-// Torrentio velikost v behaviorHints neposílá vůbec, má ji jen v textu jako "💾 35.09 GB".
+// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB".
 const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/i;
 
 export function streamSize(stream: Stream): number | undefined {
@@ -25,7 +25,7 @@ export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";
 
 export interface StreamFilters { addon: string; language: string; sort: StreamSort }
 
-/** Doporučené = nejdřív preferovaný jazyk, uvnitř skupiny od největšího. */
+/** Recommended = the preferred language first, largest first within the group. */
 export function arrangeStreams(streams: Stream[], filters: StreamFilters, preferredLanguage: string, priority: Map<string, number> = new Map()): Stream[] {
   const list = streams.filter((stream) =>
     (!filters.addon || stream.addonName === filters.addon) &&
@@ -43,7 +43,7 @@ export function arrangeStreams(streams: Stream[], filters: StreamFilters, prefer
       const byPriority = rank(a.stream) - rank(b.stream);
       if (byPriority) return byPriority;
     }
-    // Neznámá velikost patří na konec při obou směrech řazení, ne jen při sestupném.
+    // An unknown size belongs at the end in both sort directions, not only in descending order.
     const left = size.get(a.stream), right = size.get(b.stream);
     if (left === undefined || right === undefined) {
       if (left !== right) return left === undefined ? 1 : -1;

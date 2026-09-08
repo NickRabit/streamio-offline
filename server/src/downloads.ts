@@ -20,8 +20,8 @@ import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
 export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
 export type PauseReason = "user" | "storage";
-/** Úloha bez `stream` je líná: zdroj pro ni vybere resolver až v okamžiku, kdy na ni
- *  ve frontě dojde řada. `tried` chrání před opakováním už selhaných adres. */
+/** A job without `stream` is lazy: the resolver picks a source for it only when the queue
+ *  reaches it. `tried` guards against repeating addresses that already failed. */
 export interface DownloadJob {
   id: string; title: string; stream?: StreamItem; media?: MediaInfo;
   source?: { type: string; videoId: string; tried: string[] };
@@ -92,10 +92,10 @@ export class DownloadQueue {
   private readonly debridTimeoutMs: number;
   private debridTimers = new Map<string, NodeJS.Timeout>();
   private debridBusy = new Set<string>();
-  /** Zavolá se po úspěšném dokončení, aby knihovna mohla rovnou vyrobit náhled. */
+  /** Called after a successful finish, so the library can produce a thumbnail straight away. */
   onCompleted?: (job: Readonly<DownloadJob>) => void | Promise<void>;
-  /** Přenesené bajty, jak přitékají. Statistiky je tak zapíšou do chvíle, kdy
-   * provoz opravdu tekl, a započítají i to, co se stáhlo před chybou nebo zrušením. */
+  /** Transferred bytes as they flow. The statistics stamp them with the time the traffic
+   * really ran and count what was downloaded before a failure or a cancellation too. */
   onProgress?: (job: Readonly<DownloadJob>, bytes: number) => void;
 
   constructor(
@@ -120,7 +120,7 @@ export class DownloadQueue {
     this.debridTimeoutMs = hooks.debridTimeoutMs ?? 72 * 60 * 60_000;
   }
 
-  /** Výběr zdroje pro líné úlohy si drží index.ts, protože potřebuje doplňky a nastavení. */
+  /** index.ts owns source selection for lazy jobs, because it needs the addons and the settings. */
   setResolver(resolver: StreamResolver) { this.resolver = resolver; }
   setDebrid(engine: DebridEngine) { this.debrid = engine; }
   haltInfo() { return this.halt ? { ...this.halt } : null; }
@@ -169,8 +169,8 @@ export class DownloadQueue {
   async add(title: string, stream: StreamItem, media?: MediaInfo, targetSettings: DownloadTargetSettings = defaultDownloadSettings().movie) {
     if (!stream.url && stream.infoHash) return this.addDebrid(title, stream, media, targetSettings);
     if (!stream.url) throw new AppError("Only a direct HTTP stream can be downloaded.", "err.downloadNeedsHttp");
-    // Bez téhle kontroly vznikne z dvojkliku na Stáhnout tentýž film dvakrát,
-    // protože uniqueTarget té druhé úloze ochotně přidělí jméno s "(2)".
+    // Without this check a double click on Download yields the same film twice, because
+    // uniqueTarget happily hands the second job a name with "(2)".
     const duplicate = this.jobs.find((job) => job.stream?.url === stream.url && job.status !== "failed");
     if (duplicate && duplicate.status !== "completed") throw new AppError("This source is already in the queue.", "err.sourceQueued");
     if (duplicate && await exists(path.join(this.downloadDir, duplicate.target))) throw new AppError("This source is already in the library.", "err.sourceDownloaded");
@@ -204,7 +204,7 @@ export class DownloadQueue {
     return this.publicJob(job);
   }
 
-  /** Líná úloha: cíl i zdroj se doplní při zahájení stahování. Duplicitní epizoda se nepřidává. */
+  /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
   async addPending(title: string, source: { type: string; videoId: string }, media?: MediaInfo) {
     if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
     const now = new Date().toISOString();
@@ -212,8 +212,8 @@ export class DownloadQueue {
     this.jobs.push(job); await this.save(); this.pump(); return this.publicJob(job);
   }
 
-  /** Historii lze vyčistit, ale soubory zůstávají. Volné jméno se proto musí hledat i na disku,
-   *  jinak by se hotový film tiše přepsal stahováním stejného titulu. */
+  /** History can be cleared, but the files stay. A free name therefore has to be looked for on
+   *  disk as well, or a finished film would be quietly overwritten by downloading the same title. */
   private async uniqueTarget(directory: string, base: string, extension: string) {
     for (let copy = 1; copy <= 999; copy += 1) {
       const relative = joinTarget(directory, base, extension, copy);
@@ -361,7 +361,7 @@ export class DownloadQueue {
     this.pump();
   }
 
-  /** Dokončené úlohy pro prvotní naplnění statistik z fronty. */
+  /** Finished jobs, for seeding the statistics from the queue. */
   history() {
     return this.jobs.filter((job) => job.status === "completed").map((job) => ({
       at: job.updatedAt, bytes: job.received, url: job.stream?.url, addonKey: job.stream?.addonKey,
@@ -377,12 +377,12 @@ export class DownloadQueue {
   }
 
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
-  /** Adresy zdrojů (často s tokeny) nesmí do rozhraní; ven jde jen příznak líné úlohy. */
+  /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
   private publicJob({ stream, source, notBefore: _notBefore, debrid, ...job }: DownloadJob) {
     return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress };
   }
-  /** Uložení musí jít za sebou: souběžné zápisy sdílejí jeden .tmp a druhé přejmenování
-   *  pak nemá co přesouvat. Selhání zápisu stavu navíc nesmí shodit celý server. */
+  /** Saves have to run one after another: concurrent writes share one .tmp and the second
+   *  rename then has nothing to move. A failed state write must not bring the server down either. */
   private save() {
     this.saveChain = this.saveChain.then(async () => {
       const tmp = `${this.stateFile}.tmp`;
@@ -392,8 +392,8 @@ export class DownloadQueue {
     return this.saveChain;
   }
   private saveSoon() { if (this.saveTimer) return; this.saveTimer = setTimeout(() => { this.saveTimer = undefined; void this.save(); }, 1500); }
-  /** Poskytovatel podle adresy zdroje. Dokud zdroj vybraný není, sdílí všechny úlohy
-   * jedno vědro -- hromadně přidaný seriál se tím sám seřadí za sebe místo náporu. */
+  /** The provider from the source address. Until a source is picked every job shares one
+   * bucket -- a series added in bulk thus queues up behind itself instead of arriving all at once. */
   private provider(job: DownloadJob) { const url = job.stream?.url; if (!url) return "?"; try { return new URL(url).hostname; } catch { return "?"; } }
 
   private busy(provider: string, except?: string) {
@@ -495,8 +495,8 @@ export class DownloadQueue {
     });
   }
 
-  /** Doplňky se na streamy ptáme až tady, těsně před stahováním jedné konkrétní epizody.
-   *  Hromadné přidání celé série tak nevyvolá lavinu dotazů najednou. */
+  /** The addons are asked for streams only here, right before one particular episode is downloaded,
+   *  so adding a whole season in bulk does not set off an avalanche of requests at once. */
   private async resolve(job: DownloadJob) {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
@@ -522,8 +522,8 @@ export class DownloadQueue {
     let stalled = false;
     try {
       if (!job.stream) await this.resolve(job);
-      // Poskytovatel se dozví až po výběru zdroje. Když je právě vytížený, úloha se vrátí
-      // do fronty; příští pump ji už zařadí do správného vědra a nesáhne po ní dřív, než se uvolní.
+      // The provider is known only after a source is picked. If it is busy, the job goes back to
+      // the queue; the next pump puts it in the right bucket and leaves it alone until that frees up.
       if (this.busy(this.provider(job), job.id) >= Math.max(1, Math.min(8, this.perProvider()))) {
         job.status = "queued";
         log("INFO", "The provider is busy, the job will wait", { id: job.id, title: job.title, provider: this.provider(job) });
@@ -540,7 +540,7 @@ export class DownloadQueue {
       if (!response.ok || !response.body) {
         const wait = retryAfterMs(response.headers.get("retry-after"), this.now());
         await response.body?.cancel().catch(() => undefined);
-        throw new HttpSourceError(response.status, `Zdroj odpověděl HTTP ${response.status}.`, wait);
+        throw new HttpSourceError(response.status, `The source answered HTTP ${response.status}.`, wait);
       }
       log("INFO", "Source connected", { id: job.id, httpStatus: response.status, contentLength: response.headers.get("content-length"), contentRange: response.headers.get("content-range") });
       const range = parseContentRange(response.headers.get("content-range"));
@@ -557,8 +557,8 @@ export class DownloadQueue {
       job.received = offset;
       if (job.total) await this.admitStorage(job.total - offset);
       // Three attempts should mean "it failed three times in a row", not "three times ever".
-      // Jakmile se přenos po navázání pořádně rozjede, je předchozí výpadek vyřízený
-      // a rozpočet se vrací; jinak by velký soubor umřel na pár škytnutí za hodinu.
+      // Once a resumed transfer is properly under way the earlier drop is settled and the budget
+      // comes back; otherwise a large file would die of a few hiccups an hour.
       const recoveredAt = 50 * MiB; let recovered = false; let firstByte = false;
       let received = offset; let lastProgressAt = this.now(); let lastSpeedAt = lastProgressAt; let lastBytes = received; let lastLog = received;
       const stallPollMs = Math.min(5_000, Math.max(200, Math.min(this.stallInitialMs, this.stallTransferMs) / 2));
@@ -620,7 +620,7 @@ export class DownloadQueue {
         if (this.retryTimer) clearTimeout(this.retryTimer);
         this.retryTimer = setTimeout(() => { this.retryTimer = undefined; this.pump(); }, wait);
       } else if (job.source && job.stream?.url) {
-        // Líná úloha zkusí další zdroj v pořadí; adresa toho selhaného se už nikdy nepoužije.
+        // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
         job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.retryCount = 0; job.notBefore = undefined;

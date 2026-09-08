@@ -17,7 +17,7 @@ async function jsonFetch<T>(rawUrl: string, timeoutMs = TIMEOUT_MS): Promise<T> 
     signal: AbortSignal.timeout(timeoutMs),
     headers: { accept: "application/json", "user-agent": "StremioOffline/0.3.1" },
   });
-  if (!response.ok) throw new Error(`Doplněk odpověděl HTTP ${response.status}.`);
+  if (!response.ok) throw new Error(`The addon answered HTTP ${response.status}.`);
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("json")) throw new AppError("The addon did not return JSON.", "err.addonNotJson");
   return response.json() as Promise<T>;
@@ -64,7 +64,7 @@ export async function catalog(addon: AddonRecord, type: string, catalogId: strin
   return response.metas ?? [];
 }
 
-/** Doplňky deklarují podporu extras třemi různými způsoby, protokol se v čase měnil. */
+/** Addons declare extras support in three different ways; the protocol changed over time. */
 function declaresExtra(definition: CatalogDefinition, name: string): boolean {
   if (definition.extra?.some((item) => item.name === name)) return true;
   return Array.isArray(definition.extraSupported) && definition.extraSupported.includes(name);
@@ -75,7 +75,7 @@ function requiredExtras(definition: CatalogDefinition): string[] {
   return [...new Set([...fromExtra, ...(definition.extraRequired ?? [])])];
 }
 
-/** Katalogy, do kterých má smysl poslat dotaz: umí search a nechtějí nic, co neumíme dodat. */
+/** Catalogues worth querying: they support search and demand nothing we cannot supply. */
 export function searchableCatalogs(addons: AddonRecord[], type?: string, addonKey?: string) {
   return addons.filter((addon) => addon.enabled && addon.role !== "source" && (!addonKey || addon.key === addonKey)).flatMap((addon) =>
     (addon.manifest.catalogs ?? [])
@@ -86,8 +86,8 @@ export function searchableCatalogs(addons: AddonRecord[], type?: string, addonKe
 
 export interface SearchResult { items: MetaItem[]; cursor: string; hasMore: boolean; sources: number }
 
-/** Každý zdroj vrací jinak velké dávky, takže si každý nese vlastní posun. Společné číslo
- *  by u menších katalogů přeskočilo položky, které ještě nikdo neviděl. -1 znamená vyčerpáno. */
+/** Every source returns batches of a different size, so each carries its own offset. A shared
+ *  number would skip items nobody has seen yet in the smaller catalogues. -1 means exhausted. */
 const decodeCursor = (cursor?: string): Record<string, number> => {
   if (!cursor) return {};
   try { return JSON.parse(Buffer.from(cursor, "base64url").toString()) as Record<string, number>; }
@@ -95,7 +95,7 @@ const decodeCursor = (cursor?: string): Record<string, number> => {
 };
 const encodeCursor = (offsets: Record<string, number>) => Buffer.from(JSON.stringify(offsets)).toString("base64url");
 
-/** Stremio se ptá všech doplňků naráz; jeden pomalý nebo rozbitý nesmí shodit zbytek. */
+/** Stremio asks every addon at once; one slow or broken addon must not bring the rest down. */
 export async function searchAll(addons: AddonRecord[], query: string, type: string | undefined, cursor?: string, addonKey?: string): Promise<SearchResult> {
   const targets = searchableCatalogs(addons, type, addonKey);
   const offsets = decodeCursor(cursor);
@@ -160,7 +160,7 @@ export async function metadata(addons: AddonRecord[], type: string, id: string) 
   return best;
 }
 
-/** Doplňky, které pro tenhle titul umí vrátit streamy. Klient se jich pak ptá jednoho po druhém. */
+/** The addons that can return streams for this title. The client then asks them one by one. */
 export function streamCandidates(addons: AddonRecord[], type: string, id: string) {
   return addons.filter((a) => a.enabled && a.role !== "catalog" && supports(a, "stream", type, id));
 }

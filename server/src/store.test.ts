@@ -15,7 +15,7 @@ const addon = (downloadSettings: AddonRecord["downloadSettings"]): AddonRecord =
   ...legacyAddon(), downloadSettings,
 });
 
-test("starý stav doplňku se migruje na výchozí ukládání", async () => {
+test("an old addon state migrates to the default save rules", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {
     await writeFile(path.join(directory, "state.json"), JSON.stringify({ addons: [legacyAddon()], defaultsInstalled: true, settings: {} }));
@@ -29,7 +29,7 @@ test("starý stav doplňku se migruje na výchozí ukládání", async () => {
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("vlastní pravidla doplňku přežijí uložení a nové načtení", async () => {
+test("an addon's own rules survive a save and a reload", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-store-"));
   try {
     const first = new Store(directory); await first.load();

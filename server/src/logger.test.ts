@@ -116,7 +116,7 @@ test("entries older than the retention window are pruned away", async () => {
     const text = await readFile(file, "utf8");
     assert.equal(text.includes("ancient entry"), false);
     assert.match(text, /recent entry/);
-    // Zápis po úklidu musí navázat, ne přepsat, co zbylo.
+    // A write after the cleanup has to continue, not overwrite what is left.
     log("INFO", "after prune");
     await flushLog();
     assert.match(await readFile(file, "utf8"), /recent entry[\s\S]*after prune/);

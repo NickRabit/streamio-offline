@@ -1,4 +1,4 @@
-/** Doplňky jazyk strukturovaně neposílají, píší ho do názvu streamu slovem nebo vlajkou. */
+/** Addons do not send the language as data; they put it in the stream name as a word or a flag. */
 const FLAGS: Record<string, string> = {
   "\u{1F1E8}\u{1F1FF}": "cs", "\u{1F1F8}\u{1F1F0}": "sk", "\u{1F1EC}\u{1F1E7}": "en", "\u{1F1FA}\u{1F1F8}": "en",
   "\u{1F1E9}\u{1F1EA}": "de", "\u{1F1F5}\u{1F1F1}": "pl", "\u{1F1ED}\u{1F1FA}": "hu", "\u{1F1EB}\u{1F1F7}": "fr",
@@ -20,7 +20,7 @@ export const LANGUAGE_LABEL: Record<string, string> = {
 };
 export const label = (code?: string) => code ? LANGUAGE_LABEL[code] ?? code.toUpperCase() : "?";
 
-/** Odhad z textu, který doplněk poslal. Přesné jazyky zjistí až rozbor vybraného streamu. */
+/** A guess from the text the addon sent. The exact languages come only from probing the chosen stream. */
 export function guessLanguages(text: string): string[] {
   const found = new Set<string>();
   for (const [flag, code] of Object.entries(FLAGS)) if (text.includes(flag)) found.add(code);

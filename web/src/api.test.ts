@@ -46,10 +46,10 @@ describe("request", () => {
   });
 
   it("carries the status and code of a failure up to the caller", async () => {
-    fetchMock.mockResolvedValue(json({ error: "Nepřihlášen", code: "AUTH" }, 401));
+    fetchMock.mockResolvedValue(json({ error: "Not signed in", code: "AUTH" }, 401));
     const error = await api.addons().catch((caught) => caught);
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).toMatchObject({ message: "Nepřihlášen", status: 401, code: "AUTH" });
+    expect(error).toMatchObject({ message: "Not signed in", status: 401, code: "AUTH" });
   });
 
   it("falls back to the status when the body carries no message", async () => {

@@ -3,9 +3,9 @@ import dns from "node:dns/promises";
 import net from "node:net";
 import { log } from "./logger.js";
 
-/** Rozsahy, které nesmí server na pokyn zvenčí oslovit: vlastní stroj, LAN a metadata cloudu. */
+/** Ranges the server must not reach on an outside request: its own machine, the LAN, and cloud metadata. */
 function privateReason(ip: string): string | undefined {
-  // ::ffff:10.0.0.1 je zápis IPv4 uvnitř IPv6; bez rozbalení by kontrola prošla naprázdno.
+  // ::ffff:10.0.0.1 is IPv4 written inside IPv6; without unwrapping it the check would pass for nothing.
   const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(ip);
   const address = mapped ? mapped[1] : ip;
 
@@ -44,14 +44,14 @@ export async function validateRemoteUrl(raw: string): Promise<URL> {
 
   let results: Array<{ address: string }>;
   try { results = await dns.lookup(host, { all: true }); }
-  catch { throw new Error(`Název ${host} se nepodařilo přeložit na IP adresu.`); }
-  if (!results.length) throw new Error(`Název ${host} nemá žádnou IP adresu.`);
+  catch { throw new Error(`The name ${host} could not be resolved to an IP address.`); }
+  if (!results.length) throw new Error(`The name ${host} has no IP address.`);
 
   for (const entry of results) {
     const reason = privateReason(entry.address);
     if (reason) {
       log("WARN", "Blocked an address outside the public network", { host, ip: entry.address, reason });
-      throw new Error(`${host} ukazuje na ${entry.address} (${reason}). Pokud je to váš vlastní doplněk, povolte ho pomocí ALLOW_ADDON_HOSTS=${host}, nebo celou LAN pomocí ALLOW_PRIVATE_ADDONS=1.`);
+      throw new Error(`${host} points at ${entry.address} (${reason}). If this is your own addon, allow it with ALLOW_ADDON_HOSTS=${host}, or the whole LAN with ALLOW_PRIVATE_ADDONS=1.`);
     }
   }
   return url;

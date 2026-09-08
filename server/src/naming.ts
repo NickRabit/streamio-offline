@@ -3,27 +3,27 @@ import path from "node:path";
 import type { AddonDownloadSettings, DownloadLayout, DownloadTargetSettings, StreamItem } from "./types.js";
 
 export interface MediaInfo {
-  /** IMDb id z katalogu. Díky němu nemusíme metadata hádat z názvu složky. */
+  /** The IMDb id from the catalogue, so metadata need not be guessed from the folder name. */
   id?: string;
   metaType?: string;
-  /** Plakát z katalogu. Klient ho má po ruce, takže se nemusí dohledávat přes metadata. */
+  /** The poster from the catalogue. The client has it at hand, so it need not be looked up through metadata. */
   poster?: string;
   kind?: "movie" | "episode";
-  /** Název filmu, nebo název seriálu u epizody. */
+  /** The film's name, or the series name for an episode. */
   title?: string;
   season?: number;
   episode?: number;
   episodeTitle?: string;
 }
 
-// Zpětné lomítko je tu kvůli sdíleným složkám z Windows a taky proto,
-// aby se název nedal použít k útěku z cílového adresáře.
+// The backslash is here for Windows shares, and also so a name cannot be used to
+// escape the target directory.
 const FORBIDDEN = /[\u0000-\u001f/:*?"<>|\\]/g;
 
 export function safeName(value: string): string {
   const cleaned = value.normalize("NFC")
     .replace(FORBIDDEN, " ")
-    // Ze "../.." zbudou po odstranění lomítek osamocené tečky; jako část názvu nedávají smysl.
+    // Stripping the slashes from "../.." leaves lone dots, which make no sense as part of a name.
     .split(/\s+/).filter((part) => part && !/^\.+$/.test(part)).join(" ")
     .replace(/^\.+/, "").replace(/\.+$/, "").trim();
   return cleaned.slice(0, 150).trim() || "video";
@@ -36,8 +36,8 @@ export const defaultDownloadSettings = (): AddonDownloadSettings => ({
   series: { subfolder: "", layout: "structured" },
 });
 
-/** Podsložka je relativní k /downloads. Povolujeme i více úrovní, ale nikdy
- * absolutní cestu, diskové písmeno ani . a .. segmenty. */
+/** The subfolder is relative to /downloads. Several levels are allowed, but never an
+ * absolute path, a drive letter, or . and .. segments. */
 export function safeSubfolder(value: unknown): string {
   const raw = String(value ?? "").trim();
   if (!raw) return "";
@@ -59,7 +59,7 @@ export function normalizeDownloadSettings(value: unknown): AddonDownloadSettings
   return { movie: targetSettings(item.movie), series: targetSettings(item.series) };
 }
 
-/** Film jde do vlastní složky, epizoda do složky seriálu a série. Knihovny to tak čekají. */
+/** A film goes into a folder of its own, an episode into the series and season folders. Media libraries expect that. */
 export function targetPath(media: MediaInfo | undefined, fallbackTitle: string, extension: string, settings: DownloadTargetSettings = defaultDownloadSettings().movie): { directory: string; base: string } {
   const prefix = safeSubfolder(settings.subfolder);
   if (media?.kind === "episode" && media.title?.trim()) {

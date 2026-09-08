@@ -75,7 +75,7 @@ test("only one request probes a half-open host", async () => {
 
   let released = () => {};
   const trial = guard.run("addon.test", () => new Promise<Response>((resolve) => { released = () => resolve(new Response("{}")); }));
-  await assert.rejects(guard.run("addon.test", reply(200)), (error: unknown) => error instanceof GuardRejection && /po výpadku/.test(error.message));
+  await assert.rejects(guard.run("addon.test", reply(200)), (error: unknown) => error instanceof GuardRejection && /being retried/.test(error.message));
   released();
   await trial;
 });
