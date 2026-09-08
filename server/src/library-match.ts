@@ -127,18 +127,20 @@ export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: Tit
   return { item, score, titleSimilarity, yearDelta, autoEligible };
 }
 
-export function autoAccept(hits: ScoredHit[]): ScoredHit | undefined {
-  if (hits.length === 1) {
-    const [only] = hits;
-    if (only && only.autoEligible && only.titleSimilarity >= 0.90 && only.score >= 85) return only;
-    return undefined;
-  }
-  if (hits.length < 2) return undefined;
-  const ranked = [...hits].sort((a, b) => b.score - a.score);
-  const top = ranked[0]!;
-  const second = ranked[1]!;
-  if (top.autoEligible && top.score >= 85 && top.score - second.score >= 15) return top;
-  return undefined;
+export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()): ScoredHit | undefined {
+  const ranked = hits.filter((hit) => hit.autoEligible).sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return (yearFromMeta(b.item) ?? 0) - (yearFromMeta(a.item) ?? 0);
+  });
+  const top = ranked[0];
+  if (!top || top.score < 85 || top.titleSimilarity < 0.90) return undefined;
+  const close = ranked.filter((hit) => top.score - hit.score < 15 && hit.titleSimilarity >= 0.90);
+  const topName = normalizeTitle(top.item.name);
+  if (close.some((hit) => normalizeTitle(hit.item.name) !== topName)) return undefined;
+  const years = close.map((hit) => yearFromMeta(hit.item)).filter((year): year is number => year != null);
+  const distinct = new Set(years);
+  if (distinct.size <= 1) return top;
+  return Math.max(...years) >= nowYear - 2 ? top : undefined;
 }
 
 export function pickSuggestion(hits: ScoredHit[]): LibrarySuggestion | undefined {
