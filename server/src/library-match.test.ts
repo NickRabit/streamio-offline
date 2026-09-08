@@ -91,8 +91,18 @@ test("a unique year-and-title hit auto-accepts; close years do not", () => {
 
   const obsession = parseMediaPath("Obsession");
   const years = [1949, 1976, 2009].map((year, index) => scoreHit(obsession, meta("Obsession", year, "movie", `tt${index}`), "movie"));
-  assert.equal(autoAccept(years), undefined);
+  assert.equal(autoAccept(years, 2026), undefined);
   assert.equal(pickSuggestion(years)?.id, years.sort((a, b) => b.score - a.score)[0]!.item.id);
+});
+
+test("the same title with a current year wins over older namesakes", () => {
+  const parsed = parseMediaPath("The Secret Woman");
+  const hits = [
+    scoreHit(parsed, meta("The Secret Woman", 2026, "movie", "tt37275992"), "movie"),
+    scoreHit(parsed, meta("The Secret Woman", 1918, "movie", "tt0009595"), "movie"),
+    scoreHit(parsed, meta("Secret Woman", 2023, "movie", "tt39106713"), "movie"),
+  ];
+  assert.equal(autoAccept(hits, 2026)?.item.id, "tt37275992");
 });
 
 test("a 15-point gap at score 85 auto-accepts the series", () => {

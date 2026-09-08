@@ -94,6 +94,8 @@ export function App() {
     catch { return false; }
   });
   const scanStatus = useRef<ScanState["status"] | undefined>(undefined);
+  const scanWanted = useRef(false);
+  const [scanEpoch, setScanEpoch] = useState(0);
   const browseRequest = useRef(0);
   const browseLocation = useRef("");
   const browseSeed = useRef(String(Date.now()));
@@ -180,18 +182,20 @@ export function App() {
   };
   const applyScanState = (previous: ScanState["status"] | undefined, state: ScanState) => {
     setLibraryScan(state);
-    if ((previous === "running" || previous === "paused") && state.status === "completed") {
+    if (state.status === "completed" && scanWanted.current) {
+      scanWanted.current = false;
       notify(t("library.scanDone", { matched: state.matched, skipped: state.skipped, failed: state.failed }));
-      void loadBrowse(browsePath);
+      setScanEpoch((value) => value + 1);
     }
   };
   const startScan = async () => {
     try {
+      scanWanted.current = true;
       const previous = scanStatus.current;
       const state = await api.startLibraryScan();
       scanStatus.current = state.status;
       applyScanState(previous, state);
-    } catch (error) { fail(error); }
+    } catch (error) { scanWanted.current = false; fail(error); }
   };
   const stopScan = async () => {
     try { await api.stopLibraryScan(); setLibraryScan(await api.libraryScan()); }
@@ -388,7 +392,7 @@ export function App() {
   };
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
-    const location = browseLocation.current;
+    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
     setBrowseBusy(true);
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
@@ -398,9 +402,9 @@ export function App() {
         : target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
-      if (request !== browseRequest.current || location !== browseLocation.current) return;
+      if (request !== browseRequest.current || wanted !== browseLocation.current) return;
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
-    } catch (error) { if (request === browseRequest.current && location === browseLocation.current) fail(error); }
+    } catch (error) { if (request === browseRequest.current && wanted === browseLocation.current) fail(error); }
     finally { if (request === browseRequest.current) setBrowseBusy(false); }
   };
   const refreshBrowse = async (limit: number) => {
@@ -446,7 +450,7 @@ export function App() {
   }, [ready, view, browse, browsePath, browseQuery, onlyFavorites]);
 
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
-    [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
   useEffect(() => {
     if (!ready || view !== "library") return;
     let cancelled = false;
