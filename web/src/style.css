@@ -561,7 +561,7 @@ img.broken{visibility:hidden}
 .timeline-preview{display:grid;gap:4px;text-align:center;max-width:160px;white-space:normal}.timeline-preview img{display:block;width:144px;max-height:90px;object-fit:contain;border-radius:3px}
 
 .transport-controls{display:contents}
-@media(max-width:700px){.player-overlay .player-controls:has(.has-episodes){flex-wrap:wrap}.player-controls .transport-controls.has-episodes{display:flex;gap:8px;flex-basis:100%;justify-content:center}}
+@media(max-width:700px){.player-overlay .player-controls{flex-wrap:wrap}.player-controls .seek-step{padding:6px;gap:2px;font-size:10px}.player-controls .seek-step svg{width:20px}}
 
 .player-overlay.cursor-hidden,.player-overlay.cursor-hidden *{cursor:none!important}
 .fullscreen-notice{position:absolute;z-index:13;bottom:calc(var(--player-bottom-height,120px) + 16px);left:16px;right:16px;text-align:center;padding:8px;border-radius:8px;background:#141922ed;font-size:12px;pointer-events:none}

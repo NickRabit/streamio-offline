@@ -891,9 +891,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       <div className="player-controls">
         <div className={`transport-controls${onPrevious || onNext ? " has-episodes" : ""}`}>
           {onPrevious && <button className="previous-episode" disabled={nextBusy} aria-label={t("player.previousEpisode")} title={t("player.previousEpisodeTitle", { title: previousTitle ?? "" })} onClick={() => void onPrevious()}><SkipBack /></button>}
-        <button onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
+        <button className="seek-step" onClick={() => void seekTo(timeRef.current - 10)}><RotateCcw /> 10</button>
         <button className="play-toggle" aria-label={paused ? t("player.play") : t("player.pause")} onClick={toggle}>{paused ? <Play /> : <Pause />}</button>
-        <button onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
+        <button className="seek-step" onClick={() => void seekTo(timeRef.current + 10)}>10 <RotateCw /></button>
           {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         </div>
         <Volume2 />

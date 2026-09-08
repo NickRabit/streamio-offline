@@ -39,7 +39,7 @@ These used to be open notes. They are in `main` now.
 
 ### Player and mobile chrome
 
-- [x] Group previous/next and seek/play controls together in portrait mode.
+- [x] Keep episode navigation, seek/play, and settings in one compact row on portrait iPhones.
 - [x] Click the video to hide controls and dismiss playback settings.
 - [x] Hide the mouse cursor after ten idle seconds in fullscreen.
 - [x] Use only overlay fullscreen and hide the button when unsupported, keeping custom controls on Safari.

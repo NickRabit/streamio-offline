@@ -46,6 +46,10 @@ test("local player previews a frame and plays the next naturally sorted file", a
     const boxes = await Promise.all((await transport.locator("button").all()).map((button) => button.boundingBox()));
     expect(new Set(boxes.map((box) => Math.round(box!.y))).size).toBe(1);
     expect(boxes.map((box) => box!.x)).toEqual(boxes.map((box) => box!.x).sort((a, b) => a - b));
+    if (page.viewportSize()!.width >= 350 && page.viewportSize()!.width <= 700) {
+      const allButtons = await Promise.all((await overlay.locator(".player-controls button").all()).map((button) => button.boundingBox()));
+      expect(new Set(allButtons.map((box) => Math.round(box!.y))).size).toBe(1);
+    }
     await page.screenshot({ path: `test-results/episode-controls-${test.info().project.name}.png` });
     await previous.click();
     await expect(overlay.locator(".player-head strong")).toContainText("Episode 1.webm");
