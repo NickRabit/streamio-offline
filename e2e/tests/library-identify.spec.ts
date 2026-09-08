@@ -49,4 +49,34 @@ test("unmatch clears the description and Identify stays available", async ({ pag
   await expect(fixtureTile(page).locator(".library-desc")).toHaveCount(0);
   await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
   await expect(page.getByRole("button", { name: "Přiřadit…" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Nehledat v katalogu" })).toBeVisible();
+});
+
+test("unmatch lets a later scan match again", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  if (await page.getByRole("button", { name: "Zrušit přiřazení" }).isVisible()) {
+    await page.getByRole("button", { name: "Zrušit přiřazení" }).click();
+  } else {
+    await page.keyboard.press("Escape");
+  }
+  await page.getByRole("button", { name: "Prohledat knihovnu" }).click();
+  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
+  await expect(fixtureTile(page).locator(".library-desc")).toContainText("Film, který existuje jen pro testy.");
+});
+
+test("skip catalog lookup keeps the title unmatched through a scan", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  if (await page.getByRole("button", { name: "Zrušit přiřazení" }).isVisible()) {
+    await page.getByRole("button", { name: "Zrušit přiřazení" }).click();
+    await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  }
+  await page.getByRole("button", { name: "Nehledat v katalogu" }).click();
+  await expect(page.getByText("Vyhledání v katalogu je vypnuté.")).toBeVisible();
+  await page.getByRole("button", { name: "Prohledat knihovnu" }).click();
+  await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
+  await expect(fixtureTile(page).locator(".library-desc")).toHaveCount(0);
 });
