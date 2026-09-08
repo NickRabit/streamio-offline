@@ -69,6 +69,30 @@ test("a unique title auto-accepts, deletes hashed art and saves the catalog post
   } finally { await h.close(); }
 });
 
+test("catalog lookup skipped on a title is not searched", async () => {
+  const h = await harness({ gapMs: 200 });
+  try {
+    h.store.meta.Foo = { type: "movie", id: "", source: "user", skipLookup: true };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().skipped, 1);
+    assert.equal(h.scan.snapshot().matched, 0);
+    assert.equal(h.searches.length, 0);
+  } finally { await h.close(); }
+});
+
+test("a nameless search hit does not fail the unit", async () => {
+  const h = await harness({
+    searchAll: async () => ({ items: [{ id: "x", type: "movie" } as MetaItem, hit("Foo")] }),
+  });
+  try {
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().failed, 0);
+    assert.equal(h.scan.snapshot().matched, 1);
+  } finally { await h.close(); }
+});
+
 test("bound and locked units skip without waiting the gap", async () => {
   const h = await harness({ gapMs: 200 });
   try {

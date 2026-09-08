@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
@@ -175,8 +175,16 @@ export function App() {
   const unmatchItem = async (itemPath: string) => {
     setMenuFor(null);
     try {
-      await api.matchLibraryItem({ path: itemPath, id: "", type: "movie", locked: true });
+      await api.matchLibraryItem({ path: itemPath, id: "", type: "movie" });
       notify(t("library.unmatched"));
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
+  const setCatalogLookup = async (itemPath: string, enabled: boolean) => {
+    setMenuFor(null);
+    try {
+      await api.matchLibraryItem({ path: itemPath, id: "", type: "movie", skipLookup: !enabled });
+      notify(t(enabled ? "library.lookupEnabled" : "library.lookupSkipped"));
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
   };
@@ -207,12 +215,16 @@ export function App() {
   };
   const matchActions = (item: BrowseItem) => {
     const match = item.match ?? "unmatched";
-    return match === "matched"
-      ? <>
-        <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
-        <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
-      </>
-      : <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>;
+    if (match === "matched") return <>
+      <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
+      <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
+    </>;
+    return <>
+      <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>
+      {match === "rejected"
+        ? <button onClick={() => void setCatalogLookup(item.path, true)}><Search/> {t("library.allowLookup")}</button>
+        : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
+    </>;
   };
   const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
     [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");

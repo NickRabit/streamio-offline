@@ -33,6 +33,7 @@ export interface LibraryMetaRecord {
   id: string;
   source?: "download" | "user" | "scan";
   locked?: boolean;
+  skipLookup?: boolean;
   name?: string;
   year?: string;
   description?: string;
@@ -69,8 +70,8 @@ export function levenshtein(a: string, b: string): number {
   return prev[b.length]!;
 }
 
-export function normalizeTitle(value: string): string {
-  return value
+export function normalizeTitle(value: string | undefined): string {
+  return String(value ?? "")
     .normalize("NFD")
     .replace(/\p{M}/gu, "")
     .toLowerCase()
@@ -99,6 +100,7 @@ export function yearFromMeta(item: MetaItem): number | undefined {
 }
 
 export function scoreHit(parsed: ParsedMedia, item: MetaItem, expectedKind?: TitleKind): ScoredHit {
+  if (!item.name) return { item, score: 0, titleSimilarity: 0, autoEligible: false };
   const left = normalizeTitle(parsed.query || parsed.title);
   const right = normalizeTitle(item.name);
   const maxLen = Math.max(left.length, right.length);
@@ -163,12 +165,10 @@ export function viewMeta(raw?: LibraryMetaRecord): ViewedMeta | undefined {
   return { type: raw.type, id: raw.id, source, locked };
 }
 
-/** Why the scanner should skip this key. Bound and locked both skip. */
-export function scanSkipReason(raw?: LibraryMetaRecord): "bound" | "locked" | undefined {
-  const viewed = viewMeta(raw);
-  if (!viewed) return undefined;
-  if (viewed.locked) return "locked";
-  if (viewed.id) return "bound";
+/** Why the scanner should skip this key. Bound titles and those with catalog lookup off. */
+export function scanSkipReason(raw?: LibraryMetaRecord): "bound" | "ignored" | undefined {
+  if (raw?.skipLookup) return "ignored";
+  if (viewMeta(raw)?.id) return "bound";
   return undefined;
 }
 
@@ -189,8 +189,7 @@ export function matchStatus(
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
 ): MatchStatus {
-  const exact = viewMeta(records[relative]);
-  if (exact?.locked && !exact.id) return "rejected";
+  if (records[relative]?.skipLookup) return "rejected";
   if (knownTitleOf(relative, records)?.id) return "matched";
   const parts = relative.split(path.sep);
   for (let depth = parts.length; depth >= 1; depth -= 1) {

@@ -86,6 +86,6 @@ describe("IdentifyDialog", () => {
     });
     await act(async () => { root.render(<IdentifyDialog path="Father Ted" onClose={() => undefined} onApplied={() => undefined}/>); });
     await act(async () => { await Promise.resolve(); });
-    expect(host.textContent).toContain("This title will not be scanned");
+    expect(host.textContent).toContain("Catalog lookup is off");
   });
 });

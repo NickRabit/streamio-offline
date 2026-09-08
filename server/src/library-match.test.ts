@@ -134,16 +134,24 @@ test("legacy libraryMeta rows are download and locked", () => {
   assert.deepEqual(viewMeta({ type: "movie", id: "tt1" }), {
     type: "movie", id: "tt1", source: "download", locked: true,
   });
-  assert.equal(scanSkipReason({ type: "movie", id: "tt1" }), "locked");
+  assert.equal(scanSkipReason({ type: "movie", id: "tt1" }), "bound");
   assert.equal(scanSkipReason({ type: "movie", id: "tt1", source: "scan", locked: false }), "bound");
-  assert.equal(scanSkipReason({ type: "movie", id: "", source: "user", locked: true }), "locked");
+  assert.equal(scanSkipReason({ type: "movie", id: "", source: "user", locked: true }), undefined);
+  assert.equal(scanSkipReason({ type: "movie", id: "", source: "user", skipLookup: true }), "ignored");
   assert.equal(scanSkipReason(undefined), undefined);
+});
+
+test("a nameless catalog hit does not throw", () => {
+  const parsed = parseMediaPath("The Secret Woman");
+  const hit = scoreHit(parsed, { id: "x", type: "movie" } as MetaItem, "movie");
+  assert.equal(hit.autoEligible, false);
+  assert.equal(autoAccept([hit], 2026), undefined);
 });
 
 test("knownTitleOf ignores unmatch sentinels and walks parents", () => {
   const records = {
     "Father Ted": { type: "series", id: "tt0111958", name: "Father Ted", year: "1995" },
-    "xxx": { type: "movie", id: "", source: "user" as const, locked: true },
+    "xxx": { type: "movie", id: "", source: "user" as const, skipLookup: true },
   };
   assert.equal(knownTitleOf("Father Ted/01 serie/01.mkv", records)?.id, "tt0111958");
   assert.equal(knownTitleOf("xxx/one.mp4", records), undefined);

@@ -1089,16 +1089,20 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   const key = matchKeyFor(requested, files);
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
-  const locked = req.body.locked !== false;
+  const skipLookup = req.body.skipLookup === true;
   const meta = id ? await cachedMeta(type, id) : null;
   const fields = cacheFieldsFromMeta(meta);
   await store.update((state) => {
     const next = { ...state.libraryMeta };
-    next[key] = {
-      type, id, source: "user", locked,
-      matchedAt: new Date().toISOString(),
-      ...fields,
-    };
+    if (!id && !skipLookup) delete next[key];
+    else if (skipLookup) next[key] = { type, id: "", source: "user", skipLookup: true, matchedAt: new Date().toISOString() };
+    else {
+      next[key] = {
+        type, id, source: "user", locked: true, skipLookup: false,
+        matchedAt: new Date().toISOString(),
+        ...fields,
+      };
+    }
     state.libraryMeta = next;
     const suggestions = { ...state.librarySuggestions };
     delete suggestions[key];
