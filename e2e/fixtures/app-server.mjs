@@ -39,6 +39,7 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     ALLOW_PRIVATE_ADDONS: "1",
     LOG_LEVEL: process.env.E2E_LOG_LEVEL ?? "WARN",
     LOG_STDOUT: "1",
+    LIBRARY_SCAN_GAP_MS: "0",
   },
 });
 

@@ -1,0 +1,312 @@
+import { access, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { SearchResult } from "./addons.js";
+import { log } from "./logger.js";
+import {
+  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, pickSuggestion, scanMiss,
+  scannedRecently, scanSkipReason, scoreHit,
+  type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
+} from "./library-match.js";
+import { parseMediaPath } from "./library-parse.js";
+import type { FoundFile } from "./library.js";
+import type { AddonRecord, MetaItem } from "./types.js";
+
+export type ScanStatus = "idle" | "running" | "paused" | "completed" | "failed";
+export type ScanPauseReason = "playback" | "download" | "breaker";
+
+export interface ScanState {
+  status: ScanStatus;
+  pauseReason?: ScanPauseReason;
+  startedAt?: string;
+  updatedAt?: string;
+  finishedAt?: string;
+  total: number;
+  done: number;
+  matched: number;
+  skipped: number;
+  failed: number;
+  current?: string;
+  remaining: string[];
+  error?: string;
+}
+
+export interface LibraryScanOpts {
+  dataDir: string;
+  downloadDir: string;
+  listVideos: (root: string) => Promise<FoundFile[]>;
+  titleUnits: (files: FoundFile[]) => TitleUnit[];
+  searchAll: (addons: AddonRecord[], query: string, type?: string) => Promise<Pick<SearchResult, "items">>;
+  metadata: (addons: AddonRecord[], type: string, id: string) => Promise<MetaItem | null>;
+  addons: () => AddonRecord[];
+  libraryMeta: () => Record<string, LibraryMetaRecord>;
+  librarySuggestions: () => Record<string, LibrarySuggestion>;
+  updateMeta: (mutator: (
+    meta: Record<string, LibraryMetaRecord>,
+    suggestions: Record<string, LibrarySuggestion>,
+    episodes: Record<string, LibraryEpisodeRecord>,
+  ) => void) => Promise<void>;
+  savePoster: (key: string, url: string | undefined) => void;
+  deleteGeneratedArt: (key: string) => Promise<void>;
+  busy: () => ScanPauseReason | undefined;
+  pathExists?: (relative: string) => Promise<boolean>;
+  gapMs?: number;
+  wakeMs?: number;
+}
+
+const idle = (): ScanState => ({
+  status: "idle", total: 0, done: 0, matched: 0, skipped: 0, failed: 0, remaining: [],
+});
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const nowIso = () => new Date().toISOString();
+
+function addonPrefixes(addons: AddonRecord[]): string[] {
+  const prefixes: string[] = [];
+  for (const addon of addons.filter((item) => item.enabled && item.role !== "source")) {
+    prefixes.push(...(addon.manifest.idPrefixes ?? []));
+    for (const resource of addon.manifest.resources ?? []) {
+      if (typeof resource !== "string") prefixes.push(...(resource.idPrefixes ?? []));
+    }
+  }
+  return [...new Set(prefixes)];
+}
+
+function idForPrefix(raw: string, prefixes: string[], needle: string): string | undefined {
+  const matching = prefixes.filter((prefix) => prefix.toLowerCase().includes(needle));
+  if (!matching.length) return undefined;
+  const prefix = matching[0]!;
+  if (raw.startsWith(prefix)) return raw;
+  return prefix.endsWith(":") ? `${prefix}${raw}` : `${prefix}:${raw}`;
+}
+
+export class LibraryScan {
+  private state: ScanState = idle();
+  private units = new Map<string, TitleUnit>();
+  private readonly stateFile: string;
+  private readonly gapMs: number;
+  private readonly wakeMs: number;
+  private saveChain: Promise<void> = Promise.resolve();
+  private pumpScheduled = false;
+  private cancelled = false;
+  private readonly pathExists: (relative: string) => Promise<boolean>;
+
+  constructor(private readonly opts: LibraryScanOpts) {
+    this.stateFile = path.join(opts.dataDir, "library-scan.json");
+    this.gapMs = opts.gapMs ?? 3_000;
+    this.wakeMs = opts.wakeMs ?? 15_000;
+    this.pathExists = opts.pathExists ?? (async (relative) => {
+      try { await access(path.join(opts.downloadDir, relative)); return true; }
+      catch { return false; }
+    });
+  }
+
+  snapshot(): ScanState { return { ...this.state, remaining: [...this.state.remaining] }; }
+
+  async load() {
+    await mkdir(path.dirname(this.stateFile), { recursive: true });
+    try {
+      const loaded = JSON.parse(await readFile(this.stateFile, "utf8")) as ScanState;
+      if (loaded && typeof loaded === "object" && Array.isArray(loaded.remaining)) this.state = { ...idle(), ...loaded };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        log("ERROR", "The library scan state was unreadable, starting idle", { reason: error instanceof Error ? error.message : String(error) });
+        this.state = idle();
+      }
+    }
+    if (this.state.status === "running" || this.state.status === "paused") {
+      await this.refreshUnits();
+      this.schedulePump();
+    }
+  }
+
+  /** `force` throws away the memory of earlier fruitless searches and asks the
+   *  catalogues about every unbound title again. */
+  async start(force = false): Promise<ScanState> {
+    if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
+    const files = await this.opts.listVideos(this.opts.downloadDir);
+    const units = this.opts.titleUnits(files);
+    this.units = new Map(units.map((unit) => [unit.key, unit]));
+    this.cancelled = false;
+    const records = this.opts.libraryMeta();
+    const suggestions = this.opts.librarySuggestions();
+    const queued = units.filter((unit) => {
+      if (lookupSkipped(unit.key, records) || scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
+      return force || !scannedRecently(suggestions[unit.key]);
+    });
+    if (force) await this.opts.updateMeta((_meta, current) => { for (const unit of units) delete current[unit.key]; });
+    this.state = {
+      status: "running",
+      startedAt: nowIso(),
+      updatedAt: nowIso(),
+      total: queued.length,
+      done: 0, matched: 0, skipped: 0, failed: 0,
+      remaining: queued.map((unit) => unit.key),
+      current: queued[0]?.key,
+    };
+    await this.save();
+    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force });
+    this.schedulePump();
+    return this.snapshot();
+  }
+
+  async stop() {
+    this.cancelled = true;
+    this.state = { ...idle(), updatedAt: nowIso() };
+    await this.save();
+  }
+
+  private async refreshUnits() {
+    const files = await this.opts.listVideos(this.opts.downloadDir);
+    this.units = new Map(this.opts.titleUnits(files).map((unit) => [unit.key, unit]));
+  }
+
+  private schedulePump() {
+    if (this.pumpScheduled) return;
+    this.pumpScheduled = true;
+    void this.runLoop().finally(() => { this.pumpScheduled = false; });
+  }
+
+  private async runLoop() {
+    try {
+      while (!this.cancelled && (this.state.status === "running" || this.state.status === "paused")) {
+        const reason = this.opts.busy();
+        if (reason) {
+          if (this.state.status !== "paused" || this.state.pauseReason !== reason) {
+            this.state.status = "paused";
+            this.state.pauseReason = reason;
+            await this.save();
+            log("INFO", "Library scan paused", { reason });
+          }
+          await sleep(this.wakeMs);
+          continue;
+        }
+        if (this.state.status === "paused") {
+          this.state.status = "running";
+          delete this.state.pauseReason;
+          await this.save();
+        }
+        const key = this.state.remaining[0];
+        if (!key) {
+          this.state.status = "completed";
+          this.state.finishedAt = nowIso();
+          delete this.state.current;
+          await this.save();
+          log("INFO", "Library scan completed", { matched: this.state.matched, skipped: this.state.skipped, failed: this.state.failed });
+          return;
+        }
+        this.state.current = key;
+        await this.save();
+        await this.processUnit(key);
+      }
+    } catch (error) {
+      this.state.status = "failed";
+      this.state.error = error instanceof Error ? error.message : String(error);
+      await this.save();
+      log("WARN", "Library scan failed", { reason: this.state.error });
+    }
+  }
+
+  private async processUnit(key: string) {
+    let addonCall = false;
+    try {
+      const unit = this.units.get(key);
+      if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
+      const records = this.opts.libraryMeta();
+      if (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id) { await this.finishUnit("skipped"); return; }
+
+      const parsed = parseMediaPath(key);
+      if (this.opts.busy()) { delete this.state.current; return; }
+
+      const identified = await this.identify(unit, parsed);
+      addonCall = identified.called;
+      const after = this.opts.libraryMeta();
+      if (lookupSkipped(key, after) || scanSkipReason(after[key]) || knownTitleOf(key, after)?.id) { await this.finishUnit("skipped"); return; }
+
+      if (identified.accept) {
+        const item = identified.accept.item;
+        const meta = await this.opts.metadata(this.opts.addons(), item.type, item.id);
+        addonCall = true;
+        const fields = cacheFieldsFromMeta(meta ?? item);
+        const episodeRows = episodesFromMeta(meta ?? item);
+        let wrote = false;
+        await this.opts.updateMeta((metaMap, suggestions, episodes) => {
+          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
+          metaMap[key] = {
+            type: item.type, id: item.id, source: "scan", locked: false,
+            matchedAt: nowIso(), backfilledAt: nowIso(), ...fields,
+          };
+          Object.assign(episodes, episodeRows);
+          delete suggestions[key];
+          wrote = true;
+        });
+        if (!wrote) { await this.finishUnit("skipped"); return; }
+        if (!this.opts.busy()) {
+          await this.opts.deleteGeneratedArt(key);
+          this.opts.savePoster(key, (meta ?? item).poster);
+        }
+        log("INFO", "Library title matched", { key, type: item.type, id: item.id, source: "scan" });
+        await this.finishUnit("matched");
+        return;
+      }
+
+      // Either way the unit is remembered as searched, so a later scan can walk
+      // past it instead of asking the catalogues the same question again.
+      const outcome = identified.suggestion
+        ? { ...identified.suggestion, scannedAt: nowIso() }
+        : scanMiss(unit.kind);
+      await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = outcome; });
+      await this.finishUnit("skipped");
+    } catch (error) {
+      this.state.error = error instanceof Error ? error.message : String(error);
+      log("WARN", "Library scan unit failed", { key, reason: this.state.error });
+      await this.finishUnit("failed");
+    } finally {
+      if (addonCall && this.gapMs) await sleep(this.gapMs);
+    }
+  }
+
+  private finishUnit(kind: "matched" | "skipped" | "failed") {
+    const key = this.state.current;
+    this.state[kind] += 1;
+    this.state.done += 1;
+    this.state.remaining = this.state.remaining.filter((item) => item !== key);
+    delete this.state.current;
+    return this.save();
+  }
+
+  private async identify(unit: TitleUnit, parsed: ReturnType<typeof parseMediaPath>) {
+    const addons = this.opts.addons();
+    const imdb = parsed.providerHints?.imdb;
+    if (imdb) {
+      const meta = await this.opts.metadata(addons, unit.kind, imdb)
+        ?? await this.opts.metadata(addons, unit.kind === "movie" ? "series" : "movie", imdb);
+      return { called: true, accept: meta ? { item: { ...meta, type: meta.type || unit.kind }, score: 100, titleSimilarity: 1, autoEligible: true } : undefined };
+    }
+    const prefixes = addonPrefixes(addons);
+    const tmdbId = parsed.providerHints?.tmdb ? idForPrefix(parsed.providerHints.tmdb, prefixes, "tmdb") : undefined;
+    const tvdbId = parsed.providerHints?.tvdb ? idForPrefix(parsed.providerHints.tvdb, prefixes, "tvdb") : undefined;
+    const prefixed = tmdbId ?? tvdbId;
+    if (prefixed) {
+      const meta = await this.opts.metadata(addons, unit.kind, prefixed);
+      if (meta) return { called: true, accept: { item: { ...meta, type: meta.type || unit.kind }, score: 100, titleSimilarity: 1, autoEligible: true } };
+    }
+    const found = await this.opts.searchAll(addons, parsed.query, unit.kind);
+    const hits = found.items.filter((item) => item.name).map((item) => scoreHit(parsed, item, unit.kind));
+    return { called: true, accept: autoAccept(hits), suggestion: pickSuggestion(hits) };
+  }
+
+  private save() {
+    this.state.updatedAt = nowIso();
+    const snapshot = this.snapshot();
+    this.saveChain = this.saveChain.then(async () => {
+      await mkdir(path.dirname(this.stateFile), { recursive: true });
+      const temp = `${this.stateFile}.tmp`;
+      await writeFile(temp, JSON.stringify(snapshot), { mode: 0o600 });
+      await rename(temp, this.stateFile);
+    }).catch((error) => {
+      log("WARN", "The library scan state could not be saved", { reason: error instanceof Error ? error.message : String(error) });
+    });
+    return this.saveChain;
+  }
+}

@@ -4,6 +4,8 @@ export interface DownloadTargetSettings { subfolder: string; layout: DownloadLay
 export interface AddonDownloadSettings { movie: DownloadTargetSettings; series: DownloadTargetSettings }
 export interface Addon {
   key: string; role: "catalog" | "source" | "both"; enabled: boolean; displayUrl?: string;
+  /** Cinemeta: the interface hides its remove and off switches. */
+  essential?: boolean;
   configurable?: boolean; downloadSettings?: AddonDownloadSettings; manifest: { id: string; name: string; version: string; description?: string; logo?: string; resources?: Array<string | { name: string }>; behaviorHints?: { p2p?: boolean } };
 }
 export interface Catalog { addonKey: string; addonName: string; type: string; id: string; name?: string; extra?: Array<{ name: string; isRequired?: boolean; options?: string[] }> }
@@ -94,11 +96,29 @@ export interface LibrarySummary {
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
-export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string }
-export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number } }
+export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
+export interface MatchSuggestion { type: string; id: string; name: string; year?: number; score: number }
+export interface BrowseMeta { year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean; suggestion?: MatchSuggestion }
+export interface BrowseFolder extends BrowseMeta { path: string; name: string; fileCount: number; size: number; poster?: string }
+export interface BrowseFile extends LibraryFile, BrowseMeta { poster?: string; progress?: { position: number; duration: number } }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile);
+export interface IdentityPreview {
+  path: string; key: string; kind: "movie" | "series"; file: boolean; label: string;
+  parsed: { title: string; query: string; year?: number; season?: number; episode?: number };
+  match: LibraryMatch;
+  bound?: { type: string; id: string; name?: string; season?: number; episode?: number };
+  suggestion?: MatchSuggestion;
+}
+export interface SuggestionRow { key: string; label: string; suggestion: MatchSuggestion }
+export interface ScanState {
+  status: "idle" | "running" | "paused" | "completed" | "failed";
+  pauseReason?: "playback" | "download" | "breaker";
+  startedAt?: string; finishedAt?: string; updatedAt?: string;
+  total: number; done: number; matched: number; skipped: number; failed: number;
+  current?: string; remaining: string[]; error?: string;
+}
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }

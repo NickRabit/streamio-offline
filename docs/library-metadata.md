@@ -14,6 +14,11 @@ When `DOWNLOAD_PATH` points at an existing media tree, most folders have no cata
 
 This design is the controlled exception to that rule. A path parser plus a Plex-style scorer identify title units from directory structure (not from a movie/TV library picker). Grouping folders such as `Webshare/Movies` are walked; collections of unrelated videos are not. A durable, user-triggered background job auto-accepts only high-confidence matches via the same `searchAll()` / `metadata()` path the catalog already uses. Everything else stays unmatched until the user runs Identify from the three-dot menu. Manual rematches are locked against later scans; Unmatch is reversible by Identify. The library browse UI starts showing year, description, and match status, so already-downloaded titles look closer to catalog cards without becoming a media-server catalog.
 
+Cinemeta names every title the library matches against, so it is treated as
+essential (`essentialAddon` in `server/src/security.ts`): the API refuses to
+delete it, to switch it off, or to demote it to a stream-only role, and the addon
+card hides those controls. Any other catalogue addon stays fully removable.
+
 ## Background & Motivation
 
 ### Current state
@@ -630,11 +635,13 @@ Do not open a catalog-style detail sheet from the tile. Library stays a file bro
 
 | Method | Path | Change |
 | --- | --- | --- |
-| GET | `/api/library/browse` | Each item includes `year`, `description`, `catalogName`, `match`. Same for `/api/library/favorites` and `/api/library/resume`. `pending` is also true when meta backfill was enqueued for the page. |
-| GET | `/api/library/identity` | **New.** `{ path, key, kind, parsed, match, suggestion? }`. Suggestion has no poster. |
-| POST | `/api/library/match` | Accept `path` or `key`; both go through `resolveInside`. Empty `id` + locked writes a sentinel. Non-empty id overwrites a sentinel. Writes full `LibraryMetaRecord` including cache fields, replaces hashed data-dir art, schedules catalog poster, invalidates `libraryCache`, clears suggestions. |
+| GET | `/api/library/browse` | Each item includes `year`, `description`, `catalogName`, `match`, `suggestion?`; a video also `season` / `episode`. Same for `/api/library/favorites` and `/api/library/resume`. `pending` is also true when meta backfill was enqueued for the page. |
+| GET | `/api/library/identity` | **New.** `{ path, key, file, label, kind, parsed, match, bound?, suggestion? }`. `parsed` carries `season` / `episode` when the file is numbered. Suggestion has no poster. |
+| POST | `/api/library/match` | Accept `path` or `key`; both go through `resolveInside`. `scope: "file"` binds the clicked video instead of its title unit, with optional `season` / `episode`. Empty `id` + locked writes a sentinel. Non-empty id overwrites a sentinel. Writes full `LibraryMetaRecord` including cache fields and episode rows, replaces hashed data-dir art, schedules catalog poster (episode still when bound to one), invalidates `libraryCache`, clears suggestions. |
+| GET | `/api/library/suggestions` | **New.** `{ items: [{ key, label, suggestion }], total }` -- scan results nobody has confirmed. |
+| DELETE | `/api/library/suggestion` | **New.** `?key=` drops one suggestion, keeping the searched-in-vain memory. |
 | GET | `/api/library/scan` | **New.** Current `ScanState`. |
-| POST | `/api/library/scan` | **New.** `start()`. Running or paused → current state, 200. |
+| POST | `/api/library/scan` | **New.** `start()`; `{ force: true }` forgets earlier fruitless searches. Running or paused → current state, 200. |
 | POST | `/api/library/scan/stop` | **New.** Cancel. |
 | GET | `/api/search` | Unchanged; Identify uses it (already `images.rewriteMeta`). |
 | GET | `/api/library` | Unused by the web client. Not a fill path. If left working, attach meta via `knownTitle()` (parent walk) so nested units are visible; do not rely on it. |
@@ -643,10 +650,12 @@ Client (`web/src/api.ts`):
 
 ```ts
 libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
-matchLibraryItem: (body: { path?: string; key?: string; id: string; type: string; locked?: boolean }) =>
+matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean }) =>
   request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
+librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
+dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
 libraryScan: () => request<ScanState>("/api/library/scan"),
-startLibraryScan: () => request<ScanState>("/api/library/scan", { method: "POST" }),
+startLibraryScan: (force = false) => request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify({ force }) }),
 stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
 ```
 
@@ -675,6 +684,12 @@ library.identifyApply
 library.unmatchedLocked     // Identify hint when match === "rejected"
 library.typeMovie
 library.typeSeries
+library.rescan              // forced rescan, offered once a scan has finished
+library.suggestions*        // review dialog, banner, per-row confirm and dismiss
+library.identifyTarget      // whole title vs. this file only
+library.identifySeason      // episode picker, filled from the picked series
+library.identifyEpisode
+addons.essential            // Cinemeta cannot be removed or switched off
 err.invalidPath             // already exists; match uses it when resolveInside fails
 err.missingFolder           // already exists
 ```
@@ -702,25 +717,61 @@ export interface LibraryMetaRecord {
   source?: LibraryMetaSource; // missing ⇒ treated as "download"
   locked?: boolean;           // missing + source download/user ⇒ true; scan ⇒ false
   matchedAt?: string;
+  backfilledAt?: string;      // last catalogue fill, successful or not
+  season?: number;            // set only when the binding names one episode
+  episode?: number;
   name?: string;
   year?: string;
-  description?: string;
+  description?: string;       // clipped on a word boundary, 1200 chars
 }
 
 export interface LibrarySuggestion {
   type: string;
-  id: string;
+  id: string;                 // empty string ⇒ memory of a search that found nothing
   name: string;
   year?: string;
   score: number;
+  scannedAt?: string;
+}
+
+export interface LibraryEpisodeRecord {
+  season: number;
+  episode: number;
+  name?: string;
+  description?: string;       // clipped on a word boundary, 600 chars
+  released?: string;
+  thumbnail?: string;
 }
 
 interface State {
   // …
   libraryMeta?: Record<string, LibraryMetaRecord>;
   librarySuggestions?: Record<string, LibrarySuggestion>;
+  libraryEpisodes?: Record<string, LibraryEpisodeRecord>; // `${type}:${id}:${season}:${episode}`
 }
 ```
+
+### Episode texts
+
+A series binding sits on the folder, so every file under it inherits one record.
+Showing that record on each row printed the same plot on every episode. Episode
+rows are therefore cached separately, keyed by title and numbering rather than by
+path, so a rename or a second copy of the same episode reuses them:
+
+- `episodesFromMeta(meta)` reads `meta.videos[]` (`season`, `episode`/`number`,
+  `name`/`title`, `overview`/`description`, `released`, `thumbnail`), capped at
+  1000 rows. It is written wherever a series meta is already fetched: the scan,
+  `rememberTitle`, `POST /api/library/match` and the browse backfill.
+- `episodeNumberOf(path, record)` resolves the numbering: an explicit binding
+  first, then `S01E02` / `1x02` in the file name, then a plain leading number
+  inside a season folder (`numberedEpisode` in `library.ts`, which also feeds
+  `browseDirectory`, so a flat series folder still shows `1×02`).
+- `browseMeta` gives a video under a series binding the episode name, plot and
+  air year. With no cached row it shows **nothing** rather than the series plot.
+  A season folder under the series is left bare for the same reason -- the series
+  folder already carries it.
+- `catalogPosterIfBound` uses the episode `thumbnail`. Without one it falls
+  through to the frame grabber instead of stamping the series poster on every row.
 
 Suggestions store **no poster URL**. Identity highlights by id against `/api/search` results (already `images.rewriteMeta`).
 
@@ -751,6 +802,19 @@ Existing `{ type, id }` rows from `rememberTitle` are therefore locked against t
 - `POST /api/library/rename` — `remapPath` each suggestion key, same as `libraryMeta`.
 
 A suggestion is not a lock and is not a catalog identity for `orphanedCatalogKeys`.
+
+Only hits scoring at least `SUGGESTION_MIN_SCORE` (60) are offered; below that the
+top hit is noise. A unit the scan searched in vain keeps an id-less row carrying
+`scannedAt`, which is the scan's memory: `start()` filters out units bound,
+excluded, or searched within `SCAN_MEMORY_MS` (30 days), so a repeated scan does
+not ask the catalogues the same question again. `POST /api/library/scan`
+with `{ force: true }` clears that memory for the whole tree and asks again.
+
+Waiting suggestions are reachable rather than silent: `GET /api/library/suggestions`
+lists them, the library shows a banner with the count and a review dialog with
+Confirm / Identify / Dismiss per row, and each browse row carries its own
+suggestion so it can be confirmed from the item menu. `DELETE /api/library/suggestion`
+replaces one with the searched-in-vain memory.
 
 ### Backup / export
 

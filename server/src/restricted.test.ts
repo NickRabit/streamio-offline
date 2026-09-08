@@ -62,6 +62,9 @@ test("ALLOWED_MUTATIONS covers the demo writes and omits configuration", () => {
   assert.equal(isAllowedMutation("POST", "/library/source"), true);
   assert.equal(isAllowedMutation("POST", "/library/rename"), true);
   assert.equal(isAllowedMutation("POST", "/library/match"), true);
+  assert.equal(isAllowedMutation("POST", "/library/scan"), true);
+  assert.equal(isAllowedMutation("POST", "/library/scan/stop"), true);
+  assert.equal(isAllowedMutation("DELETE", "/library/suggestion"), true);
   assert.equal(isAllowedMutation("DELETE", "/library/item"), true);
   assert.equal(isAllowedMutation("POST", "/downloads"), true);
   assert.equal(isAllowedMutation("POST", "/downloads/bulk"), true);

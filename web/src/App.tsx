@@ -1,10 +1,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
+import { IdentifyDialog } from "./IdentifyDialog";
+import { SuggestionsDialog } from "./SuggestionsDialog";
 import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
@@ -12,7 +14,7 @@ import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { guessLanguages, label } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
-import type { Addon, BuildInfo, Diagnostics, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
+import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, Inspection, Meta, QueueHalt, ScanState, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
  * Private mode may forbid storage, hence the try/catch around everything. */
@@ -86,6 +88,17 @@ export function App() {
   const [browseDesc, setBrowseDesc] = useState(() => recall("order", ["asc", "desc"] as const, "asc") === "desc");
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
+  const [identifyPath, setIdentifyPath] = useState<string | null>(null);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [suggestionCount, setSuggestionCount] = useState(0);
+  const [libraryScan, setLibraryScan] = useState<ScanState | null>(null);
+  const [scanHintDismissed, setScanHintDismissed] = useState(() => {
+    try { return localStorage.getItem("library-scan-hint-dismissed") === "1"; }
+    catch { return false; }
+  });
+  const scanStatus = useRef<ScanState["status"] | undefined>(undefined);
+  const scanWanted = useRef(false);
+  const [scanEpoch, setScanEpoch] = useState(0);
   const browseRequest = useRef(0);
   const browseLocation = useRef("");
   const browseSeed = useRef(String(Date.now()));
@@ -161,6 +174,100 @@ export function App() {
     if (!wanted || wanted === label) return;
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
+  const openIdentify = (itemPath: string) => { setMenuFor(null); setIdentifyPath(itemPath); };
+  const unmatchItem = async (itemPath: string) => {
+    setMenuFor(null);
+    try {
+      await api.matchLibraryItem({ path: itemPath, id: "", type: "movie" });
+      notify(t("library.unmatched"));
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
+  const setCatalogLookup = async (itemPath: string, enabled: boolean) => {
+    setMenuFor(null);
+    try {
+      await api.matchLibraryItem({ path: itemPath, skipLookup: !enabled });
+      notify(t(enabled ? "library.lookupEnabled" : "library.lookupSkipped"));
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
+  const loadSuggestionCount = async () => {
+    try { setSuggestionCount((await api.librarySuggestions()).total); }
+    catch { /* the count is optional chrome */ }
+  };
+  const applyScanState = (state: ScanState) => {
+    setLibraryScan(state);
+    if (state.status === "completed" && scanWanted.current) {
+      scanWanted.current = false;
+      notify(t("library.scanDone", { matched: state.matched, skipped: state.skipped, failed: state.failed }));
+      setScanEpoch((value) => value + 1);
+      void loadSuggestionCount();
+    }
+  };
+  const startScan = async (force = false) => {
+    try {
+      scanWanted.current = true;
+      const state = await api.startLibraryScan(force);
+      scanStatus.current = state.status;
+      applyScanState(state);
+    } catch (error) { scanWanted.current = false; fail(error); }
+  };
+  const stopScan = async () => {
+    try { await api.stopLibraryScan(); setLibraryScan(await api.libraryScan()); void loadSuggestionCount(); }
+    catch (error) { fail(error); }
+  };
+  const dismissScanHint = () => {
+    setScanHintDismissed(true);
+    try { localStorage.setItem("library-scan-hint-dismissed", "1"); } catch { /* storage may be unavailable */ }
+  };
+  const confirmSuggestion = async (item: BrowseItem) => {
+    setMenuFor(null);
+    if (!item.suggestion) return;
+    try {
+      await api.matchLibraryItem({ path: item.path, id: item.suggestion.id, type: item.suggestion.type });
+      notify(t("library.suggestionApplied", { name: item.suggestion.name }));
+      void loadSuggestionCount();
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
+  const dismissSuggestion = async (item: BrowseItem) => {
+    setMenuFor(null);
+    try {
+      await api.dismissLibrarySuggestion(item.path);
+      void loadSuggestionCount();
+      await loadBrowse(browsePath);
+    } catch (error) { fail(error); }
+  };
+  const matchActions = (item: BrowseItem) => {
+    const match = item.match ?? "unmatched";
+    const skipped = Boolean(item.skipLookup);
+    return <>
+      {match === "suggested" && item.suggestion && <>
+        <button onClick={() => void confirmSuggestion(item)}><Check/> {t("library.suggestionConfirmNamed", { name: item.suggestion.name })}</button>
+        <button onClick={() => void dismissSuggestion(item)}><X/> {t("library.suggestionDismiss")}</button>
+      </>}
+      {match === "matched"
+        ? <>
+          <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
+          <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
+        </>
+        : <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>}
+      {skipped
+        ? <button onClick={() => void setCatalogLookup(item.path, true)}><Search/> {t("library.allowLookup")}</button>
+        : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
+    </>;
+  };
+  const folderMeta = (item: Extract<BrowseItem, { kind: "folder" }>) =>
+    [item.year, t("library.fileCount", { count: item.fileCount }), bytes(item.size)].filter(Boolean).join(" · ");
+  const fileMeta = (item: Extract<BrowseItem, { kind: "file" }>) =>
+    browsePath === ":resume" && item.progress
+      ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) })
+      : [item.year, bytes(item.size)].filter(Boolean).join(" · ");
+  const descriptionLine = (item: BrowseItem) => item.description
+    ? (item.catalogName ? `${item.catalogName} · ${item.description}` : item.description)
+    : item.match === "suggested" && item.suggestion
+      ? t("library.suggestionLine", { name: item.suggestion.name, score: item.suggestion.score })
+      : item.catalogName;
   const [localStream, setLocalStream] = useState<Stream | null>(null); const [localTitle, setLocalTitle] = useState("");
   const [streamAddon, setStreamAddon] = useState(""); const [streamLanguage, setStreamLanguage] = useState(""); const [streamSort, setStreamSort] = useState<StreamSort>("recommended");
   useEffect(() => { setStreamSort(settings.streamSort as StreamSort); }, [settings.streamSort]);
@@ -330,7 +437,7 @@ export function App() {
   };
   const loadBrowse = async (target = browsePath, skip = 0) => {
     const request = ++browseRequest.current;
-    const location = browseLocation.current;
+    const wanted = JSON.stringify([target, browseQuery, browseSort, browseDesc, onlyFavorites]);
     setBrowseBusy(true);
     try {
       const options = { skip, limit: 60, sort: browseSort, order: browseDesc ? "desc" : "asc", seed: browseSeed.current };
@@ -340,9 +447,9 @@ export function App() {
         : target === ":favorites"
         ? await api.favorites(options)
         : await api.browse({ ...options, path: target, query: browseQuery, favorites: onlyFavorites });
-      if (request !== browseRequest.current || location !== browseLocation.current) return;
+      if (request !== browseRequest.current || wanted !== browseLocation.current) return;
       setBrowse((previous) => skip && previous ? { ...page, items: [...previous.items, ...page.items] } : page);
-    } catch (error) { if (request === browseRequest.current && location === browseLocation.current) fail(error); }
+    } catch (error) { if (request === browseRequest.current && wanted === browseLocation.current) fail(error); }
     finally { if (request === browseRequest.current) setBrowseBusy(false); }
   };
   const refreshBrowse = async (limit: number) => {
@@ -388,7 +495,28 @@ export function App() {
   }, [ready, view, browse, browsePath, browseQuery, onlyFavorites]);
 
   useEffect(() => { if (!ready || view !== "library") return; void loadBrowse(browsePath); },
-    [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+    [ready, view, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
+  // Polling only means something while a scan is on; otherwise one look on entry is enough.
+  const scanning = libraryScan?.status === "running" || libraryScan?.status === "paused";
+  useEffect(() => {
+    if (!ready || view !== "library") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const state = await api.libraryScan();
+        if (cancelled) return;
+        const previous = scanStatus.current;
+        if (previous === "running" && state.status === "idle") return;
+        scanStatus.current = state.status;
+        applyScanState(state);
+      } catch { /* scan status is optional chrome */ }
+    };
+    void tick();
+    if (!scanning) return () => { cancelled = true; };
+    const timer = window.setInterval(() => void tick(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [ready, view, scanning]);
+  useEffect(() => { if (ready && view === "library") void loadSuggestionCount(); }, [ready, view, scanEpoch]);
   // Page-scroll paging, the same as in the catalogue. The button stays as a fallback.
   useEffect(() => {
     if (view !== "library" || !browse) return;
@@ -910,8 +1038,29 @@ export function App() {
             <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>
+            <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
+              <Sparkles/> {t("library.scan")}
+            </button>
+            <button title={t("library.rescanHint")} onClick={() => void startScan(true)} disabled={scanning}>
+              <RefreshCw/> {t("library.rescan")}
+            </button>
           </div>
         </div>
+        {libraryScan && (libraryScan.status === "running" || libraryScan.status === "paused") && <div className="library-scan-status" role="status">
+          <span>{t("library.scanProgress", { done: libraryScan.done, total: libraryScan.total, matched: libraryScan.matched })}</span>
+          {libraryScan.pauseReason === "playback" && <span>{t("library.scanPausedPlayback")}</span>}
+          {libraryScan.pauseReason === "download" && <span>{t("library.scanPausedDownload")}</span>}
+          {libraryScan.pauseReason === "breaker" && <span>{t("library.scanPausedAddon")}</span>}
+          <button type="button" onClick={() => void stopScan()}>{t("library.scanStop")}</button>
+        </div>}
+        {!browsePath && !scanHintDismissed && !libraryScan?.finishedAt && (browse?.total ?? 0) >= 10 && <div className="library-scan-hint" role="status">
+          <span>{t("library.scanHint")}</span>
+          <button type="button" onClick={dismissScanHint}>{t("library.dismissHint")}</button>
+        </div>}
+        {suggestionCount > 0 && !scanning && <div className="library-scan-hint" role="status">
+          <span>{t("library.suggestionsWaiting", { count: suggestionCount })}</span>
+          <button type="button" onClick={() => setSuggestionsOpen(true)}>{t("library.suggestionsReview")}</button>
+        </div>}
 
         {!browsePath && !onlyFavorites && !browseQuery && <button className="library-favorites" onClick={() => { setBrowseQuery(""); setFromFavorites(false); setBrowsePath(":favorites"); }}>
           <span className="favorites-collage" aria-hidden="true">{[...new Set(favoritePreview?.items.map((item) => item.poster).filter((poster): poster is string => Boolean(poster)))].slice(0, 3).map((poster) => <img key={poster} src={poster} alt="" onError={hideBroken}/>)}<Star/></span>
@@ -925,9 +1074,10 @@ export function App() {
               {browse.items.map((item) => item.kind === "folder"
                 ? <article className="browse-item folder" key={item.path}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
-                    <span className="library-copy"><strong>{item.name}</strong><small>{t("library.fileCount", { count: item.fileCount })} · {bytes(item.size)}</small></span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
+                    <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
                     <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
@@ -938,9 +1088,10 @@ export function App() {
                     {browseFocus === item.path && <i className="browse-focus-mark">{t("library.thisFile")}</i>}
                     {item.progress && <i className="resume-bar"><i style={{ width: `${Math.min(100, Math.round(item.progress.position / (item.progress.duration || 1) * 100))}%` }}/></i>}</span>
                     <span className="library-copy"><strong>{item.season != null ? `${item.season}×${String(item.episode ?? 0).padStart(2, "0")} ${item.label}` : item.label}</strong>
-                    <small>{browsePath === ":resume" && item.progress ? t("library.remaining", { time: fmtEta(Math.max(0, item.progress.duration - item.progress.position)) }) : bytes(item.size)}</small></span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
+                    <small>{fileMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><Play/> {t(item.progress ? "library.continue" : "player.play")}</span></button>
                     <button className="browse-menu" aria-label={t("library.options", { name: item.label })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
                     {menuFor === item.path && <span className="browse-actions" onClick={(event) => event.stopPropagation()}>
+                      {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
@@ -977,6 +1128,11 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+    {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
+    {suggestionsOpen && <SuggestionsDialog
+      onClose={() => setSuggestionsOpen(false)}
+      onChanged={() => { void loadSuggestionCount(); void loadBrowse(browsePath); }}
+      onIdentify={(target) => { setSuggestionsOpen(false); setIdentifyPath(target); }}/>}
     {galleryIndex !== null && galleryImages[galleryIndex] && <MediaGallery images={galleryImages} index={galleryIndex} onIndex={setGalleryIndex} onClose={() => setGalleryIndex(null)}/>}
     {(message || error) && <div className={`toast ${error ? "error" : ""}`}>{error || message}<button onClick={() => {setError("");setMessage("");}}><X/></button></div>}
   </div>;
@@ -1364,7 +1520,9 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
     <div className="addon-actions">{index >= 0 && <div className="addon-order">
       <button title={t("addons.higherPriority")} disabled={index === 0} onClick={async()=>{try { await api.moveAddon(addon.key, -1); await onChanged(); } catch (error) { onError(error); }}}><ArrowUp/></button>
       <button title={t("addons.lowerPriority")} disabled={index === total - 1} onClick={async()=>{try { await api.moveAddon(addon.key, 1); await onChanged(); } catch (error) { onError(error); }}}><ArrowDown/></button>
-    </div>}<label className="switch"><input type="checkbox" checked={addon.enabled} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label><button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button></div>
+    </div>}<label className="switch" title={addon.essential ? t("addons.essential") : undefined}><input type="checkbox" checked={addon.enabled} disabled={addon.essential} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label>{addon.essential
+      ? <span className="addon-essential" title={t("addons.essential")}><ShieldCheck/></span>
+      : <button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button>}</div>
     <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>{t("addons.manifestAndExport")}</span><ChevronDown/></button>
     {manifestOpen && <div className="addon-download-settings">
       <div className="addon-download-head"><strong>{t("addons.manifestAddress")}</strong><small>{t("addons.manifestAddressHint")}</small></div>

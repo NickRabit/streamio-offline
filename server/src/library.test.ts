@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -13,7 +13,11 @@ test("číslo série se pozná z různých zápisů složky", () => {
   assert.equal(parseSeason("Season 2"), 2);
   assert.equal(parseSeason("S03"), 3);
   assert.equal(parseSeason("3"), 3);
+  assert.equal(parseSeason("Serie 2"), 2);
+  assert.equal(parseSeason("Série 4"), 4);
+  assert.equal(parseSeason("Sezona 5"), 5);
   assert.equal(parseSeason("Extra"), null);
+  assert.equal(parseSeason("Film 2"), null);
 });
 
 test("z názvu dílu se oddělí číslo a titulek", () => {
@@ -217,6 +221,14 @@ test("smazaný titul přestane mít vazbu na katalog", () => {
   assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna 2")], [], "cizí cesta nic nezapomíná");
 });
 
+test("unmatch sentinel is not a catalog orphan", () => {
+  const meta = {
+    "filmy/Duna": { type: "movie", id: "" },
+    "serialy/Přátelé": { type: "series", id: "tt0108778" },
+  };
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna")], []);
+});
+
 test("titul držený ještě jinou cestou zůstává", () => {
   const meta = {
     "serialy/Přátelé": { type: "series", id: "tt0108778" },
@@ -224,4 +236,17 @@ test("titul držený ještě jinou cestou zůstává", () => {
   };
   assert.deepEqual([...orphanedCatalogKeys(meta, "serialy/Přátelé")], [], "druhá složka titul pořád drží");
   assert.deepEqual([...orphanedCatalogKeys(meta, "archiv")], []);
+});
+
+test("a browsed file is numbered from its own name, not only from a season folder", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-browse-"));
+  try {
+    await mkdir(path.join(root, "Ted"), { recursive: true });
+    await writeFile(path.join(root, "Ted", "Ted.S02E03.mkv"), "x");
+    const result = await browseDirectory(root, "Ted");
+    const file = result.items.find((item) => item.kind === "file");
+    assert.equal(file?.season, 2);
+    assert.equal(file?.episode, 3);
+    assert.deepEqual(numberedEpisode(path.join("Ted", "Ted.S02E03.mkv")), { season: 2, episode: 3 });
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

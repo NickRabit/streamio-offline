@@ -34,9 +34,9 @@ export const SERIES = {
   releaseInfo: "2023",
   genres: ["Komedie"],
   videos: [
-    { id: "tt-e2e-series:1:1", season: 1, episode: 1, title: "První díl", released: "2023-01-01T00:00:00.000Z" },
-    { id: "tt-e2e-series:1:2", season: 1, episode: 2, title: "Druhý díl", released: "2023-01-08T00:00:00.000Z" },
-    { id: "tt-e2e-series:2:1", season: 2, episode: 1, title: "Nová série", released: "2024-01-01T00:00:00.000Z" },
+    { id: "tt-e2e-series:1:1", season: 1, episode: 1, title: "První díl", overview: "V prvním dílu se všichni seznámí.", released: "2023-01-01T00:00:00.000Z" },
+    { id: "tt-e2e-series:1:2", season: 1, episode: 2, title: "Druhý díl", overview: "Ve druhém dílu se všichni pohádají.", released: "2023-01-08T00:00:00.000Z" },
+    { id: "tt-e2e-series:2:1", season: 2, episode: 1, title: "Nová série", overview: "Nová série začíná jinde.", released: "2024-01-01T00:00:00.000Z" },
   ],
 };
 

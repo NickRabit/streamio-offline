@@ -28,6 +28,18 @@ describe("request", () => {
     expect(optionsOf().body).toBe(JSON.stringify({ url: "https://addon.example/manifest.json", role: "both" }));
   });
 
+  it("asks the library identity and match endpoints", async () => {
+    fetchMock.mockImplementation(() => Promise.resolve(json({})));
+    await api.libraryIdentity("Foo/Bar");
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/library/identity?path=Foo%2FBar");
+    await api.matchLibraryItem({ path: "Foo", id: "tt1", type: "movie" });
+    expect(optionsOf(1).method).toBe("POST");
+    expect(optionsOf(1).body).toBe(JSON.stringify({ path: "Foo", id: "tt1", type: "movie" }));
+    await api.startLibraryScan();
+    expect(String(fetchMock.mock.calls[2][0])).toBe("/api/library/scan");
+    expect(optionsOf(2).method).toBe("POST");
+  });
+
   it("does not try to parse an empty response", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(api.deleteAddon("alpha")).resolves.toBeUndefined();

@@ -12,7 +12,7 @@ import { DownloadQueue } from "./downloads.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
 import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { images } from "./images.js";
@@ -20,8 +20,11 @@ import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
-import { browseDirectory, describePath, entryDirectory, isPathWithin, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
-import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, savePosterFromUrl, saveFrame } from "./artwork.js";
+import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
+import { parseMediaPath } from "./library-parse.js";
+import { LibraryScan } from "./library-scan.js";
+import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -366,7 +369,12 @@ app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
   });
   res.status(204).end();
 }));
-app.delete("/api/addons/:key", asyncRoute(async (req, res) => { await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); }); res.status(204).end(); }));
+app.delete("/api/addons/:key", asyncRoute(async (req, res) => {
+  const existing = store.addons().find((a) => a.key === req.params.key);
+  if (existing && essentialAddon(existing)) throw new AppError("Cinemeta provides the library metadata and cannot be removed.", "err.essentialAddon");
+  await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); });
+  res.status(204).end();
+}));
 // Úplný záznam včetně adresy s tokenem. Rozhraní ji jinak skrývá, tady je vydání záměrné.
 app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.params.key);
@@ -377,6 +385,10 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   const existing = store.addons().find((a) => a.key === req.params.key);
   if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
   const role = ["catalog", "source", "both"].includes(req.body.role) ? req.body.role as AddonRole : existing.role;
+  // Switching it off, or down to a stream-only role, would take the metadata with it.
+  if (essentialAddon(existing) && (req.body.enabled === false || role === "source")) {
+    throw new AppError("Cinemeta provides the library metadata and cannot be switched off.", "err.essentialAddon");
+  }
   // Jiná adresa znamená načíst manifest znovu. Klíč, pořadí i nastavení ukládání zůstávají,
   // takže po překonfigurování doplňku není nutné ho mazat a přidávat.
   const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
@@ -481,25 +493,38 @@ const cachedMeta = async (type: string, id: string) => {
 };
 // Sken stromu je drahý, drží se chvíli v paměti. Fronta ho po dokončení stahování zneplatní.
 let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
+let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | undefined;
+const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; };
+const libraryFiles = async () => {
+  if (videoCache && Date.now() - videoCache.at < 30_000) return videoCache.files;
+  const files = await listVideos(DOWNLOAD_DIR);
+  videoCache = { at: Date.now(), files };
+  return files;
+};
 const libraryEntries = async () => {
   if (libraryCache && Date.now() - libraryCache.at < 30_000) return libraryCache.entries;
   const entries = await scanLibrary(DOWNLOAD_DIR);
   const known = store.libraryMeta();
-  // Metadata jen tam, kde známe id z doby stahování. Nic se nehádá z názvu složky.
-  await Promise.all(entries.map(async (entry) => {
-    const record = known[entry.key];
-    if (!record) return;
-    const meta = await cachedMeta(record.type, record.id);
+  for (const entry of entries) {
+    const record = knownTitleOf(entry.key, known);
+    if (!record) continue;
     entry.meta = {
-      type: record.type, id: record.id, name: meta?.name,
-      poster: meta?.poster, background: meta?.background,
-      description: typeof meta?.description === "string" ? meta.description : undefined,
-      year: meta?.releaseInfo ? String(meta.releaseInfo) : meta?.year ? String(meta.year) : undefined,
+      type: record.type, id: record.id, name: record.name,
+      description: record.description, year: record.year,
     };
-  }));
+  }
   libraryCache = { at: Date.now(), entries };
   return entries;
 };
+
+/** The address of a thumbnail never changes, so without a stamp the browser keeps
+ *  showing the frame it loaded before the title was matched. */
+const artStamp = async (file: string) => {
+  const info = await stat(file).catch(() => undefined);
+  return info ? Math.round(info.mtimeMs).toString(36) : "0";
+};
+const thumbUrl = async (param: "path" | "dir" | "key", value: string, art: string | undefined) =>
+  (art ? `/api/library/thumb?${param}=${encodeURIComponent(value)}&v=${await artStamp(art)}` : undefined);
 
 const ARTWORK_DIR = path.join(process.env.DATA_DIR ?? "/data", "artwork");
 const artworkQueue = new ArtworkQueue();
@@ -526,14 +551,9 @@ function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number])
     const directory = entryDirectory(entry);
     const target = toMedia && directory ? path.join(DOWNLOAD_DIR, directory, POSTER_OUTPUT) : dataArtworkFile(entry.key);
     await mkdir(path.dirname(target), { recursive: true });
-
-    if (entry.meta?.poster && await savePosterFromUrl(path.dirname(target), entry.meta.poster)) {
-      if (path.basename(target) !== POSTER_OUTPUT) {
-        await rename(path.join(path.dirname(target), POSTER_OUTPUT), target);
-      }
-      log("INFO", "Poster saved from metadata", { key: entry.key });
-      return;
-    }
+    if (await catalogPosterIfBound(entry.key, target)) return;
+    if (await locateArtwork(entry)) return;
+    if (await catalogPosterIfBound(entry.key, target)) return;
     const source = entry.files[0];
     if (!source) return;
     const info = await playback.inspect({ url: `file://${source.path}` }).catch(() => undefined);
@@ -550,7 +570,7 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
     if (!art) scheduleArtwork(entry);
     const summary = summarize(entry);
     return { ...summary, meta: summary.meta && { ...summary.meta, poster: images.proxied(summary.meta.poster), background: images.proxied(summary.meta.background) },
-      poster: art ? `/api/library/thumb?key=${encodeURIComponent(entry.key)}` : undefined };
+      poster: await thumbUrl("key", entry.key, art) };
   }));
   res.json(summaries);
 }));
@@ -562,14 +582,116 @@ async function locateFileArtwork(relative: string) {
   return await fileExists(own) ? own : undefined;
 }
 
-/** Vazba na titul může být u souboru i u některé nadřazené složky. */
-const knownTitle = (relative: string) => {
-  const all = store.libraryMeta();
-  const parts = relative.split(path.sep);
-  let found = all[relative];
-  for (let depth = parts.length - 1; !found && depth > 0; depth -= 1) found = all[parts.slice(0, depth).join(path.sep)];
-  return found;
+/** Vazba na titul může být u souboru i u některé nadřazené složky. Sentinel bez id se ignoruje. */
+const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMeta());
+
+const PLAYBACK_IDLE_SECONDS = 300;
+const playbackBusy = () => playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS);
+const metaBackfill = new ArtworkQueue();
+// A title the catalogue answers without a description would otherwise be asked
+// about on every single browse, so a finished attempt holds for a while.
+const BACKFILL_RETRY_MS = 6 * 60 * 60_000;
+const metaBackfillTried = new Map<string, number>();
+const scheduleMetaBackfill = (type: string, id: string) => {
+  const key = `${type}:${id}`;
+  const tried = metaBackfillTried.get(key);
+  if (!id || playbackBusy()) return false;
+  if (tried != null && Date.now() - tried < BACKFILL_RETRY_MS) return false;
+  metaBackfill.run(key, async () => {
+    if (playbackBusy()) return;
+    const meta = await cachedMeta(type, id);
+    metaBackfillTried.set(key, Date.now());
+    for (const [seen, at] of metaBackfillTried) if (Date.now() - at > BACKFILL_RETRY_MS) metaBackfillTried.delete(seen);
+    if (!meta) return;
+    const fields = cacheFieldsFromMeta(meta);
+    const episodeRows = episodesFromMeta(meta);
+    const at = new Date().toISOString();
+    await store.update((state) => {
+      const next = { ...state.libraryMeta };
+      for (const [pathKey, record] of Object.entries(next)) {
+        if (record.type === type && record.id === id) next[pathKey] = { ...record, ...fields, backfilledAt: at };
+      }
+      state.libraryMeta = next;
+      if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
+    });
+    invalidateLibrary();
+  });
+  return true;
 };
+
+const isFileKey = (key: string) => isVideo(path.basename(key));
+const hashedArt = (key: string) => isFileKey(key) ? dataArtworkFile(key) : dataArtworkFile(`dir:${key}`);
+const mediaPosterExists = async (key: string) => {
+  const folder = isFileKey(key) ? path.dirname(key) : key;
+  if (!folder || folder === ".") return false;
+  return Boolean(await findArtwork(path.join(DOWNLOAD_DIR, folder)));
+};
+const writeCatalogPoster = async (key: string, url?: string) => {
+  if (!url || !key || key === ".") return false;
+  if (await mediaPosterExists(key)) return false;
+  await rm(dataArtworkFile(key), { force: true });
+  await rm(dataArtworkFile(`dir:${key}`), { force: true });
+  const toMedia = store.settings().artworkLocation === "media";
+  const asFile = isFileKey(key);
+  const target = toMedia
+    ? (asFile
+      ? path.join(DOWNLOAD_DIR, path.dirname(key), episodeArtName(path.basename(key)))
+      : path.join(DOWNLOAD_DIR, key, POSTER_OUTPUT))
+    : hashedArt(key);
+  await mkdir(path.dirname(target), { recursive: true });
+  return savePosterAs(target, url);
+};
+
+/** The binding on this exact path, ignoring one inherited from a parent folder. */
+const ownRecord = (relative: string, records: Record<string, LibraryMetaRecord>) =>
+  (records[relative]?.id ? records[relative] : undefined);
+
+/** Generated thumbnails of a path and everything under it. A changed binding makes
+ *  them stale: the poster of the old title, or a frame grabbed while unmatched. */
+const clearGeneratedArt = async (relative: string) => {
+  await rm(dataArtworkFile(relative), { force: true });
+  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+  for (const file of await libraryFiles()) {
+    if (file.relative !== relative && isPathWithin(file.relative, relative)) await rm(dataArtworkFile(file.relative), { force: true });
+  }
+};
+
+const attachBrowseMeta = <T extends { path: string; kind: string; name?: string; label?: string }>(item: T) => {
+  const records = store.libraryMeta();
+  const episodes = store.libraryEpisodes();
+  const label = item.kind === "folder" ? String(item.name ?? "") : String(item.label ?? "");
+  const extra = browseMeta(item.path, label, records, store.librarySuggestions(), episodes);
+  const known = knownTitleOf(item.path, records);
+  const numbers = item.kind === "file" ? episodeNumberOf(item.path, ownRecord(item.path, records)) : undefined;
+  const wanted = needsBackfill(known) || needsEpisodes(known, numbers, episodes);
+  const backfill = wanted && scheduleMetaBackfill(known!.type, known!.id);
+  return { item: { ...item, ...extra }, backfill };
+};
+
+/** An episode gets its own still. Falling back to the series poster would paint
+ *  the same picture on every row, so it is left to the frame grabber instead. */
+async function catalogPosterIfBound(relative: string, target: string) {
+  const records = store.libraryMeta();
+  const known = knownTitleOf(relative, records);
+  if (!known) return false;
+  if (known.type === "series" && isVideo(path.basename(relative))) {
+    const numbers = episodeNumberOf(relative, ownRecord(relative, records));
+    const row = numbers ? store.libraryEpisodes()[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
+    if (!row?.thumbnail) return false;
+    if (await savePosterAs(target, row.thumbnail)) {
+      log("INFO", "Episode still filled in from metadata", { path: relative });
+      return true;
+    }
+    return false;
+  }
+  const meta = await cachedMeta(known.type, known.id);
+  if (!meta?.poster) return false;
+  if (await savePosterAs(target, meta.poster)) {
+    log("INFO", "Poster filled in from metadata", { path: relative });
+    return true;
+  }
+  return false;
+}
 
 function scheduleFileArtwork(relative: string) {
   artworkQueue.run(`file:${relative}`, async () => {
@@ -580,16 +702,9 @@ function scheduleFileArtwork(relative: string) {
       ? path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)))
       : dataArtworkFile(relative);
     await mkdir(path.dirname(target), { recursive: true });
-
-    // Plakát má přednost před snímkem, ať se náhled obnoví správně i po smazání.
-    const known = knownTitle(relative);
-    if (known) {
-      const meta = await cachedMeta(known.type, known.id);
-      if (meta?.poster && await savePosterAs(target, meta.poster)) {
-        log("INFO", "Poster filled in from metadata", { path: relative });
-        return;
-      }
-    }
+    if (await catalogPosterIfBound(relative, target)) return;
+    if (await locateFileArtwork(relative)) return;
+    if (await catalogPosterIfBound(relative, target)) return;
     const info = await playback.inspect({ url: `file://${relative}` }).catch(() => undefined);
     await saveFrame(source, target, framePosition(info?.duration));
   });
@@ -610,21 +725,9 @@ function scheduleFolderArtwork(relative: string) {
     const toMedia = store.settings().artworkLocation === "media";
     const target = toMedia ? path.join(DOWNLOAD_DIR, relative, POSTER_OUTPUT) : dataArtworkFile(`dir:${relative}`);
     await mkdir(path.dirname(target), { recursive: true });
-
-    // Vazba může být uložená u přesné složky i u některé nadřazené.
-    const all = store.libraryMeta();
-    const parts = relative.split(path.sep);
-    let known = all[relative];
-    for (let depth = parts.length - 1; !known && depth > 0; depth -= 1) known = all[parts.slice(0, depth).join(path.sep)];
-    if (known) {
-      const meta = await cachedMeta(known.type, known.id);
-      if (meta?.poster && await savePosterFromUrl(path.dirname(target), meta.poster)) {
-        const written = path.join(path.dirname(target), POSTER_OUTPUT);
-        if (written !== target) await rename(written, target);
-        return;
-      }
-    }
-    // Snímek bereme z prvního videa uvnitř; když jsou tam jen podsložky, sestoupíme o úroveň.
+    if (await catalogPosterIfBound(relative, target)) return;
+    if (await locateFolderArtwork(relative)) return;
+    if (await catalogPosterIfBound(relative, target)) return;
     const inside = await browseDirectory(DOWNLOAD_DIR, relative, "", 0, 20);
     let first = inside.items.find((item) => item.kind === "file");
     if (!first) {
@@ -779,9 +882,10 @@ app.get("/api/library/resume", asyncRoute(async (req, res) => {
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
     const art = await locateFileArtwork(item.path);
     if (!art) scheduleFileArtwork(item.path);
-    return { ...item, poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined };
+    const { item: withMeta, backfill } = attachBrowseMeta(item);
+    return { ...withMeta, poster: await thumbUrl("path", item.path, art), backfill };
   }));
-  res.json({ path: ":resume", items: page, total: ordered.length, pending: page.some((item) => !item.poster) });
+  res.json({ path: ":resume", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
 }));
 
 app.get("/api/library/favorites", asyncRoute(async (req, res) => {
@@ -800,10 +904,11 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const page = await Promise.all(ordered.slice(skip, skip + limit).map(async (item) => {
     const art = item.kind === "folder" ? await locateFolderArtwork(item.path) : await locateFileArtwork(item.path);
     if (!art) (item.kind === "folder" ? scheduleFolderArtwork : scheduleFileArtwork)(item.path);
-    const poster = art ? `/api/library/thumb?${item.kind === "folder" ? "dir" : "path"}=${encodeURIComponent(item.path)}` : undefined;
-    return { ...item, favorite: true, poster };
+    const poster = await thumbUrl(item.kind === "folder" ? "dir" : "path", item.path, art);
+    const { item: withMeta, backfill } = attachBrowseMeta(item);
+    return { ...withMeta, favorite: true, poster, backfill };
   }));
-  res.json({ path: ":favorites", items: page, total: ordered.length, pending: page.some((item) => !item.poster) });
+  res.json({ path: ":favorites", items: page.map(({ backfill: _backfill, ...item }) => item), total: ordered.length, pending: page.some((item) => !item.poster || item.backfill) });
 }));
 
 app.get("/api/library/browse", asyncRoute(async (req, res) => {
@@ -821,19 +926,22 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
     if (item.kind === "folder") {
       const art = await locateFolderArtwork(item.path);
       if (!art) scheduleFolderArtwork(item.path);
-      return { ...item, poster: art ? `/api/library/thumb?dir=${encodeURIComponent(item.path)}` : undefined };
+      const { item: withMeta, backfill } = attachBrowseMeta(item);
+      return { ...withMeta, poster: await thumbUrl("dir", item.path, art), backfill };
     }
     const art = await locateFileArtwork(item.path);
     if (!art) scheduleFileArtwork(item.path);
     const watched = store.progress()[`file:${item.path}`];
+    const { item: withMeta, backfill } = attachBrowseMeta(item);
     return {
-      ...item,
-      poster: art ? `/api/library/thumb?path=${encodeURIComponent(item.path)}` : undefined,
+      ...withMeta,
+      poster: await thumbUrl("path", item.path, art),
       progress: watched ? { position: watched.position, duration: watched.duration } : undefined,
+      backfill,
     };
   }));
   const marked = withFavorites(items);
-  res.json({ ...result, items: marked, pending: marked.some((item) => !item.poster) });
+  res.json({ ...result, items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || item.backfill) });
 }));
 
 // Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
@@ -853,7 +961,8 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
   const orphans = orphanedCatalogKeys(store.libraryMeta(), relative);
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, relative));
-    state.libraryMeta = Object.fromEntries(Object.entries(state.libraryMeta ?? {}).filter(([key]) => !isPathWithin(key, relative)));
+    state.libraryMeta = dropKeyed(state.libraryMeta ?? {}, relative);
+    state.librarySuggestions = dropKeyed(state.librarySuggestions ?? {}, relative);
     state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).filter(([key, value]) => {
       if (orphans.has(key)) return false;
       const itemPath = key.startsWith("file:") ? key.slice(5) : value.path;
@@ -861,7 +970,7 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
     }));
     state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([key]) => !orphans.has(key)));
   });
-  libraryCache = undefined;
+  invalidateLibrary();
   log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans] });
   res.status(204).end();
 }));
@@ -884,8 +993,8 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
   // Všechny stavové vazby používají relativní cestu; při přesunu musí zůstat konzistentní.
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
-    state.libraryMeta = Object.fromEntries(Object.entries(state.libraryMeta ?? {})
-      .map(([key, value]) => [remapPath(key, relative, nextRelative), value]));
+    state.libraryMeta = remapKeyed(state.libraryMeta ?? {}, relative, nextRelative);
+    state.librarySuggestions = remapKeyed(state.librarySuggestions ?? {}, relative, nextRelative);
     state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
       const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
       const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
@@ -893,7 +1002,7 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
       return [nextKey, { ...value, path: nextPath }];
     }));
   });
-  libraryCache = undefined;
+  invalidateLibrary();
   log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
   res.json({ path: nextRelative });
 }));
@@ -926,25 +1035,65 @@ const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) =
 /** Plakát z katalogu se uloží hned při zařazení do fronty, takže je v knihovně dřív než soubor. */
 const saveCatalogPoster = (key: string, url?: string) => {
   if (!url || !key || key === ".") return;
-  artworkQueue.run(`poster:${key}`, async () => {
-    const asFolder = !path.extname(key);
-    if (asFolder ? await locateFolderArtwork(key) : await locateFileArtwork(key)) return;
-    const toMedia = store.settings().artworkLocation === "media";
-    const target = toMedia
-      ? (asFolder ? path.join(DOWNLOAD_DIR, key, POSTER_OUTPUT) : path.join(DOWNLOAD_DIR, path.dirname(key), episodeArtName(path.basename(key))))
-      : dataArtworkFile(asFolder ? `dir:${key}` : key);
-    await mkdir(path.dirname(target), { recursive: true });
-    if (await savePosterAs(target, url)) log("INFO", "Poster from the catalog saved", { key });
+  const queueKey = isFileKey(key) ? `file:${key}` : `dir:${key}`;
+  artworkQueue.run(queueKey, async () => {
+    if (await writeCatalogPoster(key, url)) log("INFO", "Poster from the catalog saved", { key });
   });
 };
+
+const hostOf = (url: string) => { try { return new URL(url).host; } catch { return ""; } };
+const scanGapMs = Number(process.env.LIBRARY_SCAN_GAP_MS);
+const libraryScan = new LibraryScan({
+  dataDir: process.env.DATA_DIR ?? "/data",
+  downloadDir: DOWNLOAD_DIR,
+  listVideos, titleUnits, searchAll, metadata,
+  addons: () => store.addons(),
+  libraryMeta: () => store.libraryMeta(),
+  librarySuggestions: () => store.librarySuggestions(),
+  updateMeta: async (mutator) => {
+    await store.update((state) => {
+      const meta = { ...state.libraryMeta };
+      const suggestions = { ...state.librarySuggestions };
+      const episodes = { ...state.libraryEpisodes };
+      mutator(meta, suggestions, episodes);
+      state.libraryMeta = meta;
+      state.librarySuggestions = suggestions;
+      state.libraryEpisodes = episodes;
+    });
+    invalidateLibrary();
+  },
+  savePoster: (key, url) => saveCatalogPoster(key, url),
+  deleteGeneratedArt: (key) => clearGeneratedArt(key),
+  busy: () => {
+    if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
+    if (queue.list().some((job) => job.status === "downloading")) return "download";
+    const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
+    if (outbound.diagnostics().some((row) => row.state === "open" && searchHosts.has(row.host))) return "breaker";
+    return undefined;
+  },
+  gapMs: Number.isFinite(scanGapMs) ? scanGapMs : 3_000,
+});
 
 const rememberTitle = async (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (!media?.id) return;
   const key = titleKey(target, media, flat);
   if (!key || key === ".") return;
+  const type = media.metaType ?? (media.kind === "episode" ? "series" : "movie");
+  const meta = await cachedMeta(type, media.id);
+  const fields = cacheFieldsFromMeta(meta);
+  const episodeRows = episodesFromMeta(meta);
+  const at = new Date().toISOString();
   await store.update((state) => {
-    state.libraryMeta = { ...state.libraryMeta, [key]: { type: media.metaType ?? (media.kind === "episode" ? "series" : "movie"), id: media.id! } };
+    state.libraryMeta = {
+      ...state.libraryMeta,
+      [key]: { type, id: media.id!, source: "download", locked: true, matchedAt: at, backfilledAt: at, ...fields },
+    };
+    const suggestions = { ...state.librarySuggestions };
+    delete suggestions[key];
+    state.librarySuggestions = suggestions;
+    if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
   });
+  saveCatalogPoster(key, meta?.poster ?? media.poster);
 };
 
 // Dokončení zneplatní sken okamžitě. U líných úloh zde poprvé známe cílovou cestu,
@@ -954,38 +1103,156 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
 // linkou prošla, i když se soubor nakonec neuložil.
 queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
 queue.onCompleted = async (job) => {
-  libraryCache = undefined;
+  invalidateLibrary();
   await stats.complete(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }));
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
   const targetSettings = job.media.kind === "episode" ? settings.series : settings.movie;
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
-  saveCatalogPoster(titleKey(job.target, job.media, targetSettings.layout === "flat"), job.media.poster);
 };
 queue.setDebrid({
   configured: () => Boolean(store.settings().realDebridToken),
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
 });
 await queue.load();
+await libraryScan.load();
 await stats.load();
 // Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
 // se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam. Doplní se
 // jen to, co je starší než vlastní záznam -- novější už v něm je.
 await stats.seed(queue.history().map(statEvent));
 
+app.get("/api/library/identity", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  const files = await libraryFiles();
+  const key = matchKeyFor(relative, files);
+  const unit = titleUnits(files).find((item) => item.key === key);
+  const records = store.libraryMeta();
+  const suggestions = store.librarySuggestions();
+  const known = knownTitleOf(relative, records);
+  if (needsBackfill(known)) scheduleMetaBackfill(known!.type, known!.id);
+  const suggestion = suggestionFor(key, suggestions);
+  const isFile = isVideo(path.basename(relative));
+  const numbers = episodeNumberOf(relative, ownRecord(relative, records));
+  const bound = known ? { type: known.type, id: known.id, name: known.name, season: known.season, episode: known.episode } : undefined;
+  res.json({
+    path: relative,
+    key,
+    // What the user clicked can be one file of a whole bound title, so the dialog
+    // has to be able to say which of the two it is about to rewrite.
+    file: isFile,
+    label: path.basename(relative),
+    kind: unit?.kind ?? (isFile && numbers ? "series" : "movie"),
+    parsed: { ...parseMediaPath(key), ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}) },
+    match: matchStatus(relative, records, suggestions),
+    ...(bound?.id ? { bound } : {}),
+    ...(suggestion ? { suggestion } : {}),
+  });
+}));
+
 app.post("/api/library/match", asyncRoute(async (req, res) => {
-  const key = String(req.body.key ?? "");
+  const requested = String(req.body.path ?? req.body.key ?? "").trim();
+  const target = requested && resolveInside(DOWNLOAD_DIR, requested);
+  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  const files = await libraryFiles();
+  const key = matchKeyFor(requested, files);
+  if (typeof req.body.skipLookup === "boolean" && req.body.id === undefined) {
+    await store.update((state) => {
+      const next = { ...state.libraryMeta };
+      const current = next[requested];
+      if (req.body.skipLookup) {
+        next[requested] = {
+          type: current?.type ?? "movie",
+          id: current?.id ?? "",
+          source: current?.source ?? "user",
+          skipLookup: true,
+          ...(current?.locked != null ? { locked: current.locked } : {}),
+          ...(current?.name ? { name: current.name } : {}),
+          ...(current?.year ? { year: current.year } : {}),
+          ...(current?.description ? { description: current.description } : {}),
+          ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
+        };
+      } else if (current?.id) {
+        const { skipLookup: _skip, ...kept } = current;
+        next[requested] = kept;
+      } else delete next[requested];
+      state.libraryMeta = next;
+    });
+    invalidateLibrary();
+    log("INFO", req.body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
+    return res.json({ key: requested, skipLookup: req.body.skipLookup === true });
+  }
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
-  if (!key) throw new AppError("Missing folder.", "err.missingFolder");
+  const number = (value: unknown) => {
+    const parsed = Number(value);
+    return value === undefined || value === null || value === "" || !Number.isFinite(parsed) ? undefined : parsed;
+  };
+  const episode = number(req.body.episode);
+  const season = number(req.body.season);
+  // "file" binds the one video the user clicked, "unit" the whole title it belongs to.
+  const bindKey = req.body.scope === "file" ? requested : key;
+  const meta = id ? await cachedMeta(type, id) : null;
+  const fields = cacheFieldsFromMeta(meta);
+  const episodeRows = episodesFromMeta(meta);
+  const at = new Date().toISOString();
+  const episodeRow = type === "series" && episode != null
+    ? episodeRows[episodeKey(type, id, season ?? 1, episode)] : undefined;
   await store.update((state) => {
-    const next = { ...state.libraryMeta };
-    if (id) next[key] = { type, id }; else delete next[key];
+    let next = { ...state.libraryMeta };
+    if (!id) next = unmatchAt(next, requested);
+    else {
+      next[bindKey] = {
+        type, id, source: "user", locked: true, skipLookup: false,
+        matchedAt: at, backfilledAt: at,
+        ...fields,
+        ...(type === "series" && episode != null ? { season: season ?? 1, episode } : {}),
+      };
+      if (requested !== bindKey) delete next[requested];
+    }
     state.libraryMeta = next;
+    const suggestions = { ...state.librarySuggestions };
+    delete suggestions[key];
+    delete suggestions[requested];
+    state.librarySuggestions = suggestions;
+    if (Object.keys(episodeRows).length) state.libraryEpisodes = { ...state.libraryEpisodes, ...episodeRows };
   });
-  res.json({ key, type, id: id || null });
+  invalidateLibrary();
+  await clearGeneratedArt(bindKey);
+  if (requested !== bindKey) await clearGeneratedArt(requested);
+  if (id) saveCatalogPoster(bindKey, episodeRow?.thumbnail ?? meta?.poster);
+  log("INFO", "Library title matched", { key: bindKey, type, id: id || null, source: "user", ...(episode != null ? { season: season ?? 1, episode } : {}) });
+  res.json({ key: bindKey, type, id: id || null });
 }));
+
+/** What the scan proposed and nobody has confirmed yet. */
+app.get("/api/library/suggestions", asyncRoute(async (_req, res) => {
+  const records = store.libraryMeta();
+  const items = Object.entries(store.librarySuggestions())
+    .filter(([key, suggestion]) => suggestion.id && !knownTitleOf(key, records)?.id && !lookupSkipped(key, records))
+    .map(([key, suggestion]) => ({ key, label: path.basename(key), suggestion }))
+    .sort((a, b) => b.suggestion.score - a.suggestion.score);
+  res.json({ items, total: items.length });
+}));
+app.delete("/api/library/suggestion", asyncRoute(async (req, res) => {
+  const key = String(req.query.key ?? "").trim();
+  if (!key) throw new AppError("Invalid path.", "err.invalidPath");
+  await store.update((state) => {
+    const suggestions = { ...state.librarySuggestions };
+    const previous = suggestions[key];
+    // Kept as the memory of a searched unit, so the next scan walks past it.
+    suggestions[key] = scanMiss(previous?.type === "series" ? "series" : "movie");
+    state.librarySuggestions = suggestions;
+  });
+  invalidateLibrary();
+  res.status(204).end();
+}));
+app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
+app.post("/api/library/scan", asyncRoute(async (req, res) => res.json(await libraryScan.start(req.body?.force === true))));
+app.post("/api/library/scan/stop", asyncRoute(async (_req, res) => { await libraryScan.stop(); res.status(204).end(); }));
 app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {
   const source = mediaResources.get(String(req.params.sourceId), ownerOf(req).sid, "source").stream;
   res.setHeader("cache-control", "private, no-store");
@@ -1187,6 +1454,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
+    libraryScan: libraryScan.snapshot(),
     storage: [await freeSpace(process.env.DATA_DIR ?? "/data"), await freeSpace(DOWNLOAD_DIR)],
   });
 }));
