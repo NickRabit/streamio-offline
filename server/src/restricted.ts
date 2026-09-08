@@ -40,6 +40,8 @@ export const ALLOWED_MUTATIONS: Rule[] = [
   { method: "POST", pattern: /^\/library\/source$/ },
   { method: "POST", pattern: /^\/library\/rename$/ },
   { method: "POST", pattern: /^\/library\/match$/ },
+  { method: "POST", pattern: /^\/library\/scan$/ },
+  { method: "POST", pattern: /^\/library\/scan\/stop$/ },
   { method: "DELETE", pattern: /^\/library\/item$/ },
   { method: "POST", pattern: /^\/downloads$/ },
   { method: "POST", pattern: /^\/downloads\/bulk$/ },

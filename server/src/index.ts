@@ -23,6 +23,7 @@ import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog,
 import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, dropKeyed, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, remapKeyed, titleUnits } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
+import { LibraryScan } from "./library-scan.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
@@ -979,6 +980,39 @@ const saveCatalogPoster = (key: string, url?: string) => {
   });
 };
 
+const hostOf = (url: string) => { try { return new URL(url).host; } catch { return ""; } };
+const scanGapMs = Number(process.env.LIBRARY_SCAN_GAP_MS);
+const libraryScan = new LibraryScan({
+  dataDir: process.env.DATA_DIR ?? "/data",
+  downloadDir: DOWNLOAD_DIR,
+  listVideos, titleUnits, searchAll, metadata,
+  addons: () => store.addons(),
+  libraryMeta: () => store.libraryMeta(),
+  updateMeta: async (mutator) => {
+    await store.update((state) => {
+      const meta = { ...state.libraryMeta };
+      const suggestions = { ...state.librarySuggestions };
+      mutator(meta, suggestions);
+      state.libraryMeta = meta;
+      state.librarySuggestions = suggestions;
+    });
+    invalidateLibrary();
+  },
+  savePoster: (key, url) => saveCatalogPoster(key, url),
+  deleteGeneratedArt: async (key) => {
+    await rm(dataArtworkFile(key), { force: true });
+    await rm(dataArtworkFile(`dir:${key}`), { force: true });
+  },
+  busy: () => {
+    if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
+    if (queue.list().some((job) => job.status === "downloading")) return "download";
+    const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
+    if (outbound.diagnostics().some((row) => row.state === "open" && searchHosts.has(row.host))) return "breaker";
+    return undefined;
+  },
+  gapMs: Number.isFinite(scanGapMs) ? scanGapMs : 3_000,
+});
+
 const rememberTitle = async (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (!media?.id) return;
   const key = titleKey(target, media, flat);
@@ -1018,6 +1052,7 @@ queue.setDebrid({
   advance: (input) => advanceTorrent(store.settings().realDebridToken, input.infoHash, input.fileIdx, input.torrentId),
 });
 await queue.load();
+await libraryScan.load();
 await stats.load();
 // Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
 // se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam. Doplní se
@@ -1074,6 +1109,9 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   log("INFO", "Library title matched", { key, type, id: id || null, source: "user" });
   res.json({ key, type, id: id || null });
 }));
+app.get("/api/library/scan", (_req, res) => res.json(libraryScan.snapshot()));
+app.post("/api/library/scan", asyncRoute(async (_req, res) => res.json(await libraryScan.start())));
+app.post("/api/library/scan/stop", asyncRoute(async (_req, res) => { await libraryScan.stop(); res.status(204).end(); }));
 app.get(["/api/library/next/:sourceId", "/api/library/previous/:sourceId"], asyncRoute(async (req, res) => {
   const source = mediaResources.get(String(req.params.sourceId), ownerOf(req).sid, "source").stream;
   res.setHeader("cache-control", "private, no-store");
@@ -1275,6 +1313,7 @@ app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
     },
     addons: store.addons().map((addon) => ({ name: addon.manifest.name, role: addon.role, enabled: addon.enabled })),
     outbound: outbound.diagnostics(),
+    libraryScan: libraryScan.snapshot(),
     storage: [await freeSpace(process.env.DATA_DIR ?? "/data"), await freeSpace(DOWNLOAD_DIR)],
   });
 }));
