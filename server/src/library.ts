@@ -80,9 +80,10 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
   return removed;
 }
 
-interface FoundFile { relative: string; size: number; modified: string }
+export interface FoundFile { relative: string; size: number; modified: string }
 
-async function walk(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
+/** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles. */
+export async function listVideos(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
   // Struktura je na uživateli: downloads/serialy/Seriál/01 serie/díl.mkv i hlubší.
   if (depth > 8) return [];
   let entries;
@@ -92,7 +93,7 @@ async function walk(root: string, relative = "", depth = 0): Promise<FoundFile[]
   for (const entry of entries) {
     if (entry.name.startsWith(".")) continue;
     const next = relative ? path.join(relative, entry.name) : entry.name;
-    if (entry.isDirectory()) { found.push(...await walk(root, next, depth + 1)); continue; }
+    if (entry.isDirectory()) { found.push(...await listVideos(root, next, depth + 1)); continue; }
     if (!entry.isFile() || !isVideo(entry.name)) continue;
     try {
       const info = await stat(path.join(root, next));
@@ -141,7 +142,7 @@ export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
 }
 
 export async function scanLibrary(root: string): Promise<LibraryEntry[]> {
-  return buildLibrary(await walk(root));
+  return buildLibrary(await listVideos(root));
 }
 
 export const summarize = ({ files, ...entry }: LibraryEntry): LibrarySummary => ({ ...entry, fileCount: files.length });
@@ -191,7 +192,7 @@ export async function describePath(root: string, relative: string): Promise<Brow
   if (!info) return undefined;
   const name = path.basename(relative);
   if (info.isDirectory()) {
-    const inside = await walk(root, relative);
+    const inside = await listVideos(root, relative);
     if (!inside.length) return undefined;
     return {
       kind: "folder", path: relative, name, fileCount: inside.length,
@@ -231,7 +232,7 @@ export async function browseDirectory(root: string, relative: string, query = ""
     if (entry.name.startsWith(".")) continue;
     const childRelative = relative ? path.join(relative, entry.name) : entry.name;
     if (entry.isDirectory()) {
-      const inside = await walk(root, childRelative);
+      const inside = await listVideos(root, childRelative);
       if (!inside.length) continue;
       if (needle && !entry.name.toLowerCase().includes(needle)) continue;
       folders.push({
