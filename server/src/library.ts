@@ -75,7 +75,10 @@ export function isPathWithin(value: string, parent: string): boolean {
  * mazání jedné z nich neznamená, že titul z knihovny zmizel. */
 export function orphanedCatalogKeys(meta: Record<string, { type: string; id: string }>, relative: string): Set<string> {
   const removed = new Set<string>(); const kept = new Set<string>();
-  for (const [key, value] of Object.entries(meta)) (isPathWithin(key, relative) ? removed : kept).add(`${value.type}:${value.id}`);
+  for (const [key, value] of Object.entries(meta)) {
+    if (!value.id) continue;
+    (isPathWithin(key, relative) ? removed : kept).add(`${value.type}:${value.id}`);
+  }
   for (const key of kept) removed.delete(key);
   return removed;
 }
@@ -209,10 +212,12 @@ export async function describePath(root: string, relative: string): Promise<Brow
   };
 }
 
+export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; modified: string }
+export type BrowseMeta = { year?: string; description?: string; catalogName?: string; match?: LibraryMatch };
 export type BrowseItem =
-  | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
-  | ({ kind: "file"; favorite?: boolean } & LibraryFile);
+  | ({ kind: "folder"; favorite?: boolean } & BrowseFolder & BrowseMeta)
+  | ({ kind: "file"; favorite?: boolean } & LibraryFile & BrowseMeta);
 /** Jeden seřazený seznam. Dvě pole by při vykreslení pořadí zase rozdělila na skupiny. */
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number }
 

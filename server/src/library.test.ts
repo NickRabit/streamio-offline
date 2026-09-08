@@ -217,6 +217,14 @@ test("smazaný titul přestane mít vazbu na katalog", () => {
   assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna 2")], [], "cizí cesta nic nezapomíná");
 });
 
+test("unmatch sentinel is not a catalog orphan", () => {
+  const meta = {
+    "filmy/Duna": { type: "movie", id: "" },
+    "serialy/Přátelé": { type: "series", id: "tt0108778" },
+  };
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna")], []);
+});
+
 test("titul držený ještě jinou cestou zůstává", () => {
   const meta = {
     "serialy/Přátelé": { type: "series", id: "tt0108778" },

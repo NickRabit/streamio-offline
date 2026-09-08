@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isPathWithin, isVideo, parseSeason, type FoundFile } from "./library.js";
+import { isPathWithin, isVideo, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
@@ -168,6 +168,79 @@ export function scanSkipReason(raw?: LibraryMetaRecord): "bound" | "locked" | un
   if (viewed.locked) return "locked";
   if (viewed.id) return "bound";
   return undefined;
+}
+
+export type MatchStatus = "unmatched" | "matched" | "suggested" | "rejected";
+
+const DESCRIPTION_MAX = 180;
+
+export function knownTitleOf(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined {
+  const parts = relative.split(path.sep);
+  let found = records[relative];
+  for (let depth = parts.length - 1; !found && depth > 0; depth -= 1) found = records[parts.slice(0, depth).join(path.sep)];
+  if (!found || !viewMeta(found)?.id) return undefined;
+  return found;
+}
+
+export function matchStatus(
+  relative: string,
+  records: Record<string, LibraryMetaRecord>,
+  suggestions: Record<string, LibrarySuggestion> = {},
+): MatchStatus {
+  const exact = viewMeta(records[relative]);
+  if (exact?.locked && !exact.id) return "rejected";
+  if (knownTitleOf(relative, records)?.id) return "matched";
+  const parts = relative.split(path.sep);
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const key = parts.slice(0, depth).join(path.sep);
+    if (suggestions[key]) return "suggested";
+  }
+  return "unmatched";
+}
+
+export function cacheFieldsFromMeta(meta: MetaItem | null | undefined): { name?: string; year?: string; description?: string } {
+  if (!meta) return {};
+  const year = yearFromMeta(meta);
+  const description = typeof meta.description === "string" ? meta.description.slice(0, DESCRIPTION_MAX) : undefined;
+  return {
+    ...(meta.name ? { name: meta.name } : {}),
+    ...(year != null ? { year: String(year) } : {}),
+    ...(description ? { description } : {}),
+  };
+}
+
+export function needsBackfill(raw?: LibraryMetaRecord): boolean {
+  const viewed = viewMeta(raw);
+  if (!viewed?.id) return false;
+  if (!raw?.name) return true;
+  return raw.year == null && raw.description == null;
+}
+
+export function browseMeta(
+  relative: string,
+  label: string,
+  records: Record<string, LibraryMetaRecord>,
+  suggestions: Record<string, LibrarySuggestion> = {},
+): { match: MatchStatus; year?: string; description?: string; catalogName?: string } {
+  const match = matchStatus(relative, records, suggestions);
+  if (match !== "matched") return { match };
+  const known = knownTitleOf(relative, records);
+  if (!known) return { match };
+  const catalogName = known.name && normalizeTitle(known.name) !== normalizeTitle(label) ? known.name : undefined;
+  return {
+    match,
+    ...(known.year ? { year: known.year } : {}),
+    ...(known.description ? { description: known.description } : {}),
+    ...(catalogName ? { catalogName } : {}),
+  };
+}
+
+export function remapKeyed<T>(records: Record<string, T>, from: string, to: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(records).map(([key, value]) => [remapPath(key, from, to), value]));
+}
+
+export function dropKeyed<T>(records: Record<string, T>, relative: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(records).filter(([key]) => !isPathWithin(key, relative)));
 }
 
 function parentOf(relative: string): string {

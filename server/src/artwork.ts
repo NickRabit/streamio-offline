@@ -95,7 +95,6 @@ export class ArtworkQueue {
   private chain: Promise<void> = Promise.resolve();
 
   run(key: string, task: () => Promise<void>) {
-    if (this.pending.has(key)) return this.chain;
     this.pending.add(key);
     this.chain = this.chain
       .then(task)
