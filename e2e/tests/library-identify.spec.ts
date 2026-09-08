@@ -49,7 +49,7 @@ test("unmatch clears the description and Identify stays available", async ({ pag
   await expect(fixtureTile(page).locator(".library-desc")).toHaveCount(0);
   await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
   await expect(page.getByRole("button", { name: "Přiřadit…" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Nehledat v katalogu" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Vyloučit z přiřazování" })).toBeVisible();
 });
 
 test("unmatch lets a later scan match again", async ({ page }) => {
@@ -74,9 +74,12 @@ test("skip catalog lookup keeps the title unmatched through a scan", async ({ pa
     await page.getByRole("button", { name: "Zrušit přiřazení" }).click();
     await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
   }
-  await page.getByRole("button", { name: "Nehledat v katalogu" }).click();
-  await expect(page.getByText("Vyhledání v katalogu je vypnuté.")).toBeVisible();
+  await page.getByRole("button", { name: "Vyloučit z přiřazování" }).click();
+  await expect(page.getByText("Vyloučeno z přiřazování.")).toBeVisible();
   await page.getByRole("button", { name: "Prohledat knihovnu" }).click();
   await expect(page.getByText(/spárováno,/)).toBeVisible({ timeout: 20_000 });
   await expect(fixtureTile(page).locator(".library-desc")).toHaveCount(0);
+  await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
+  await page.getByRole("button", { name: "Zahrnout do přiřazování" }).click();
+  await expect(page.getByText("Zahrnuto do přiřazování.")).toBeVisible();
 });

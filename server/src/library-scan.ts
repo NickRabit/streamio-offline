@@ -3,7 +3,7 @@ import path from "node:path";
 import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
 import {
-  autoAccept, cacheFieldsFromMeta, knownTitleOf, pickSuggestion, scanSkipReason, scoreHit,
+  autoAccept, cacheFieldsFromMeta, knownTitleOf, lookupSkipped, pickSuggestion, scanSkipReason, scoreHit,
   type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -198,7 +198,7 @@ export class LibraryScan {
       const unit = this.units.get(key);
       if (!unit || !await this.pathExists(key)) { await this.finishUnit("skipped"); return; }
       const records = this.opts.libraryMeta();
-      if (scanSkipReason(records[key]) || knownTitleOf(key, records)?.id) { await this.finishUnit("skipped"); return; }
+      if (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id) { await this.finishUnit("skipped"); return; }
 
       const parsed = parseMediaPath(key);
       const busy = this.opts.busy();
@@ -207,7 +207,7 @@ export class LibraryScan {
       const identified = await this.identify(unit, parsed);
       addonCall = identified.called;
       const after = this.opts.libraryMeta();
-      if (scanSkipReason(after[key]) || knownTitleOf(key, after)?.id) { await this.finishUnit("skipped"); return; }
+      if (lookupSkipped(key, after) || scanSkipReason(after[key]) || knownTitleOf(key, after)?.id) { await this.finishUnit("skipped"); return; }
 
       if (identified.accept) {
         const item = identified.accept.item;
@@ -216,7 +216,7 @@ export class LibraryScan {
         const fields = cacheFieldsFromMeta(meta ?? item);
         let wrote = false;
         await this.opts.updateMeta((metaMap, suggestions) => {
-          if (scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
+          if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
           metaMap[key] = {
             type: item.type, id: item.id, source: "scan", locked: false,
             matchedAt: nowIso(), ...fields,

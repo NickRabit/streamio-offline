@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import {
-  autoAccept, browseMeta, cacheFieldsFromMeta, dropKeyed, isExtraName, knownTitleOf, matchKeyFor, matchStatus,
-  needsBackfill, pickSuggestion, remapKeyed, scanSkipReason, scoreHit, titleUnits, viewMeta,
+  autoAccept, browseMeta, cacheFieldsFromMeta, dropKeyed, isExtraName, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus,
+  needsBackfill, pickSuggestion, remapKeyed, scanSkipReason, scoreHit, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -159,6 +159,27 @@ test("knownTitleOf ignores unmatch sentinels and walks parents", () => {
   assert.equal(matchStatus("xxx", records), "rejected");
   assert.equal(matchStatus("orphan", records, { orphan: { type: "movie", id: "tt1", name: "Orphan", score: 90 } }), "suggested");
   assert.equal(matchStatus("missing", records), "unmatched");
+});
+
+test("unmatching one episode does not unmatch the rest of the series", () => {
+  const records = {
+    "Father Ted": { type: "series", id: "tt0111958", name: "Father Ted", year: "1995" },
+  };
+  const episode = "Father Ted/01 serie/01 - Good Luck, Father Ted.mkv";
+  const other = "Father Ted/01 serie/02 - Entertaining Father Stone.avi";
+  const next = unmatchAt(records, episode);
+  assert.equal(knownTitleOf(episode, next), undefined);
+  assert.equal(matchStatus(episode, next), "unmatched");
+  assert.equal(knownTitleOf(other, next)?.id, "tt0111958");
+  assert.equal(knownTitleOf("Father Ted", next)?.id, "tt0111958");
+  assert.equal(unmatchAt(records, "Father Ted")["Father Ted"], undefined);
+});
+
+test("excluding a folder skips matching of its children", () => {
+  const records = { Movies: { type: "movie", id: "", source: "user" as const, skipLookup: true } };
+  assert.equal(lookupSkipped("Movies/Title", records), true);
+  assert.equal(lookupSkipped("Movies", records), true);
+  assert.equal(lookupSkipped("Other", records), false);
 });
 
 test("browse copy uses cached fields and a normalised catalog name", () => {

@@ -214,7 +214,7 @@ export async function describePath(root: string, relative: string): Promise<Brow
 
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
 export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; modified: string }
-export type BrowseMeta = { year?: string; description?: string; catalogName?: string; match?: LibraryMatch };
+export type BrowseMeta = { year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean };
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder & BrowseMeta)
   | ({ kind: "file"; favorite?: boolean } & LibraryFile & BrowseMeta);

@@ -183,7 +183,7 @@ export function App() {
   const setCatalogLookup = async (itemPath: string, enabled: boolean) => {
     setMenuFor(null);
     try {
-      await api.matchLibraryItem({ path: itemPath, id: "", type: "movie", skipLookup: !enabled });
+      await api.matchLibraryItem({ path: itemPath, skipLookup: !enabled });
       notify(t(enabled ? "library.lookupEnabled" : "library.lookupSkipped"));
       await loadBrowse(browsePath);
     } catch (error) { fail(error); }
@@ -215,13 +215,15 @@ export function App() {
   };
   const matchActions = (item: BrowseItem) => {
     const match = item.match ?? "unmatched";
-    if (match === "matched") return <>
-      <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
-      <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
-    </>;
+    const skipped = Boolean(item.skipLookup);
     return <>
-      <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>
-      {match === "rejected"
+      {match === "matched"
+        ? <>
+          <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.fixMatch")}</button>
+          <button onClick={() => void unmatchItem(item.path)}><X/> {t("library.unmatch")}</button>
+        </>
+        : <button onClick={() => openIdentify(item.path)}><Sparkles/> {t("library.identify")}</button>}
+      {skipped
         ? <button onClick={() => void setCatalogLookup(item.path, true)}><Search/> {t("library.allowLookup")}</button>
         : <button onClick={() => void setCatalogLookup(item.path, false)}><SearchX/> {t("library.skipLookup")}</button>}
     </>;

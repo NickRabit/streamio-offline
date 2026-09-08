@@ -21,7 +21,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, dropKeyed, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, remapKeyed, titleUnits } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, dropKeyed, knownTitleOf, matchKeyFor, matchStatus, needsBackfill, remapKeyed, titleUnits, unmatchAt } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
@@ -1091,25 +1091,51 @@ app.post("/api/library/match", asyncRoute(async (req, res) => {
   if (!target) throw new AppError("Invalid path.", "err.invalidPath");
   const files = await libraryFiles();
   const key = matchKeyFor(requested, files);
+  if (typeof req.body.skipLookup === "boolean" && req.body.id === undefined) {
+    await store.update((state) => {
+      const next = { ...state.libraryMeta };
+      const current = next[requested];
+      if (req.body.skipLookup) {
+        next[requested] = {
+          type: current?.type ?? "movie",
+          id: current?.id ?? "",
+          source: current?.source ?? "user",
+          skipLookup: true,
+          ...(current?.locked != null ? { locked: current.locked } : {}),
+          ...(current?.name ? { name: current.name } : {}),
+          ...(current?.year ? { year: current.year } : {}),
+          ...(current?.description ? { description: current.description } : {}),
+          ...(current?.matchedAt ? { matchedAt: current.matchedAt } : {}),
+        };
+      } else if (current?.id) {
+        const { skipLookup: _skip, ...kept } = current;
+        next[requested] = kept;
+      } else delete next[requested];
+      state.libraryMeta = next;
+    });
+    invalidateLibrary();
+    log("INFO", req.body.skipLookup ? "Library path excluded from matching" : "Library path included in matching", { path: requested });
+    return res.json({ key: requested, skipLookup: req.body.skipLookup === true });
+  }
   const id = String(req.body.id ?? "");
   const type = String(req.body.type ?? "movie");
-  const skipLookup = req.body.skipLookup === true;
   const meta = id ? await cachedMeta(type, id) : null;
   const fields = cacheFieldsFromMeta(meta);
   await store.update((state) => {
-    const next = { ...state.libraryMeta };
-    if (!id && !skipLookup) delete next[key];
-    else if (skipLookup) next[key] = { type, id: "", source: "user", skipLookup: true, matchedAt: new Date().toISOString() };
+    let next = { ...state.libraryMeta };
+    if (!id) next = unmatchAt(next, requested);
     else {
       next[key] = {
         type, id, source: "user", locked: true, skipLookup: false,
         matchedAt: new Date().toISOString(),
         ...fields,
       };
+      if (requested !== key) delete next[requested];
     }
     state.libraryMeta = next;
     const suggestions = { ...state.librarySuggestions };
     delete suggestions[key];
+    delete suggestions[requested];
     state.librarySuggestions = suggestions;
   });
   invalidateLibrary();

@@ -96,7 +96,7 @@ export const api = {
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
   libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
-  matchLibraryItem: (body: { path?: string; key?: string; id: string; type: string; locked?: boolean; skipLookup?: boolean }) =>
+  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; locked?: boolean; skipLookup?: boolean }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
   libraryScan: () => request<ScanState>("/api/library/scan"),
   startLibraryScan: () => request<ScanState>("/api/library/scan", { method: "POST" }),

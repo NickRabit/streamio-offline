@@ -69,6 +69,20 @@ test("a unique title auto-accepts, deletes hashed art and saves the catalog post
   } finally { await h.close(); }
 });
 
+test("excluding a parent folder skips child title units", async () => {
+  const h = await harness({
+    listVideos: async () => [{ relative: "Movies/Title/a.mkv", size: 1, modified: "2026-01-01T00:00:00.000Z" }],
+    titleUnits: () => [movie("Movies/Title")],
+  });
+  try {
+    h.store.meta.Movies = { type: "movie", id: "", source: "user", skipLookup: true };
+    await h.scan.start();
+    await waitFor(() => h.scan.snapshot().status === "completed");
+    assert.equal(h.scan.snapshot().skipped, 1);
+    assert.equal(h.searches.length, 0);
+  } finally { await h.close(); }
+});
+
 test("catalog lookup skipped on a title is not searched", async () => {
   const h = await harness({ gapMs: 200 });
   try {
