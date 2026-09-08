@@ -662,3 +662,4 @@ img.broken{visibility:hidden}
   .detail-panel .stream-filters label:last-child:nth-child(odd){grid-column:auto}
   .detail-panel .catalog-description details p{max-height:clamp(40px,7dvh,84px)}
 }
+.segment-tag{font-style:normal;font-size:9px;font-weight:800;color:var(--muted);border:1px solid var(--line);border-radius:5px;padding:1px 5px;margin-left:6px;vertical-align:1px}

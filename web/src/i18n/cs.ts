@@ -387,7 +387,7 @@ export const cs: Catalog = {
   "downloads.colSpeed": "Rychlost / zbývá",
   "downloads.colActions": "Akce",
   "downloads.showInLibrary": "Zobrazit v knihovně",
-  "downloads.segments": "{count} segmentů",
+  "downloads.segments": { one: "Stahuje se 1 spojením", few: "Stahuje se {count} spojeními", other: "Stahuje se {count} spojeními" },
   "downloads.sourcePickedLater": "Zdroj se vybere při stahování",
   "downloads.moveUp": "Nahoru",
   "downloads.moveDown": "Dolů",

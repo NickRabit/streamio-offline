@@ -391,7 +391,7 @@ export const en = {
   "downloads.colSpeed": "Speed / left",
   "downloads.colActions": "Actions",
   "downloads.showInLibrary": "Show in library",
-  "downloads.segments": "{count} segments",
+  "downloads.segments": { one: "Downloaded over 1 connection", other: "Downloaded over {count} connections" },
   "downloads.sourcePickedLater": "Source is picked at download time",
   "downloads.moveUp": "Move up",
   "downloads.moveDown": "Move down",
