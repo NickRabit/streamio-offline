@@ -136,6 +136,7 @@ export const cs: Catalog = {
   "player.hideSubtitles": "Skrýt titulky",
   "player.showSubtitlesKey": "Zobrazit titulky (C)",
   "player.hideSubtitlesKey": "Skrýt titulky (C)",
+  "player.fullscreenUnavailable": "Celá obrazovka není dostupná. Zkuste to znovu, až se video přehrává.",
   "player.fullscreen": "Celá obrazovka",
   "player.exitFullscreen": "Ukončit celou obrazovku",
   "player.resumedAt": "Navázáno na {time}",

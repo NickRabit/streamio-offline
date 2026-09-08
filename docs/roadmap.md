@@ -39,6 +39,11 @@ These used to be open notes. They are in `main` now.
 
 ### Player and mobile chrome
 
+- [x] Group previous/next and seek/play controls together in portrait mode.
+- [x] Click the video to hide controls and dismiss playback settings.
+- [x] Hide the mouse cursor after ten idle seconds in fullscreen.
+- [x] Use only overlay fullscreen and hide the button when unsupported, keeping custom controls on Safari.
+
 - [x] Compact direct/transcoded playback labels with HW/SW for transcoding.
 - [x] On-demand timeline image previews for mouse hover and touch scrubbing, with bounded server work and cache.
 - [x] Previous/next-episode buttons for naturally sorted video files in the same library folder.
