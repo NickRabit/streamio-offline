@@ -1,15 +1,15 @@
 import type { StreamItem } from "./types.js";
 
-/** Serverová obdoba řazení „Doporučené“ z rozhraní: preferovaný jazyk, pak priorita
- *  doplňku podle pořadí, pak velikost od největší. Používá ji fronta stahování,
- *  když si má sama vybrat zdroj pro epizodu. */
+/** The server-side twin of the interface's "Recommended" order: the preferred language, then
+ *  addon priority by position, then size from largest. The download queue uses it when it has
+ *  to pick a source for an episode on its own. */
 
-/** Vše, co doplněk o zdroji napsal. Jazyk ani velikost strukturovaně neposílá, bývají tady. */
+/** Everything the addon wrote about the source. It sends neither language nor size as data; they tend to be in here. */
 const streamText = (stream: StreamItem) =>
   [stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ");
 
 const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3 };
-// Torrentio velikost v behaviorHints neposílá vůbec, má ji jen v textu jako "💾 35.09 GB".
+// Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB".
 const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/i;
 
 export function streamSize(stream: StreamItem): number | undefined {
@@ -22,7 +22,7 @@ export function streamSize(stream: StreamItem): number | undefined {
   return Number.isFinite(value) && unit ? Math.round(value * unit) : undefined;
 }
 
-/** Doplňky jazyk strukturovaně neposílají, píší ho do názvu streamu slovem nebo vlajkou. */
+/** Addons do not send the language as data; they put it in the stream name as a word or a flag. */
 const FLAGS: Record<string, string> = {
   "\u{1F1E8}\u{1F1FF}": "cs", "\u{1F1F8}\u{1F1F0}": "sk", "\u{1F1EC}\u{1F1E7}": "en", "\u{1F1FA}\u{1F1F8}": "en",
   "\u{1F1E9}\u{1F1EA}": "de", "\u{1F1F5}\u{1F1F1}": "pl", "\u{1F1ED}\u{1F1FA}": "hu", "\u{1F1EB}\u{1F1F7}": "fr",

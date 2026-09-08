@@ -4,7 +4,7 @@ import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure,
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-test("operace jedné přehrávací relace se nikdy nepřekrývají", async () => {
+test("operations of one playback session never overlap", async () => {
   const queue = new SerialOperations();
   const events: string[] = [];
   let active = 0;
@@ -26,14 +26,14 @@ test("operace jedné přehrávací relace se nikdy nepřekrývají", async () =>
   assert.deepEqual(events, ["seek-1:start", "seek-1:end", "track:start", "track:end", "seek-2:start", "seek-2:end"]);
 });
 
-test("chybná operace nezablokuje následující seek", async () => {
+test("a failed operation does not block the seek after it", async () => {
   const queue = new SerialOperations();
-  await assert.rejects(queue.run(async () => { throw new Error("selhání převodu"); }), /selhání převodu/);
-  assert.equal(await queue.run(async () => "pokračuji"), "pokračuji");
+  await assert.rejects(queue.run(async () => { throw new Error("transcode failure"); }), /transcode failure/);
+  assert.equal(await queue.run(async () => "carrying on"), "carrying on");
   await queue.wait();
 });
 
-test("Synology bez VAAPI scalingu dekóduje na CPU a kóduje přes GPU", () => {
+test("a Synology without VAAPI scaling decodes on the CPU and encodes on the GPU", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   manager.vaapiDevice = "/dev/dri/renderD128";
   manager.vaapiScaling = false;
@@ -62,7 +62,7 @@ test("Synology bez VAAPI scalingu dekóduje na CPU a kóduje přes GPU", () => {
   assert.equal(args[args.indexOf("-qp") + 1], "23");
 });
 
-test("remux dál kopíruje kompatibilní video i zvuk", () => {
+test("a remux still copies compatible video and audio", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
@@ -83,7 +83,7 @@ test("remux dál kopíruje kompatibilní video i zvuk", () => {
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
 });
 
-test("textové titulky za odfiltrovanou PGS stopou používají skutečný index", () => {
+test("text subtitles behind a filtered-out PGS track use the real index", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
@@ -107,7 +107,7 @@ test("textové titulky za odfiltrovanou PGS stopou používají skutečný index
   ]);
 });
 
-test("seek s kopírovaným AC3 zvukem jej převede do AAC pro fMP4 init segment", () => {
+test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
     stream: { url: "https://example.test/movie.mkv" },
@@ -130,7 +130,7 @@ test("seek s kopírovaným AC3 zvukem jej převede do AAC pro fMP4 init segment"
   assert.deepEqual(seeked.slice(audio, audio + 6), ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]);
 });
 
-test("dobíhající požadavek na předchozí generaci ještě chvíli dostane její adresář", () => {
+test("a trailing request for the previous generation still gets its directory for a while", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
     id: "s1", mode: "remux", generation: 3, directory: "/tmp/test-playback/s1/3",
@@ -148,7 +148,7 @@ test("dobíhající požadavek na předchozí generaci ještě chvíli dostane j
   assert.equal(manager.directory("s1", "2"), undefined);
 });
 
-test("relaci, kterou si žádný klient nepřevzal, zavře úklid dřív než nečinnou", async () => {
+test("a session no client claimed is closed by the sweep sooner than an idle one", async () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const stopped: string[] = [];
   manager.stop = async (id: string) => { stopped.push(id); manager.sessions.delete(id); };

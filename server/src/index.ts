@@ -54,7 +54,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
 });
 const stats = new StatsLog();
 
-/** Poskytovatele bereme z adresy zdroje; doplněk ji může mít u každého streamu jiný. */
+/** The provider comes from the source address; an addon may use a different one per stream. */
 const providerOf = (url?: string) => { try { return url ? new URL(url).hostname : "unknown"; } catch { return "unknown"; } };
 
 const statMeta = (job: { source?: TrafficMeta["source"]; url?: string; addonKey?: string; addonName?: string; title: string; kind?: string }): TrafficMeta => ({
@@ -79,8 +79,8 @@ if (!store.defaultsInstalled()) {
     state.defaultsInstalled = defaults.every((item) => state.addons.some((addon) => addon.manifestUrl === item.url));
   });
 }
-// Výběr zdroje pro líné úlohy fronty: doplňky se ptáme až v okamžiku stahování a odpověď
-// chvíli držíme, aby opakované pokusy téže epizody nebušily do doplňků znovu a znovu.
+// Source pick for lazy queue jobs: the addons are asked at download time and the
+// answer is held for a while, so repeated attempts at one episode do not hammer them.
 const streamCache = new Map<string, { at: number; items: StreamItem[] }>();
 const cachedStreams = async (type: string, id: string) => {
   const key = `${type}:${id}`;
@@ -102,25 +102,25 @@ queue.setResolver(async (type, videoId, tried) => {
 });
 await playback.load();
 
-// Výchozí heslo by stejně muselo hned pryč, takže žádné nezakládáme: první start
-// skončí na obrazovce, kde si účet založí sám uživatel. Instalace, které na
-// admin/admin ještě stojí, o něj přijdou a projdou stejným založením.
+// A default password would have to go straight away, so none is created: the first
+// boot ends on the screen where the user creates the account. Installs still running
+// on admin/admin lose it and go through the same setup.
 if (store.auth()?.isDefault) {
   await store.update((state) => { state.auth = undefined; });
   log("WARN", "The default admin/admin sign-in was removed, create your own account on the next visit");
 }
-/** Bez uloženého účtu i bez záložních údajů z prostředí nejde dělat vůbec nic. */
+/** With no stored account and no fallback credentials from the environment, nothing can be done. */
 const needsSetup = () => !store.auth() && !envCredentials();
 
 const secret = () => store.auth()?.secret ?? "";
 const isSecure = (req: express.Request) => req.headers["x-forwarded-proto"] === "https" || req.protocol === "https";
 const knownUser = (name: string) => name === store.auth()?.username || name === envCredentials()?.username;
 const currentSession = (req: express.Request) => {
-  // Bez účtu není čím podepisovat, takže žádná známka nemůže platit.
+  // With no account there is nothing to sign with, so no token can be valid.
   if (!store.auth()) return undefined;
   const info = readSession(secret(), parseCookies(req.headers.cookie)[SESSION_COOKIE]);
   if (!info || !knownUser(info.username)) return undefined;
-  // Odhlášená relace je neplatná i s dosud platným podpisem.
+  // A signed-out session is invalid even with a signature that still verifies.
   return store.auth()?.revoked?.[info.sid] ? undefined : info;
 };
 const currentUser = (req: express.Request) => currentSession(req)?.username;
@@ -172,21 +172,21 @@ const stopOwnedPlayback = async (sid?: string) => {
 app.use(securityHeaders());
 app.use(express.json({ limit: "256kb" }));
 
-// Každý požadavek dostane krátkou značku. Chyba nahlášená z prohlížeče a její příčina
-// na serveru se pak dají spojit, aniž by se v logu hledalo podle času.
+// Every request gets a short tag, so an error reported from the browser and its cause
+// on the server can be tied together without hunting through the log by timestamp.
 declare global { namespace Express { interface Request { id?: string } } }
 app.use("/api", (req, res, next) => {
   const id = randomUUID().slice(0, 8);
   req.id = id;
   res.setHeader("x-request-id", id);
   const startedAt = Date.now();
-  // Segmenty přehrávání chodí po stovkách, proto jen v ladicím režimu.
+  // Playback segments arrive by the hundred, hence debug level only.
   res.on("finish", () => log("DEBUG", "API request", { req: id, method: req.method, path: req.path, status: res.statusCode, ms: Date.now() - startedAt }));
   next();
 });
-/** Změří, kolik dat odpověď opravdu odešle, a hlásí to statistikám. Počítá se až
- * u zápisu do odpovědi, takže co si klient objednal a pak přehrávání zavřel,
- * se do součtu nedostane. */
+/** Measures how much the response actually sends and reports it to the statistics.
+ * It counts at write time, so what the client asked for and then abandoned by closing
+ * playback never reaches the total. */
 const countBytes = (res: express.Response, meta: TrafficMeta) => {
   const measure = (chunk: unknown) => {
     if (typeof chunk === "string" || chunk instanceof Uint8Array) stats.add(meta, Buffer.byteLength(chunk));
@@ -197,15 +197,15 @@ const countBytes = (res: express.Response, meta: TrafficMeta) => {
   res.end = ((...args: unknown[]) => { measure(args[0]); return end(...args); }) as typeof res.end;
 };
 
-/** Přehrávání z knihovny čte soubor z disku, přehrávání z katalogu jde ven přes proxy. */
+/** Library playback reads a file from disk; catalogue playback goes out through the proxy. */
 const playbackMeta = (stream: StreamItem): TrafficMeta => stream.url?.startsWith("file://")
   ? { source: "library", provider: "knihovna", title: path.basename(stream.url.slice(7)), kind: "other" }
   : statMeta({ source: "catalog", url: stream.url, title: sourceTitle(stream) || providerOf(stream.url), addonKey: stream.addonKey, addonName: stream.addonName });
 
 const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: express.Response, next: express.NextFunction) => Promise.resolve(fn(req, res, next)).catch(next);
 
-// Bez přihlášení je otevřený jen stav serveru a samotné přihlášení. Zvlášť /api/proxy
-// nesmí být veřejné, jinak přes něj kdokoli tahá cizí adresy přes tenhle server.
+// Without a sign-in only the server status and the sign-in itself are open. /api/proxy
+// especially must not be public, or anyone could pull foreign addresses through this server.
 const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
@@ -233,7 +233,7 @@ app.get("/api/auth/me", (req, res) => {
   res.json({ username: user, language });
 });
 
-/** Založení účtu při prvním spuštění. Jde jen do chvíle, než nějaký účet existuje. */
+/** First-run account setup. Available only until an account exists. */
 app.post("/api/auth/setup", asyncRoute(async (req, res) => {
   if (!needsSetup()) throw new AppError("An account already exists.", "err.setupDone");
   const username = String(req.body.username ?? "").trim();
@@ -293,7 +293,7 @@ app.post("/api/auth/logout", asyncRoute(async (req, res) => {
   res.setHeader("set-cookie", clearedCookie());
   if (!info) return res.status(204).end();
   if (req.body?.everywhere) {
-    // Nové tajemství zneplatní všechny dosud vydané známky naráz.
+    // A new secret invalidates every token issued so far at once.
     const nextSecret = randomBytes(32).toString("hex");
     await store.update((state) => { if (state.auth) state.auth = { ...state.auth, secret: nextSecret, revoked: {} }; });
     log("INFO", "Signed out on all devices", { username: info.username });
@@ -315,7 +315,7 @@ app.patch("/api/auth/password", asyncRoute(async (req, res) => {
   if (nextPassword.length < 6) throw new AppError("The new password needs at least 6 characters.", "auth.newPasswordTooShort");
   const username = String(req.body.username ?? stored.username).trim() || stored.username;
   const passwordHash = await hashPassword(nextPassword);
-  // Nové tajemství zneplatní všechny dosud vydané známky, včetně cizích zařízení.
+  // A new secret invalidates every token issued so far, other devices included.
   const nextSecret = randomBytes(32).toString("hex");
   await store.update((state) => { state.auth = { username, passwordHash, secret: nextSecret, isDefault: false, revoked: {} }; });
   res.setHeader("set-cookie", sessionCookie(createSession(nextSecret, username, Date.now() + REMEMBER_DAYS * 24 * 60 * 60 * 1000), true, isSecure(req)));
@@ -356,7 +356,7 @@ app.post("/api/addons", asyncRoute(async (req, res) => {
   if (store.addons().some((item) => item.manifest.id === addon.manifest.id && item.manifestUrl === addon.manifestUrl)) throw new AppError("This manifest is already added.", "err.manifestExists");
   await store.update((state) => state.addons.push(addon)); res.status(201).json(publicAddonView(addon));
 }));
-// Pořadí doplňků je zároveň jejich priorita při řazení zdrojů.
+// The order of addons is also their priority when sources are ranked.
 app.post("/api/addons/:key/move", asyncRoute(async (req, res) => {
   const direction = Number(req.body.direction) < 0 ? -1 : 1;
   await store.update((state) => {
@@ -375,7 +375,7 @@ app.delete("/api/addons/:key", asyncRoute(async (req, res) => {
   await store.update((state) => { state.addons = state.addons.filter((a) => a.key !== req.params.key); });
   res.status(204).end();
 }));
-// Úplný záznam včetně adresy s tokenem. Rozhraní ji jinak skrývá, tady je vydání záměrné.
+// The full record including the token-bearing address. The interface hides it elsewhere; handing it out here is deliberate.
 app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
   const addon = store.addons().find((a) => a.key === req.params.key);
   if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
@@ -389,12 +389,12 @@ app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   if (essentialAddon(existing) && (req.body.enabled === false || role === "source")) {
     throw new AppError("Cinemeta provides the library metadata and cannot be switched off.", "err.essentialAddon");
   }
-  // Jiná adresa znamená načíst manifest znovu. Klíč, pořadí i nastavení ukládání zůstávají,
-  // takže po překonfigurování doplňku není nutné ho mazat a přidávat.
+  // A different address means reloading the manifest. The key, the order and the save
+  // rules stay, so a reconfigured addon need not be removed and added again.
   const url = req.body.url === undefined ? undefined : String(req.body.url).trim();
-  // Nastavení ověřujeme ještě před zápisem: mutátor mění stav na místě, takže
-  // výjimka uprostřed něj by v paměti nechala změny, které se nikdy neuloží.
-  // Navíc tím odmítneme nesmyslný požadavek dřív, než kvůli němu sáhneme pro manifest.
+  // The settings are validated before the write: the mutator changes state in place, so
+  // an exception halfway through would leave changes in memory that are never persisted.
+  // It also rejects a nonsensical request before fetching a manifest for it.
   const downloadSettings = req.body.downloadSettings === undefined ? undefined : normalizeDownloadSettings(req.body.downloadSettings);
   const reloaded = url && url !== existing.manifestUrl ? await loadAddon(url, role) : undefined;
   await store.update((state) => {
@@ -491,7 +491,7 @@ const cachedMeta = async (type: string, id: string) => {
   metaCache.set(key, { value, at: Date.now() });
   return value;
 };
-// Sken stromu je drahý, drží se chvíli v paměti. Fronta ho po dokončení stahování zneplatní.
+// Walking the tree is expensive, so it is held in memory for a while. The queue invalidates it once a download finishes.
 let libraryCache: { at: number; entries: Awaited<ReturnType<typeof scanLibrary>> } | undefined;
 let videoCache: { at: number; files: Awaited<ReturnType<typeof listVideos>> } | undefined;
 const invalidateLibrary = () => { libraryCache = undefined; videoCache = undefined; };
@@ -531,7 +531,7 @@ const artworkQueue = new ArtworkQueue();
 const fileExists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 const dataArtworkFile = (key: string) => path.join(ARTWORK_DIR, `${createHash("sha1").update(key).digest("hex")}.jpg`);
 
-/** Cizí obrázek ve složce má vždy přednost: nic nepřepisujeme ani znovu negenerujeme. */
+/** Someone else's picture in the folder always wins: nothing is overwritten or regenerated. */
 async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
   const directory = entryDirectory(entry);
   const folder = path.join(DOWNLOAD_DIR, directory);
@@ -543,7 +543,7 @@ async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[numb
   return await fileExists(own) ? own : undefined;
 }
 
-/** Doplní chybějící náhled. Nejdřív plakát z metadat, jinak reprezentativní snímek z videa. */
+/** Fills a missing thumbnail: the poster from metadata first, otherwise a representative frame from the video. */
 function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
   artworkQueue.run(entry.key, async () => {
     if (await locateArtwork(entry)) return;
@@ -574,7 +574,7 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
   }));
   res.json(summaries);
 }));
-/** Náhled jednoho videa. Vedle videa hledáme jméno podle konvence Jellyfinu. */
+/** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention. */
 async function locateFileArtwork(relative: string) {
   const media = path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)));
   if (await fileExists(media)) return media;
@@ -582,7 +582,7 @@ async function locateFileArtwork(relative: string) {
   return await fileExists(own) ? own : undefined;
 }
 
-/** Vazba na titul může být u souboru i u některé nadřazené složky. Sentinel bez id se ignoruje. */
+/** The binding may sit on the file or on any parent folder. An id-less sentinel is ignored. */
 const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMeta());
 
 const PLAYBACK_IDLE_SECONDS = 300;
@@ -710,7 +710,7 @@ function scheduleFileArtwork(relative: string) {
   });
 }
 
-/** Náhled složky: vlastní obrázek, pak plakát z metadat, jinak snímek z prvního videa uvnitř. */
+/** Folder thumbnail: its own picture, then the poster from metadata, otherwise a frame from the first video inside. */
 async function locateFolderArtwork(relative: string) {
   const folder = path.join(DOWNLOAD_DIR, relative);
   const existing = await findArtwork(folder);
@@ -740,8 +740,8 @@ function scheduleFolderArtwork(relative: string) {
   });
 }
 
-/** Náhledy v datech přežijí smazání videa. Po skenu smažeme ty, ke kterým už zdroj neexistuje.
- *  Při ukládání vedle videa tenhle problém nevzniká, obrázek zmizí se složkou. */
+/** Thumbnails in the data directory outlive the video. After a scan the ones whose source
+ *  is gone are removed. Saving next to the video has no such problem: the picture goes with the folder. */
 let lastArtworkSweep = 0;
 async function sweepArtwork() {
   if (Date.now() - lastArtworkSweep < 10 * 60_000) return;
@@ -758,15 +758,15 @@ async function sweepArtwork() {
     valid.add(path.basename(dataArtworkFile(entry.key)));
     for (const file of entry.files) remember(file.path);
   }
-  // Plakát se ukládá už při zařazení do fronty, kdy zdroj ještě neexistuje.
-  // Bez tohohle by ho úklid smazal dřív, než se stahování dokončí.
+  // The poster is saved when the job is queued, while the source does not exist yet.
+  // Without this the sweep would delete it before the download finishes.
   for (const job of queue.list()) remember(job.target);
 
   let removed = 0;
   for (const name of await readdir(ARTWORK_DIR).catch(() => [] as string[])) {
     if (valid.has(name)) continue;
     const file = path.join(ARTWORK_DIR, name);
-    // Druhá pojistka: co je čerstvé, se nemaže. Zdroj může teprve vznikat.
+    // Second safeguard: anything fresh is kept. Its source may still be on its way.
     const info = await stat(file).catch(() => undefined);
     if (info && Date.now() - info.mtimeMs < 60 * 60_000) continue;
     await rm(file, { force: true });
@@ -775,13 +775,13 @@ async function sweepArtwork() {
   if (removed) log("INFO", "Orphaned thumbnails deleted", { removed });
 }
 
-// Oblíbené jsou jen příznak u cesty. Nic se nikam nepřesouvá.
+// A favourite is only a flag on a path. Nothing is moved anywhere.
 const withFavorites = <T extends { path: string }>(items: T[]) => {
   const favorites = new Set(store.favorites());
   return items.map((item) => ({ ...item, favorite: favorites.has(item.path) }));
 };
 
-// Oblíbené tituly z katalogu. Klíč je typ a id, protože soubor k nim existovat nemusí.
+// Starred catalogue titles. The key is type and id, because no file has to exist for them.
 app.get("/api/watchlist", (_req, res) => {
   const all = store.watchlist();
   res.json(Object.entries(all)
@@ -803,7 +803,7 @@ app.post("/api/watchlist", asyncRoute(async (req, res) => {
   res.json({ key, favorite: wanted });
 }));
 
-// Rozkoukané: pozice se hlásí průběžně, dokončené se samy zapomenou.
+// Resume list: the position is reported as it goes, and a finished title forgets itself.
 const PROGRESS_DONE = 0.94;
 app.get("/api/progress", (_req, res) => {
   const all = store.progress();
@@ -818,7 +818,7 @@ app.get("/api/progress/:key", (req, res) => {
   res.json(found ? { ...found, poster: images.proxied(found.poster) } : null);
 });
 app.post("/api/progress", asyncRoute(async (req, res) => {
-  // Když je sledování vypnuté, pozice se nikam nezapisuje.
+  // With tracking switched off the position is written nowhere.
   if (!store.settings().trackProgress) return res.status(204).end();
   const key = String(req.body.key ?? "").trim();
   const position = Number(req.body.position) || 0;
@@ -826,7 +826,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
   if (!key) throw new AppError("Missing title key.", "err.missingTitleKey");
   await store.update((state) => {
     const all = { ...state.progress };
-    // Skoro dokoukané ani úplný začátek nemá smysl držet.
+    // Neither an almost-finished title nor the very beginning is worth keeping.
     if (duration > 0 && (position / duration > PROGRESS_DONE || position < 30)) delete all[key];
     else all[key] = {
       position, duration,
@@ -835,7 +835,7 @@ app.post("/api/progress", asyncRoute(async (req, res) => {
       poster: posterOf(req.body.poster) ?? all[key]?.poster,
       updatedAt: new Date().toISOString(),
     };
-    // Seznam nesmí růst donekonečna.
+    // The list must not grow without bound.
     const keys = Object.keys(all).sort((a, b) => all[b]!.updatedAt.localeCompare(all[a]!.updatedAt));
     state.progress = Object.fromEntries(keys.slice(0, 60).map((item) => [item, all[item]!]));
   });
@@ -892,8 +892,8 @@ app.get("/api/library/favorites", asyncRoute(async (req, res) => {
   const sorts = new Set(["name", "added", "size", "random"]);
   const sort = sorts.has(String(req.query.sort)) ? String(req.query.sort) as "name" : "name";
   const described = await Promise.all(store.favorites().map((relative) => describePath(DOWNLOAD_DIR, relative)));
-  // Cesty, které mezitím zmizely, se vynechají, ale ze seznamu je nemažeme:
-  // disk může být dočasně nedostupný a přijít o oblíbené kvůli tomu by bylo horší.
+  // Paths that disappeared meanwhile are skipped but not dropped from the list:
+  // the disk may be temporarily unavailable, and losing favourites over that is worse.
   const present = described.filter(Boolean) as NonNullable<typeof described[number]>[];
   const mixed = present.map((item) => ({
     ...item, label: item.kind === "folder" ? item.name : item.label,
@@ -921,7 +921,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   void sweepArtwork();
   const result = await browseDirectory(DOWNLOAD_DIR, relative, String(req.query.query ?? ""),
     Math.max(0, Number(req.query.skip) || 0), limit, sort, req.query.order === "desc", String(req.query.seed ?? ""), favoritePaths);
-  // Náhledy chybějících položek se vyrábějí na pozadí; klient si stránku za chvíli vyžádá znovu.
+  // Missing thumbnails are produced in the background; the client asks for the page again shortly.
   const items = await Promise.all(result.items.map(async (item) => {
     if (item.kind === "folder") {
       const art = await locateFolderArtwork(item.path);
@@ -944,7 +944,7 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   res.json({ ...result, items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || item.backfill) });
 }));
 
-// Mazání a přejmenování sahá do skutečných souborů, proto kontrola cesty i kořene.
+// Deleting and renaming touches real files, hence the path and root checks.
 app.delete("/api/library/item", asyncRoute(async (req, res) => {
   const relative = String(req.query.path ?? "").trim();
   const target = relative && resolveInside(DOWNLOAD_DIR, relative);
@@ -954,10 +954,10 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
   await rm(target, { recursive: true, force: true });
   await rm(dataArtworkFile(relative), { force: true });
   await rm(dataArtworkFile(`dir:${relative}`), { force: true });
-  // Rozkoukané a Můj seznam se vedou pod klíčem katalogu, ne pod cestou, takže by
-  // po smazání souboru zůstal titul viset v obou seznamech a nabízel pokračování
-  // v něčem, co už na disku není. Vazbu na katalog zná libraryMeta -- odečte se
-  // dřív, než ji tenhle úklid smaže.
+  // The resume list and the watchlist are keyed by catalogue title, not by path, so a
+  // deleted file would leave the title hanging in both, offering to continue something
+  // that is no longer on disk. libraryMeta knows the catalogue binding -- it is read
+  // before this cleanup deletes it.
   const orphans = orphanedCatalogKeys(store.libraryMeta(), relative);
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).filter((item) => !isPathWithin(item, relative));
@@ -990,7 +990,7 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
   if (target !== source && await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
   await rename(source, target);
-  // Všechny stavové vazby používají relativní cestu; při přesunu musí zůstat konzistentní.
+  // Every stored binding uses the relative path, so a move has to keep them all consistent.
   await store.update((state) => {
     state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
     state.libraryMeta = remapKeyed(state.libraryMeta ?? {}, relative, nextRelative);
@@ -1021,10 +1021,10 @@ app.get("/api/library/thumb", asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store");
   res.sendFile(art, { dotfiles: "allow" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
-// Ruční přiřazení titulu ke složce, když soubor nepřišel přes frontu.
-/** Sváže složku, do které soubor půjde, s titulem z katalogu. Metadata se pak nemusí hádat. */
-/** Titul zastupuje jeho složka. U plochého rozvržení žádná není, takže zastupuje sám soubor.
- *  Předsazená složka z nastavení ukládání titulem není, proto se nedá brát první část cesty. */
+// Manual binding of a title to a folder, for a file that did not arrive through the queue.
+/** Binds the folder the file will land in to a catalogue title, so metadata need not be guessed. */
+/** A title is represented by its folder. A flat layout has none, so the file stands for itself.
+ *  The prefix folder from the save rules is not a title, hence the first path segment will not do. */
 const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) => {
   if (flat) return target;
   const directory = path.dirname(target);
@@ -1032,7 +1032,7 @@ const titleKey = (target: string, media: MediaInfo | undefined, flat: boolean) =
   return media?.kind === "episode" && media.season != null ? path.dirname(directory) : directory;
 };
 
-/** Plakát z katalogu se uloží hned při zařazení do fronty, takže je v knihovně dřív než soubor. */
+/** The catalogue poster is saved as the job is queued, so it is in the library before the file is. */
 const saveCatalogPoster = (key: string, url?: string) => {
   if (!url || !key || key === ".") return;
   const queueKey = isFileKey(key) ? `file:${key}` : `dir:${key}`;
@@ -1096,11 +1096,11 @@ const rememberTitle = async (target: string, media: MediaInfo | undefined, flat:
   saveCatalogPoster(key, meta?.poster ?? media.poster);
 };
 
-// Dokončení zneplatní sken okamžitě. U líných úloh zde poprvé známe cílovou cestu,
-// takže teprve teď lze uložit vazbu na katalog a plakát.
-// Bajty se do statistik zapisují, jak tečou; dokončení už jen doplní, že z toho
-// vznikla celá položka. Přerušené stahování tak ve statistikách zůstane -- data
-// linkou prošla, i když se soubor nakonec neuložil.
+// Completion invalidates the scan at once. For a lazy job the target path is known
+// here for the first time, so only now can the catalogue binding and poster be saved.
+// Bytes are written to the statistics as they flow; completion only adds that a whole
+// item came of it. An interrupted download therefore stays in the statistics -- the data
+// went through the line even though no file was kept.
 queue.onProgress = (job, bytes) => stats.add(statMeta({ url: job.stream?.url, addonKey: job.stream?.addonKey, addonName: job.stream?.addonName, title: job.title, kind: job.media?.kind }), bytes);
 queue.onCompleted = async (job) => {
   invalidateLibrary();
@@ -1118,9 +1118,9 @@ queue.setDebrid({
 await queue.load();
 await libraryScan.load();
 await stats.load();
-// Historii vezmeme z fronty, aby statistiky nezačínaly prázdné; dokončené úlohy
-// se ale dají smazat, takže od téhle chvíle si vedeme vlastní záznam. Doplní se
-// jen to, co je starší než vlastní záznam -- novější už v něm je.
+// History comes from the queue so the statistics do not start empty; finished jobs can
+// be deleted, though, so from now on a record of our own is kept. Only what predates that
+// record is filled in -- anything newer is already in it.
 await stats.seed(queue.history().map(statEvent));
 
 app.get("/api/library/identity", asyncRoute(async (req, res) => {
@@ -1358,7 +1358,7 @@ app.post("/api/downloads", asyncRoute(async (req, res) => {
   saveCatalogPoster(titleKey(job.target, media, targetSettings.layout === "flat"), media?.poster);
   res.status(201).json(jobView(job));
 }));
-// Hromadné přidání epizod: úlohy jsou líné, streamy se u doplňků poptají až při stahování.
+// Adding episodes in bulk: the jobs are lazy, streams are asked for at download time.
 app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const title = String(req.body.title ?? "").trim() || "Show";
   const type = String(req.body.type ?? "series");
@@ -1398,7 +1398,7 @@ app.get("/api/logs", asyncRoute(async (req, res) => {
   const search = typeof req.query.q === "string" ? req.query.q.trim().slice(0, 100) : "";
   const text = await readLog({ tail: tail || undefined, level: parseLevel(req.query.level), hours: hours || undefined, search: search || undefined });
   res.type("text/plain; charset=utf-8");
-  // Prohlížení v rozhraní chce text v okně, stažení chce soubor.
+  // Viewing in the interface wants text in the window; downloading wants a file.
   if (req.query.inline !== "1") res.setHeader("content-disposition", "attachment; filename=stremio-offline.log");
   res.send(text);
 }));
@@ -1408,8 +1408,8 @@ app.delete("/api/logs", asyncRoute(async (req, res) => {
   res.status(204).end();
 }));
 
-/** Prohlížeč je jediné místo, kde je vidět, jak přehrávání skutečně dopadlo. Bez tohohle
- * kanálu končí chyby hls.js a video elementu v konzoli, ke které se uživatel nedostane. */
+/** The browser is the only place where playback failure is actually visible. Without this
+ * channel hls.js and video element errors end up in a console the user never opens. */
 const CLIENT_LOG_PER_MINUTE = 30;
 const clientReports = new Map<string, { count: number; resetAt: number }>();
 app.post("/api/client-log", (req, res) => {
@@ -1417,7 +1417,7 @@ app.post("/api/client-log", (req, res) => {
   const who = currentUser(req) ?? req.ip ?? "anonymous";
   const bucket = clientReports.get(who);
   if (!bucket || bucket.resetAt <= now) clientReports.set(who, { count: 1, resetAt: now + 60_000 });
-  // Zacyklený přehrávač umí hlásit chybu stokrát za vteřinu; přebytek zahodíme potichu.
+  // A looping player can report an error a hundred times a second; the excess is dropped quietly.
   else if (bucket.count >= CLIENT_LOG_PER_MINUTE) return void res.status(204).end();
   else bucket.count += 1;
   if (clientReports.size > 200) for (const [key, value] of clientReports) if (value.resetAt <= now) clientReports.delete(key);
@@ -1434,7 +1434,7 @@ const freeSpace = async (target: string) => {
   try { const info = await statfs(target); return { path: target, freeBytes: info.bavail * info.bsize, totalBytes: info.blocks * info.bsize }; }
   catch { return { path: target }; }
 };
-/** Stav serveru pro hledání problémů. Nepatří do /api/status, ten je bez přihlášení. */
+/** Server state for troubleshooting. It does not belong in /api/status, which needs no sign-in. */
 app.get("/api/diagnostics", asyncRoute(async (_req, res) => {
   const jobs = queue.list();
   const byStatus: Record<string, number> = {};
@@ -1465,7 +1465,7 @@ app.get("/api/settings/export", (_req, res) => {
 });
 app.post("/api/settings/import", asyncRoute(async (req, res) => {
   const backup = parseSettingsBackup(req.body);
-  // Manifesty se načtou před jediným zápisem. Nefunkční záloha tak nezmění ani část konfigurace.
+  // Manifests are loaded before a single write, so a broken backup changes no part of the configuration.
   const loaded = await Promise.all(backup.addons.map(async (saved, index) => {
     try {
       const addon = await loadAddon(saved.manifestUrl, saved.role);
@@ -1475,13 +1475,13 @@ app.post("/api/settings/import", asyncRoute(async (req, res) => {
       return addon;
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      throw new Error(`Doplněk č. ${index + 1} se nepodařilo načíst: ${reason}`);
+      throw new Error(`Addon ${index + 1} could not be loaded: ${reason}`);
     }
   }));
   const identities = new Set<string>();
   for (const addon of loaded) {
     const identity = `${addon.manifest.id}\n${addon.manifestUrl}`;
-    if (identities.has(identity)) throw new Error(`Záloha obsahuje doplněk „${addon.manifest.name}“ vícekrát.`);
+    if (identities.has(identity)) throw new Error(`The backup holds the addon "${addon.manifest.name}" more than once.`);
     identities.add(identity);
   }
   await store.update((state) => {
@@ -1560,8 +1560,8 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
     }
     playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
   } catch (error) { mediaResources.remove(prepared.resourceId); throw error; }
-  // Bajty počítá proxy, respektive knihovna; tady se přidává jen samotná položka,
-  // aby "kolik toho bylo" nezůstalo jen u stahování.
+  // Bytes are counted by the proxy or by the library; only the item itself is added here,
+  // so that "how much there was" is not limited to downloads.
   void stats.complete(playbackMeta(prepared.stream));
   res.status(201).setHeader("cache-control", "private, no-store").json({ ...started, subtitleIds });
 }));
@@ -1597,17 +1597,17 @@ app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
 }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));
-  // Po restartu převodu si klient ještě chvíli říká o starou generaci; jako 404 je to v pořádku,
-  // ale opakované 404 na živou relaci znamenají, že se přehrávání rozpadlo.
+  // After a transcode restart the client asks for the old generation for a while; a 404 is fine
+  // for that, but repeated 404s on a live session mean playback has fallen apart.
   if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
   const file = String(req.params.file);
-  // Bez lomítek a teček nemůže jméno utéct z adresáře relace.
+  // With no slashes and no dots the name cannot escape the session directory.
   if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
   if (file === "master.m3u8") {
-    // FFmpeg dopisuje řádek s variantou až při ukončení, takže za běhu je master jen hlavička
-    // a hls.js na něm skončí s manifestParsingError. Skládáme si ho proto sami.
-    // FFmpeg navíc píše HEVC jako hvc1.1.4.L120.B01, jenže prohlížeče uznávají jen tvar B0
-    // a stream by odmítly dřív, než ho zkusí; bez atributu si kodeky odvodí z init segmentu.
+    // FFmpeg writes the variant line only when it exits, so while it runs the master playlist
+    // is just a header and hls.js fails on it with manifestParsingError. We assemble it ourselves.
+    // FFmpeg also writes HEVC as hvc1.1.4.L120.B01, while browsers accept only the B0 form and
+    // would refuse the stream before trying it; with no attribute they read the codecs from the init segment.
     const playlist = await readFile(path.join(directory, file), "utf8").catch(() => "");
     if (playlist.includes("#EXT-X-STREAM-INF")) {
       return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store")
@@ -1720,7 +1720,7 @@ app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
   }
 }));
 
-// Po restartu převodu začíná video na nule, takže se o stejnou hodnotu musí posunout i titulky.
+// After a transcode restart the video starts at zero, so the subtitles have to shift by the same amount.
 const CUE = /(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3}) --> (\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
 const cueSeconds = (value: string) => { const parts = value.split(":").map(Number); return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1]; };
 const cueStamp = (value: number) => { const total = Math.max(0, value); return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${(total % 60).toFixed(3).padStart(6, "0")}`; };
@@ -1740,8 +1740,8 @@ const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.
 app.use(express.static(webRoot, { setHeaders: (res, file) => { if (file.endsWith("index.html")) res.setHeader("Cache-Control", "no-store"); } }));
 app.get("/{*path}", (_req, res) => { res.setHeader("Cache-Control", "no-store"); res.sendFile(path.join(webRoot, "index.html")); });
 app.use((error: unknown, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  // Výchozích 400 se drží záměrně: rozhraní na jiný kód než 401 nereaguje jinak
-  // a měnit to teď by byla změna chování, ne diagnostiky.
+  // The 400 default is deliberate: the interface treats anything but a 401 the same way,
+  // and changing that now would be a behaviour change, not a diagnostic one.
   const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 400;
   const message = error instanceof Error ? error.message : String(error);
   if (error instanceof RestrictedError || messageKeyOf(error) === "err.restricted") {

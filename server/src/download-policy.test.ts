@@ -10,22 +10,22 @@ test("network and incomplete transfers are transient", () => {
   assert.equal(classifyFailure(new Error("ECONNRESET")), "transient");
   assert.equal(classifyFailure(new IncompleteDownloadError(10, 100)), "transient");
   assert.equal(classifyFailure(new Error("aborted"), { stalled: true }), "transient");
-  assert.equal(classifyFailure(new HttpSourceError(429, "Zdroj odpověděl HTTP 429.")), "transient");
-  assert.equal(classifyFailure(new HttpSourceError(503, "Zdroj odpověděl HTTP 503.")), "transient");
-  assert.equal(classifyFailure(new HttpSourceError(416, "Zdroj odpověděl HTTP 416.")), "transient");
+  assert.equal(classifyFailure(new HttpSourceError(429, "The source answered HTTP 429.")), "transient");
+  assert.equal(classifyFailure(new HttpSourceError(503, "The source answered HTTP 503.")), "transient");
+  assert.equal(classifyFailure(new HttpSourceError(416, "The source answered HTTP 416.")), "transient");
 });
 
 test("missing or forbidden sources are not retried on the same URL", () => {
-  assert.equal(classifyFailure(new HttpSourceError(404, "Zdroj odpověděl HTTP 404.")), "source");
-  assert.equal(classifyFailure(new HttpSourceError(403, "Zdroj odpověděl HTTP 403.")), "source");
-  assert.equal(classifyFailure(new SourceError("Nenašel se žádný přímo stažitelný zdroj.")), "source");
-  assert.equal(classifyFailure(new Error("Zdroj odpověděl HTTP 410.")), "source");
+  assert.equal(classifyFailure(new HttpSourceError(404, "The source answered HTTP 404.")), "source");
+  assert.equal(classifyFailure(new HttpSourceError(403, "The source answered HTTP 403.")), "source");
+  assert.equal(classifyFailure(new SourceError("No directly downloadable source was found.")), "source");
+  assert.equal(classifyFailure(new Error("The source answered HTTP 410.")), "source");
 });
 
 test("disk errors halt the queue instead of hopping to the next source", () => {
   const enospc = Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" });
   assert.equal(classifyFailure(enospc), "storage");
-  assert.equal(classifyFailure(new StorageError("Na disku není místo.", "ENOSPC")), "storage");
+  assert.equal(classifyFailure(new StorageError("No space left on the disk.", "ENOSPC")), "storage");
   assert.equal(classifyFailure(Object.assign(new Error("write"), { code: "EDQUOT" })), "storage");
   assert.equal(classifyFailure(Object.assign(new Error("read"), { code: "ESTALE" })), "storage");
   assert.deepEqual(storageMessage(enospc), { message: "No space left on the disk.", key: "err.noSpace" });

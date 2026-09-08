@@ -129,7 +129,7 @@ export class OutboundGuard {
     if (entry.state === "half-open") {
       if (entry.trialInFlight) {
         entry.rejected += 1;
-        throw new GuardRejection(`${host} se právě zkouší po výpadku, zkuste to za chvíli.`, host, entry.cooldownMs);
+        throw new GuardRejection(`${host} is being retried after an outage, try again in a moment.`, host, entry.cooldownMs);
       }
       entry.trialInFlight = true;
     }

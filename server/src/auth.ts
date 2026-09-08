@@ -3,13 +3,13 @@ import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback) as (password: string, salt: Buffer, keylen: number) => Promise<Buffer>;
 
-/** Platí jen uvnitř tohoto procesu. FFmpeg si sahá na /api/proxy přes loopback a cookie nemá. */
+/** Valid only inside this process. FFmpeg reaches /api/proxy over loopback and has no cookie. */
 export const INTERNAL_TOKEN = randomBytes(32).toString("hex");
 
 
 export interface AuthState {
   username: string; passwordHash: string; secret: string; isDefault: boolean;
-  /** Odvolané relace podle identifikátoru; hodnota je čas, kdy by stejně vypršely. */
+  /** Revoked sessions by identifier; the value is when they would have expired anyway. */
   revoked?: Record<string, number>;
 }
 
@@ -25,7 +25,7 @@ export const secretEquals = (a: string, b: string) =>
  *  guess at the real one, otherwise the answer arrives sooner and says so. */
 export const DECOY_HASH = `scrypt$${randomBytes(16).toString("hex")}$${randomBytes(64).toString("hex")}`;
 
-/** Heslo se neukládá, jen jeho scrypt otisk s náhodnou solí. */
+/** The password is not stored, only its scrypt hash with a random salt. */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const derived = await scrypt(password.normalize("NFKC"), salt, 64);
@@ -39,8 +39,8 @@ export async function verifyPassword(password: string, stored: string): Promise<
   return equals(derived, Buffer.from(hashHex, "hex"));
 }
 
-/** Podepsaná známka bez stavu na serveru, takže restart nikoho neodhlásí. Vlastní
- *  identifikátor relace ale umožní ji odvolat dřív, než sama vyprší. */
+/** A signed token with no server-side state, so a restart signs nobody out. Its own session
+ *  identifier still allows revoking it before it expires on its own. */
 export function createSession(secret: string, username: string, expiresAt: number, sid = randomBytes(12).toString("base64url")): string {
   const payload = Buffer.from(JSON.stringify({ u: username, e: expiresAt, s: sid })).toString("base64url");
   return `${payload}.${createHmac("sha256", secret).update(payload).digest("base64url")}`;
@@ -59,7 +59,7 @@ export function readSession(secret: string, token: string | undefined): SessionI
   } catch { return undefined; }
 }
 
-/** Zapomenuté relace by jinak v seznamu rostly donekonečna. */
+/** Forgotten sessions would otherwise pile up in the list without end. */
 export function pruneRevoked(revoked: Record<string, number> = {}): Record<string, number> {
   const now = Date.now();
   return Object.fromEntries(Object.entries(revoked).filter(([, expiresAt]) => expiresAt > now));
@@ -76,7 +76,7 @@ export function parseCookies(header: string | undefined): Record<string, string>
   return result;
 }
 
-/** Záložní údaje pro případ zapomenutého hesla. Uložené heslo nenahrazují, platí vedle něj. */
+/** Fallback credentials for a forgotten password. They do not replace the stored password; they stand beside it. */
 export function envCredentials(): { username: string; password: string } | undefined {
   const username = process.env.ADMIN_USERNAME;
   const password = process.env.ADMIN_PASSWORD;

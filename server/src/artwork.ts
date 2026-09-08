@@ -7,18 +7,18 @@ import { guardedFetch } from "./outbound.js";
 
 const run = promisify(execFile);
 
-/** Jména, pod kterými hledá obrázky Emby i Jellyfin. Pořadí určuje přednost. */
+/** The names Emby and Jellyfin look for pictures under. The order is the priority. */
 export const POSTER_NAMES = ["poster.jpg", "poster.png", "folder.jpg", "folder.png", "cover.jpg", "cover.png", "default.jpg"];
 export const BACKDROP_NAMES = ["backdrop.jpg", "fanart.jpg", "background.jpg"];
-/** Náš výstup. Jellyfin ho při skenu převezme jako plakát. */
+/** Our own output. Jellyfin picks it up as the poster when it scans. */
 export const POSTER_OUTPUT = "poster.jpg";
 
-/** Náhled epizody hledá Jellyfin pod jménem souboru; my píšeme stejně. */
+/** Jellyfin looks for an episode thumbnail under the file name; we write the same. */
 export const episodeArtName = (videoFile: string) => `${videoFile.replace(/\.[^.]+$/, "")}.jpg`;
 
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 
-/** Vrátí jméno existujícího obrázku ve složce, ať už ho vyrobil kdokoli. */
+/** Returns the name of an existing picture in the folder, whoever produced it. */
 export async function findArtwork(directory: string, names = POSTER_NAMES): Promise<string | undefined> {
   let entries: string[];
   try { entries = await readdir(directory); } catch { return undefined; }
@@ -30,14 +30,14 @@ export async function findArtwork(directory: string, names = POSTER_NAMES): Prom
   return undefined;
 }
 
-/** Zápis přes dočasný soubor, ať se nikdy neobjeví poloviční obrázek. */
+/** Written through a temporary file, so half a picture never shows up. */
 async function writeAtomic(target: string, data: Buffer) {
   const temp = `${target}.tmp`;
   await writeFile(temp, data, { mode: 0o644 });
   await rename(temp, target);
 }
 
-/** Stáhne obrázek na přesné místo. Používá se pro plakát, který klient poslal z katalogu. */
+/** Downloads a picture to an exact place. Used for the poster the client sent from the catalogue. */
 export async function savePosterAs(target: string, url: string): Promise<boolean> {
   try {
     const response = await guardedFetch(url, { signal: AbortSignal.timeout(20_000) });
@@ -64,8 +64,8 @@ export async function savePosterFromUrl(directory: string, url: string): Promise
 }
 
 /**
- * Snímek z videa. Filtr thumbnail vybere reprezentativní obrázek z padesáti,
- * což stojí prakticky totéž co jeden slepý snímek, ale nevrací černou plochu.
+ * A frame from the video. The thumbnail filter picks a representative picture out of fifty,
+ * which costs practically the same as one blind grab but does not return a black rectangle.
  */
 export async function saveFrame(videoPath: string, target: string, seconds = 300): Promise<boolean> {
   const temp = `${target}.tmp.jpg`;
@@ -83,13 +83,13 @@ export async function saveFrame(videoPath: string, target: string, seconds = 300
   }
 }
 
-/** Krátká videa nemají pátou minutu; bereme zhruba třetinu stopáže. */
+/** Short videos have no fifth minute; roughly a third of the running time is taken instead. */
 export const framePosition = (duration?: number) => {
   if (!duration || !Number.isFinite(duration) || duration <= 0) return 300;
   return Math.max(1, Math.min(300, Math.floor(duration / 3)));
 };
 
-/** Jeden běh naráz. Na Celeronu je generování náhledů to nejdražší, co server dělá. */
+/** One run at a time. On a Celeron, making thumbnails is the most expensive thing the server does. */
 export class ArtworkQueue {
   private pending = new Set<string>();
   private chain: Promise<void> = Promise.resolve();

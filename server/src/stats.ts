@@ -1,8 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-/** Odkud provoz teče. Knihovna čte soubor z disku, takže linku ven nezatěžuje --
- * proto se drží stranou a nemíchá se do čísel o externím provozu. */
+/** Where the traffic flows from. The library reads a file from disk and so costs the line
+ * nothing -- it is kept apart and not mixed into the external traffic figures. */
 export type TrafficSource = "download" | "catalog" | "library";
 
 export const SOURCE_LABEL: Record<TrafficSource, string> = {
@@ -13,8 +13,8 @@ export const SOURCE_LABEL: Record<TrafficSource, string> = {
 
 export const isExternal = (event: TrafficEvent) => event.source !== "library";
 
-/** Popis jednoho přenosu. Samotné bajty přitékají po částech, tohle je to,
- * co jim dává jméno -- a zároveň klíč, pod kterým se přírůstky sčítají. */
+/** The description of one transfer. The bytes themselves arrive in pieces; this is what
+ * gives them a name -- and the key the increments add up under. */
 export interface TrafficMeta {
   source: TrafficSource;
   provider: string;
@@ -27,8 +27,8 @@ export interface TrafficMeta {
 export interface TrafficEvent extends TrafficMeta {
   at: string;
   bytes: number;
-  /** Kolik dokončených položek záznam představuje. Průběžné přírůstky mají nulu,
-   * jinak by se jeden film počítal tolikrát, kolikrát se během něj zapisovalo. */
+  /** How many finished items the entry stands for. Running increments carry zero, or one
+   * film would be counted once per write made during it. */
   items: number;
 }
 
@@ -52,11 +52,11 @@ export interface Summary {
 
 const MINUTE = 60_000, HOUR = 60 * MINUTE, DAY = 24 * HOUR;
 
-/** Krok grafu se řídí délkou období: hodina po pěti minutách, den po hodinách, delší po dnech. */
+/** The chart step follows the period: an hour in five-minute bars, a day in hours, longer in days. */
 const stepFor = (hours: number): Step => hours <= 1 ? "minute" : hours <= 24 ? "hour" : "day";
 
-/** Hranice sloupců. U dnů se posouváme přes setDate, ne přidáváním 24 hodin --
- * jinak by se řada na přelomu letního času rozjela o hodinu. */
+/** Bar boundaries. Days advance through setDate rather than by adding 24 hours --
+ * otherwise the series would slip by an hour across a daylight-saving change. */
 function boundaries(hours: number, now: Date) {
   const step = stepFor(hours);
   if (step === "day") {
@@ -70,7 +70,7 @@ function boundaries(hours: number, now: Date) {
   return Array.from({ length: count }, (_, index) => end - (count - 1 - index) * size);
 }
 
-/** Poslední hranice, která ještě není za časem události. */
+/** The last boundary that is not yet past the time of the event. */
 const slot = (edges: number[], at: number) => {
   if (at < edges[0]) return -1;
   let low = 0, high = edges.length - 1;
@@ -90,12 +90,12 @@ const identify = {
   source: (event: TrafficEvent) => ({ key: event.source, label: SOURCE_LABEL[event.source] }),
 };
 
-/** Souhrn za zvolený počet hodin. Okna (hodina, den, týden, měsíc) se počítají
- * nezávisle na něm, aby karty ukazovaly totéž bez ohledu na vybrané období.
+/** The summary for the chosen number of hours. The windows (hour, day, week, month) are
+ * computed independently of it, so the cards show the same thing whatever period is picked.
  *
- * Karty, sloupcový graf i rozpady podle zdroje a doplňku mluví jen o externím
- * provozu; přehrávání z knihovny se objeví jedině v rozpadu podle druhu provozu,
- * odkud se dá přidat do grafu jako vlastní linka. */
+ * The cards, the bar chart and the breakdowns by source and addon speak only of external
+ * traffic; library playback shows up solely in the breakdown by traffic kind, from where it
+ * can be added to the chart as a line of its own. */
 export function summarize(events: TrafficEvent[], hours = 720, now = new Date()): Summary {
   const span = Math.max(1, Math.min(24 * 365, hours));
   const edges = boundaries(span, now);
@@ -150,9 +150,9 @@ export function summarize(events: TrafficEvent[], hours = 720, now = new Date())
   };
 }
 
-/** Starší záznamy se slučují po hodinách. Jemnější krok než hodinu graf ukazuje
- * jen u posledních 24 hodin, takže se sloučením nic neztratí a soubor neroste
- * podle toho, jak dlouho přenosy trvaly. */
+/** Older entries are merged by the hour. The chart shows a finer step than an hour only for
+ * the last 24 hours, so the merge loses nothing and the file stops growing with the length
+ * of the transfers. */
 export function compact(events: TrafficEvent[], before: number): TrafficEvent[] {
   const merged = new Map<string, TrafficEvent>();
   const recent: TrafficEvent[] = [];
@@ -169,15 +169,15 @@ export function compact(events: TrafficEvent[], before: number): TrafficEvent[] 
   return [...merged.values(), ...recent].sort((a, b) => a.at.localeCompare(b.at));
 }
 
-/** Nejstarší záznamy se zahazují, aby soubor nerostl donekonečna. */
+/** The oldest entries are dropped so the file does not grow without bound. */
 const LIMIT = 20_000;
-/** Jak často se nasbírané přírůstky ukládají. Nejjemnější krok grafu je pět
- * minut, takže minuta je dost jemná a soubor se přitom nezapisuje pořád. */
+/** How often the collected increments are saved. The finest chart step is five minutes,
+ * so a minute is fine enough while the file is not written constantly. */
 const FLUSH_MS = 60_000;
 
 export class StatsLog {
   private events: TrafficEvent[] = [];
-  /** Rozdělané přírůstky, které ještě nedostaly svůj záznam. */
+  /** Increments in progress that have no entry of their own yet. */
   private pending = new Map<string, { meta: TrafficMeta; bytes: number; items: number }>();
   private file: string;
   private chain: Promise<void> = Promise.resolve();
@@ -190,18 +190,18 @@ export class StatsLog {
     await mkdir(path.dirname(this.file), { recursive: true });
     try {
       const stored: Array<Partial<TrafficEvent>> = JSON.parse(await readFile(this.file, "utf8"));
-      // Starší soubor zná jen dokončená stahování a pole source ani items nemá.
+      // An older file knows only finished downloads and has neither the source nor the items field.
       this.events = stored.map((event) => ({ ...event, source: event.source ?? "download", items: event.items ?? 1 } as TrafficEvent));
     } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-    // Časovač drží rozdělané přírůstky nejvýš minutu; unref, ať kvůli němu
-    // server nezůstane naživu, až bude chtít skončit.
+    // The timer holds pending increments for at most a minute; unref so it does not keep
+    // the server alive when it wants to exit.
     if (!this.timer) { this.timer = setInterval(() => void this.flush(), FLUSH_MS); this.timer.unref(); }
     return this.events.length;
   }
 
-  /** Doplní historii z fronty jen tam, kam vlastní záznam nesahá. Od chvíle, kdy
-   * stats.json vznikl, je úplný, takže chybět mohou jedině starší úlohy -- a jen
-   * ty se tedy doplňují, ať se nezdvojí to, co už je zapsané. */
+  /** Fills in history from the queue only where our own record does not reach. From the moment
+   * stats.json came into being it is complete, so only older jobs can be missing -- and only
+   * those are added, so nothing already written is duplicated. */
   async seed(events: TrafficEvent[]) {
     const oldest = this.events.reduce<string | undefined>((found, event) => (!found || event.at < found ? event.at : found), undefined);
     const missing = events.filter((event) => !oldest || event.at < oldest);
@@ -211,13 +211,13 @@ export class StatsLog {
     return missing.length;
   }
 
-  /** Přičte přenesené bajty k rozdělanému přenosu; zapíší se při nejbližším uložení. */
+  /** Adds transferred bytes to a transfer in progress; they are written at the next save. */
   add(meta: TrafficMeta, bytes: number) {
     if (bytes <= 0) return;
     this.bucket(meta).bytes += bytes;
   }
 
-  /** Dokončená položka. Ukládá se hned, ať se po dostažení pozná na statistikách. */
+  /** A finished item. Saved at once, so a completed download shows in the statistics right away. */
   complete(meta: TrafficMeta, bytes = 0) {
     const bucket = this.bucket(meta);
     bucket.bytes += Math.max(0, bytes);
@@ -234,7 +234,7 @@ export class StatsLog {
     return fresh;
   }
 
-  /** Rozdělané přírůstky se překlopí do záznamů s časem, kdy provoz opravdu tekl. */
+  /** Pending increments are turned into entries stamped with the time the traffic actually flowed. */
   flush() {
     if (!this.pending.size) return this.chain;
     const at = new Date().toISOString();

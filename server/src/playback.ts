@@ -13,7 +13,7 @@ import { pickByLanguage } from "./language.js";
 import { probe, type MediaInfo, type Track } from "./probe.js";
 import type { StreamItem } from "./types.js";
 
-/** direct = prohlížeč hraje soubor rovnou, remux = přebalení bez překódování videa, transcode = skutečný převod. */
+/** direct = the browser plays the file as is, remux = repackaging without re-encoding video, transcode = a real conversion. */
 export type PlaybackMode = "direct" | "remux" | "transcode";
 
 export interface ClientCapabilities {
@@ -27,14 +27,14 @@ export interface PlaybackOptions {
   audioTrack?: number;
   subtitleTrack?: number | null;
   startTime?: number;
-  /** Maximální výška obrazu; null nebo undefined = originál bez zásahu do videa. */
+  /** Maximum picture height; null or undefined = the original, with the video untouched. */
   quality?: number | null;
 }
 
 export interface PlaybackDescriptor {
   id: string; mode: PlaybackMode; url: string; offset: number;
   duration?: number; video?: string; audio?: string; hardware: boolean;
-  /** Zda server umí překódovat s hardwarovou akcelerací; v režimu remux se nepoužívá. */
+  /** Whether the server can transcode with hardware acceleration; unused in remux mode. */
   acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[];
   audioTrack: number; subtitleTrack: number | null;
@@ -42,15 +42,15 @@ export interface PlaybackDescriptor {
   sidecarUrl?: string;
 }
 
-/** Povolené cílové kvality a strop datového toku videa pro každou z nich. */
-/** Jak se zdroj jmenuje ve statistikách. Sdílené s index.ts, ať přenesené bajty
- * a spuštěná přehrání spadnou do jedné položky, a ne do dvou skoro stejných. */
+/** The allowed target qualities and the video bitrate ceiling for each. */
+/** What the source is called in the statistics. Shared with index.ts so transferred bytes
+ * and started playbacks land in one entry instead of two nearly identical ones. */
 export const sourceTitle = (stream: StreamItem) => stream.behaviorHints?.filename ?? stream.title ?? stream.name;
 
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 
-/** Jednoduchá fronta operací pro jednu relaci. Seek a změna stopy nesmějí
- * běžet souběžně, protože každý restart vytváří a uklízí vlastní HLS generaci. */
+/** A simple operation queue for one session. A seek and a track change must not run
+ * concurrently, because each restart creates and cleans up its own HLS generation. */
 export class SerialOperations {
   private tail: Promise<void> = Promise.resolve();
 
@@ -69,16 +69,16 @@ interface Session {
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
   process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
-  /** Než ji klient poprvé načte, je relace jen slib; nepřevzatou po chvíli zavřeme. */
+  /** Until the client first loads it, a session is only a promise; an unclaimed one is closed after a while. */
   claimed: boolean;
-  /** Generace, ze které ještě chvíli po restartu obsluhujeme dobíhající požadavky. */
+  /** The generation whose trailing requests are still served for a while after a restart. */
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
   copyRejected?: boolean;
 }
 
-/** Main a Main 10 jsou pro prohlížeč dva různé kodeky. Desetibitový stream se nesmí kopírovat
- *  jen proto, že prohlížeč umí osmibitový — SourceBuffer by ho odmítl (bufferAddCodecError). */
+/** Main and Main 10 are two different codecs to a browser. A ten-bit stream must not be copied
+ *  just because the browser handles eight-bit -- SourceBuffer would refuse it (bufferAddCodecError). */
 const hevcPlayable = (video: MediaInfo["video"], caps: ClientCapabilities) => {
   const deep = /\b1[02]\b/.test(video?.profile ?? "") || /p1[02](le|be)$/i.test(video?.pixelFormat ?? "");
   return deep ? caps.hevc10 === true : caps.hevc === true;
@@ -99,14 +99,14 @@ export const hlsCanStart = (playlist: string) =>
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
 const AUDIO_REQUIRING_PACKET_FOR_FMP4 = new Set(["ac3", "eac3"]);
 const IDLE_MS = 5 * 60_000;
-// Když start doběhne až po tom, co to klient vzdal, zůstane relace i s FFmpeg viset na
-// pět minut a celou dobu čte ze zdroje. Nikým nepřevzatá relace nemá na co čekat.
+// If the start finishes after the client gave up, the session and its FFmpeg hang around for
+// five minutes, reading from the source the whole time. An unclaimed session has nothing to wait for.
 const UNCLAIMED_MS = 45_000;
-// Požadavky odeslané těsně před restartem převodu dorazí až na novou generaci. 404 na
-// playlist bere hls.js jako fatální chybu, takže starou generaci ještě chvíli držíme.
+// Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
+// on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
 
-/** Do logu ani k uživateli nesmí prosáknout adresa zdroje — bývá v ní token doplňku. */
+/** Neither the log nor the user may see the source address -- it often carries an addon token. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
 const NOISE = /you should use tag|deprecated|Last message repeated|^\s*$/i;
 export const SOURCE_UNREACHABLE = "The source could not be opened: it did not answer, or it refused the connection.";
@@ -135,7 +135,7 @@ export class PlaybackManager {
   /** Some drivers only offer constant quality, so a target bitrate makes the encoder refuse to open. */
   private vaapiBitrate = true;
   private vaapiFailures = 0;
-  /** -readrate_initial_burst existuje až od FFmpeg 6; starší verzi by volba shodila. */
+  /** -readrate_initial_burst exists only from FFmpeg 6; an older build would die on the option. */
   private initialBurst = false;
   private ffmpegVersion?: string;
 
@@ -156,8 +156,8 @@ export class PlaybackManager {
     setInterval(() => this.reap(), 30_000).unref();
   }
 
-  /** Relace, o kterou se nikdo nehlásí, drží FFmpeg i čtení ze zdroje. Nepřevzatá relace
-   *  je start, který klient nestihl přijmout, a nemá na co čekat celý nečinný limit. */
+  /** A session nobody claims holds FFmpeg and the read from the source. An unclaimed session
+   *  is a start the client never took up, and has no reason to wait out the whole idle limit. */
   private reap() {
     for (const session of [...this.sessions.values()]) {
       const idle = Date.now() - session.lastAccess;
@@ -172,7 +172,7 @@ export class PlaybackManager {
     }
   }
 
-  /** Zjistí stopy zdroje bez spuštění přehrávání; výsledek chvíli držíme, ať se zdroj neotravuje. */
+  /** Reads the source tracks without starting playback; the result is held for a while so the source is left alone. */
   async inspect(stream: StreamItem): Promise<MediaInfo | undefined> {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const key = this.inspectionKey(stream);
@@ -213,7 +213,7 @@ export class PlaybackManager {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const id = crypto.randomUUID();
     const source = this.proxyPath(stream);
-    // Přes inspect(), ať se seznam zdrojů a přehrávač nikdy nerozejdou v tom, co soubor obsahuje.
+    // Through inspect(), so the source list and the player never disagree about what the file holds.
     const info = await this.inspect(stream);
     const audioTracks = info?.audioTracks ?? [];
     const subtitleTracks = info?.subtitleTracks ?? [];
@@ -260,14 +260,14 @@ export class PlaybackManager {
     }
   }
 
-  /** Posun mimo už vyrobenou část: FFmpeg se restartuje od nové pozice, klient si posune časovou osu. */
+  /** A seek outside the part already produced: FFmpeg restarts from the new position and the client shifts its timeline. */
   async seek(id: string, time: number) {
     const session = this.require(id);
     return session.operations.run(() => this.restart(session, time, "Playback seek"));
   }
 
-  /** Prohlížeč odmítl, co mu server poslal. Opakovat totéž nemá cenu: kopie jde stranou
-   * a relace se rozjede znovu jako skutečný převod. */
+  /** The browser refused what the server sent. Repeating it is pointless: the copy is dropped
+   * and the session starts again as a real transcode. */
   async escalate(id: string, time: number) {
     const session = this.require(id);
     return session.operations.run(() => {
@@ -277,7 +277,7 @@ export class PlaybackManager {
     });
   }
 
-  /** Přepnutí stopy nebo kvality znamená nové mapování či filtry, tedy restart od aktuální pozice. */
+  /** Switching a track or the quality means new mappings or filters, so a restart from the current position. */
   async track(id: string, changes: { audio?: number; subtitle?: number | null; quality?: number | null; time?: number }) {
     const session = this.require(id);
     return session.operations.run(async () => {
@@ -285,7 +285,7 @@ export class PlaybackManager {
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
-      // Návrat na originál může znovu splnit podmínky přímého přehrání.
+      // Going back to the original may satisfy the conditions for direct play again.
       if (session.quality === null && session.audioTrack === 0 && !session.copyRejected
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
         session.pendingKill = this.kill(session);
@@ -304,7 +304,7 @@ export class PlaybackManager {
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
-    // Starý FFmpeg dobíhá na pozadí; nový píše do jiné generace, takže se nemají o co přetahovat.
+    // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
     session.pendingKill = this.kill(session);
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     let url: string;
@@ -349,7 +349,7 @@ export class PlaybackManager {
     await this.purge(path.join(this.root, id));
   }
 
-  /** Přehled pro diagnostiku: co server umí a co právě běží. */
+  /** Overview for diagnostics: what the server can do and what is running right now. */
   diagnostics() {
     return {
       ffmpeg: { version: this.ffmpegVersion, initialBurst: this.initialBurst },
@@ -428,14 +428,14 @@ export class PlaybackManager {
     })();
   }
 
-  /** Vestavěné titulky zapínáme samy od sebe jen tehdy, když opravdu sedí preferovaný jazyk. */
+  /** Embedded subtitles are switched on by themselves only when the preferred language really matches. */
   private preferredSubtitle(tracks: Track[], preferred?: string): number | null {
     if (!tracks.length || !preferred) return null;
     return tracks.find((track) => track.language === preferred)?.index ?? null;
   }
 
   private proxyPath(stream: StreamItem) { return mediaResources.path(stream); }
-  /** Volání zevnitř serveru se prokazuje procesním tokenem, protože cookie prohlížeče nemá. */
+  /** A call from inside the server proves itself with the process token, having no browser cookie. */
   private localUrl(relative: string) {
     return `http://127.0.0.1:${process.env.PORT ?? 8080}${relative}${relative.includes("?") ? "&" : "?"}token=${INTERNAL_TOKEN}`;
   }
@@ -459,9 +459,9 @@ export class PlaybackManager {
     return "other";
   }
 
-  /** Nejlevnější cesta: soubor, který prohlížeč zvládne sám. Seek pak jede nativně přes HTTP Range.
-   * Zamítnutí nese i důvod: "proč se to převádí" je první otázka u každého problému
-   * s přehráváním a bez ní ji z logu nikdo nevyčte. */
+  /** The cheapest path: a file the browser handles on its own. Seeking then runs natively over HTTP Range.
+   * A refusal carries its reason: "why is this being transcoded" is the first question about any playback
+   * problem, and without it nobody can answer it from the log. */
   private directPlay(stream: StreamItem, info: MediaInfo | undefined, caps: ClientCapabilities): { ok: boolean; reason: string } {
     if (stream.behaviorHints?.notWebReady) return { ok: false, reason: "addon marks the source as not web ready" };
     if (!info?.video) return { ok: false, reason: "source has no probed video stream" };
@@ -489,10 +489,10 @@ export class PlaybackManager {
     return this.directPlay(stream, info, caps).ok;
   }
 
-  /** Že zařízení existuje a jde otevřít ještě neznamená, že se přes něj dá kódovat:
-   * na některých sestavách libva selže až při vytváření kontextu. Zkusíme proto
-   * rovnou zakódovat jeden drobný snímek a řídíme se výsledkem, ne dohadem --
-   * jinak by každé přehrávání platilo několikasekundový pokus, který stejně spadne. */
+  /** A device that exists and opens is not proof that it can encode: on some builds libva
+   * fails only when the context is created. So one tiny frame is actually encoded and the
+   * result decides, not a guess -- otherwise every playback would pay for a several-second
+   * attempt that fails anyway. */
   private async checkVaapi(device: string) {
     try { await access(device, constants.R_OK | constants.W_OK); }
     catch {
@@ -540,12 +540,12 @@ export class PlaybackManager {
     catch { return false; }
   }
 
-  /** Emby tomu říká Direct Stream: kontejner se přebalí, video se jen kopíruje. */
+  /** Emby calls this Direct Stream: the container is repackaged, the video only copied. */
   private plan(session: Session) {
     const caps = session.capabilities;
     const video = session.info?.video?.codec ?? "";
     const audio = session.info?.audioTracks?.[session.audioTrack]?.codec ?? session.info?.audio?.codec ?? "";
-    // Zvolená nižší kvalita vynucuje skutečné překódování; kopie by nesla původní rozlišení.
+    // A lower chosen quality forces a real transcode; a copy would carry the original resolution.
     // A refused copy says the probe and the capability list disagreed with the real decoder.
     // Which stream was to blame is unknowable from here, so both go through the encoder.
     const copyVideo = !session.copyRejected && session.quality === null
@@ -564,7 +564,7 @@ export class PlaybackManager {
     this.assertActive(session);
     session.directory = directory;
     session.lastAccess = Date.now();
-    // Uklidit se dá až po skutečném konci starého procesu, jinak si sahají do stejného adresáře.
+    // Cleanup can only follow the old process's real end, or the two reach into the same directory.
     if (previous) {
       const retired = { generation: session.generation - 1, directory: previous, until: Date.now() + RETIRED_MS };
       session.retired = retired;
@@ -610,10 +610,10 @@ export class PlaybackManager {
     let stderr = ""; let finished = false; let exitCode: number | null = null;
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-16_000); });
     child.once("error", (error) => { finished = true; session.error = error.message; });
-    // Až 'close' zaručuje, že je stderr přečtený; 'exit' poslední hlášku běžně nestihne.
+    // Only 'close' guarantees stderr has been read; 'exit' routinely misses the last message.
     child.once("close", (code, signal) => { finished = true; exitCode = code; if (code !== 0 && signal === null) session.error = describeFailure(stderr, code); });
 
-    // Master vzniká hned v hlavičce, ale variantní playlist až s prvním segmentem.
+    // The master appears with the header, but the variant playlist only with the first segment.
     const ready = path.join(directory, "index-0.m3u8");
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
     // EVENT playlists have no live edge. Waiting for a second segment used to hide
@@ -631,7 +631,7 @@ export class PlaybackManager {
           log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
           return url;
         }
-      } catch { /* playlist ještě neexistuje */ }
+      } catch { /* the playlist does not exist yet */ }
       if (finished) break;
       await sleep(100);
     }
@@ -652,8 +652,8 @@ export class PlaybackManager {
     const quality = session.quality;
     const bitrate = quality !== null ? QUALITY_BITRATE[quality] : undefined;
     const sourceVideo = session.info?.video?.codec ?? "";
-    // Mapování a var_stream_map musí přesně sedět na to, co soubor opravdu má. Otazník v -map
-    // chybějící stopu potichu vypustí, jenže hls muxer ji pak marně hledá a spadne na hlavičce.
+    // The mappings and var_stream_map must match exactly what the file really holds. A question mark
+    // in -map drops a missing track quietly, but the hls muxer then looks for it in vain and dies on the header.
     const audioCount = session.info?.audioTracks.length ?? 1;
     const hasAudio = !session.info || audioCount > 0;
     const audioIndex = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
@@ -664,22 +664,22 @@ export class PlaybackManager {
       ? session.subtitleTrack
       : null;
     const crf = process.env.FFMPEG_CRF ?? "23";
-    // VAAPI CQP a libx264 CRF jsou odlišné režimy. Zpětná kompatibilita s jedinou
-    // původní hodnotou zůstává, ale nové instalace je mohou ladit nezávisle.
+    // VAAPI CQP and libx264 CRF are different modes. Compatibility with the single original
+    // value stays, but new installs can tune them independently.
     const vaapiQp = process.env.VAAPI_QP ?? crf;
     const args = ["-hide_banner", "-loglevel", "warning", "-nostdin"];
-    // -ss před -i seekuje přes HTTP Range, takže se nepřenáší nic před požadovanou pozicí.
-    // U kopie videa musí i zvuk začít na klíčovém snímku (noaccurate_seek): přesný ořez zvuku
-    // by nechal video napřed a vzniklou díru ve zvuku přehrávač řeší rozjetou synchronizací.
+    // -ss before -i seeks over HTTP Range, so nothing before the wanted position is transferred.
+    // With a copied video the audio must start on a keyframe too (noaccurate_seek): trimming the
+    // audio exactly would leave the video ahead, and the player answers that gap with drifting sync.
     if (offset > 0) {
       if (copyVideo) args.push("-noaccurate_seek");
       args.push("-ss", offset.toFixed(3));
     }
-    // Když funguje VAAPI video processing, můžeme nechat dekódování, scaling i encoding
-    // na GPU. Slabší Intel GPU v Synology ale často umí jen encoder. V takovém případě
-    // nedáváme FFmpegu -hwaccel: dekóduje a škáluje v RAM a explicitně inicializované
-    // zařízení použije až hwupload + h264_vaapi. Vyhneme se tak problematickému převodu
-    // VAAPI surfaces zpět do systémové paměti.
+    // Where VAAPI video processing works, decoding, scaling and encoding can all stay on the
+    // GPU. The weaker Intel GPUs in a Synology often manage the encoder only. In that case
+    // FFmpeg gets no -hwaccel: it decodes and scales in RAM, and the explicitly initialised
+    // device is used only by hwupload + h264_vaapi. That avoids the troublesome trip of VAAPI
+    // surfaces back into system memory.
     if (!copyVideo && hardware) {
       if (this.vaapiScaling) {
         args.push("-hwaccel", "vaapi", "-hwaccel_device", this.vaapiDevice!, "-hwaccel_output_format", "vaapi");
@@ -687,31 +687,31 @@ export class PlaybackManager {
         args.push("-init_hw_device", `vaapi=va:${this.vaapiDevice!}`, "-filter_hw_device", "va");
       }
     }
-    // Náskok se platí zápisem na disk: při přebalení 8x rychleji než reálný čas nasype
-    // FFmpeg ~340 MB za 20 s a slabší NAS se zadusí protlačováním špinavých stránek.
-    // Trojka drží posun stejně svižný (rozhoduje počáteční nával), ale zápis je třetinový.
+    // A lead is paid for in disk writes: repackaging at 8x real time pours ~340 MB out of
+    // FFmpeg in 20 s and a weaker NAS chokes pushing dirty pages through.
+    // Three keeps seeking just as brisk (the initial burst is what counts) at a third of the writes.
     args.push("-readrate", copyVideo ? process.env.FFMPEG_READRATE_REMUX ?? "3" : process.env.FFMPEG_READRATE ?? "1.5");
-    // Prvních pár desítek sekund se čte plnou rychlostí, ať je první segment hotový co nejdřív;
-    // teprve potom nastoupí brzda proti zbytečnému stahování celého souboru.
+    // The first few dozen seconds are read at full speed so the first segment is ready as soon as
+    // possible; only then does the brake against downloading the whole file step in.
     if (this.initialBurst) args.push("-readrate_initial_burst", process.env.FFMPEG_BURST ?? "30");
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
     args.push("-map", "0:v:0?");
     if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
     if (subtitle !== null) args.push("-map", `0:s:${subtitle}?`);
     args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
-    // Kopie videa po -ss začíná na klíčovém snímku před cílem, takže má záporné časové značky.
-    // fMP4 je neumí zapsat a posouval by každou stopu zvlášť — zvuk by se rozjel o vzdálenost
-    // ke klíčovému snímku. make_zero posune všechny stopy stejně a synchronizaci zachová.
+    // A copied video after -ss starts at the keyframe before the target, so its timestamps are negative.
+    // fMP4 cannot write those and would shift each track on its own -- the audio would drift by the
+    // distance to that keyframe. make_zero shifts every track alike and keeps them in sync.
     args.push("-avoid_negative_ts", "make_zero");
 
     if (copyVideo) {
       args.push("-c:v", "copy");
-      // Safari přehraje HEVC v fMP4 jen pod tagem hvc1, s výchozím hev1 stream odmítne.
+      // Safari plays HEVC in fMP4 only under the hvc1 tag; with the default hev1 it refuses the stream.
       if (sourceVideo === "hevc") args.push("-tag:v", "hvc1");
     }
-    // Klíčový snímek každé 2 s drží segmenty krátké: HLS smí řezat jen na klíčových snímcích,
-    // takže delší GOP by protahoval čekání na první segment po startu i po každém posunu.
-    // min(kvalita, ih) zabrání zvětšování obrazu, když je zdroj menší než zvolená kvalita.
+    // A keyframe every 2 s keeps segments short: HLS may only cut on keyframes, so a longer GOP
+    // would stretch the wait for the first segment after a start and after every seek.
+    // min(quality, ih) stops the picture being blown up when the source is smaller than the chosen quality.
     else if (hardware) {
       const resize = quality !== null ? `w=-2:h=min(${quality}\\,ih)` : "";
       const filters = this.vaapiScaling
@@ -727,17 +727,17 @@ export class PlaybackManager {
       args.push("-c:v", "libx264", "-preset", process.env.FFMPEG_PRESET ?? "veryfast", "-crf", crf, "-pix_fmt", "yuv420p", "-force_key_frames", "expr:gte(t,n_forced*2)");
       if (bitrate) args.push("-maxrate", bitrate, "-bufsize", bitrate);
     }
-    // Audio passthrough má smysl jen u remuxu. Při transkódování obrazu může zejména
-    // kopírované E-AC-3 zablokovat inicializaci fMP4 HLS ("codec frame size is not set").
-    // AAC je pro webové klienty nejspolehlivější a jeho převod zatěžuje NAS minimálně.
+    // Audio passthrough makes sense only for a remux. While the picture is transcoded, copied
+    // E-AC-3 in particular can block fMP4 HLS initialisation ("codec frame size is not set").
+    // AAC is the most reliable for web clients and converting it costs the NAS almost nothing.
     const selectedAudioCodec = session.info?.audioTracks[audioIndex]?.codec ?? session.info?.audio?.codec ?? "";
     const passthroughAudio = copyVideo && copyAudio
       && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(selectedAudioCodec));
     if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
     if (subtitle !== null) args.push("-c:s", "webvtt");
 
-    // fMP4 segmenty: jediný způsob, jak propustit HEVC nebo AC3 bez překódování.
-    // Vestavěné titulky jdou ven jako vlastní WebVTT stopa ze stejného průchodu, bez druhého stažení.
+    // fMP4 segments: the only way to let HEVC or AC3 through without re-encoding.
+    // Embedded subtitles leave as their own WebVTT track from the same pass, with no second download.
     args.push("-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "event",
       "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
       "-master_pl_name", "master.m3u8",
@@ -746,7 +746,7 @@ export class PlaybackManager {
     return args;
   }
 
-  /** Čeká na skutečný konec procesu: dokud FFmpeg žije, zapisuje segmenty a adresář nejde smazat. */
+  /** Waits for the process to really end: while FFmpeg lives it writes segments and the directory cannot be deleted. */
   private kill(session: Session): Promise<void> {
     const child = session.process;
     session.process = undefined;

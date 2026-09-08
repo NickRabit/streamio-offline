@@ -4,7 +4,7 @@ import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 import { defaultDownloadSettings } from "./naming.js";
 import { defaultSettings } from "./store.js";
 
-test("záloha zachová nastavení, pořadí a citlivou URL doplňku", () => {
+test("a backup keeps the settings, the order and the addon's sensitive URL", () => {
   const settings = { ...defaultSettings(), concurrentDownloads: 4, audioLanguage: "sk", realDebridToken: "rd-secret" };
   const backup = createSettingsBackup(settings, [{
     key: "secret-key", manifestUrl: "https://example.com/token/abc/manifest.json", role: "source", enabled: false,
@@ -19,7 +19,7 @@ test("záloha zachová nastavení, pořadí a citlivou URL doplňku", () => {
   assert.deepEqual(parseSettingsBackup(backup).addons, backup.addons);
 });
 
-test("import odmítne cizí formát a normalizuje hodnoty", () => {
+test("an import refuses a foreign format and normalises the values", () => {
   assert.throws(() => parseSettingsBackup({ format: "other", version: 1, settings: {}, addons: [] }), /not a Stremio Offline settings backup/);
   const parsed = parseSettingsBackup({
     format: "stremio-offline-settings", version: 1, settings: { concurrentDownloads: 99, artworkLocation: "elsewhere" },

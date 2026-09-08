@@ -2,82 +2,82 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createSession, DECOY_HASH, hashPassword, LoginThrottle, parseCookies, pruneRevoked, readSession, secretEquals, sessionCookie, verifyPassword } from "./auth.js";
 
-test("otisk hesla neobsahuje heslo a stejné heslo dá pokaždé jiný otisk", async () => {
+test("a password hash holds no password and the same password hashes differently every time", async () => {
   const first = await hashPassword("tajneheslo");
   const second = await hashPassword("tajneheslo");
   assert.ok(!first.includes("tajneheslo"));
-  assert.notEqual(first, second, "náhodná sůl musí otisky odlišit");
+  assert.notEqual(first, second, "the random salt has to make the hashes differ");
   assert.ok(await verifyPassword("tajneheslo", first));
   assert.ok(await verifyPassword("tajneheslo", second));
 });
 
-test("špatné heslo neprojde", async () => {
+test("a wrong password does not pass", async () => {
   const stored = await hashPassword("spravne");
   assert.equal(await verifyPassword("spatne", stored), false);
   assert.equal(await verifyPassword("", stored), false);
 });
 
-test("poškozený otisk nespadne, jen neprojde", async () => {
+test("a corrupted hash does not throw, it only fails", async () => {
   for (const broken of ["", "nesmysl", "scrypt$", "md5$aa$bb"]) {
     assert.equal(await verifyPassword("cokoli", broken), false);
   }
 });
 
-test("platná známka vrátí uživatele i identifikátor relace", () => {
+test("a valid token returns the user and the session id", () => {
   const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
   const info = readSession("tajemstvi", token);
   assert.equal(info?.username, "ondra");
-  assert.ok(info?.sid, "relace musí mít identifikátor, jinak ji nelze odvolat");
+  assert.ok(info?.sid, "a session needs an id, or it cannot be revoked");
 });
 
-test("každé přihlášení dostane vlastní identifikátor relace", () => {
+test("every sign-in gets a session id of its own", () => {
   const a = readSession("tajemstvi", createSession("tajemstvi", "ondra", Date.now() + 60_000));
   const b = readSession("tajemstvi", createSession("tajemstvi", "ondra", Date.now() + 60_000));
-  assert.notEqual(a?.sid, b?.sid, "jinak by odhlášení shodilo i ostatní zařízení");
+  assert.notEqual(a?.sid, b?.sid, "otherwise signing out would drop the other devices too");
 });
 
-test("ze seznamu odvolaných zmizí, co už stejně vypršelo", () => {
+test("the revoked list loses what has expired anyway", () => {
   const kept = Date.now() + 60_000;
   assert.deepEqual(pruneRevoked({ stara: Date.now() - 1000, platna: kept }), { platna: kept });
   assert.deepEqual(pruneRevoked(undefined), {});
 });
 
-test("známka podepsaná jiným tajemstvím neprojde", () => {
+test("a token signed with another secret does not pass", () => {
   const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
   assert.equal(readSession("jine-tajemstvi", token), undefined);
 });
 
-test("prošlá známka neprojde", () => {
+test("an expired token does not pass", () => {
   const token = createSession("tajemstvi", "ondra", Date.now() - 1000);
   assert.equal(readSession("tajemstvi", token), undefined);
 });
 
-test("podvržený obsah známky neprojde", () => {
+test("a forged token payload does not pass", () => {
   const token = createSession("tajemstvi", "ondra", Date.now() + 60_000);
   const [, signature] = token.split(".");
   const cizi = Buffer.from(JSON.stringify({ u: "admin", e: Date.now() + 60_000 })).toString("base64url");
   assert.equal(readSession("tajemstvi", `${cizi}.${signature}`), undefined);
 });
 
-test("nesmyslná známka nespadne", () => {
+test("a nonsensical token does not throw", () => {
   for (const token of [undefined, "", "abc", "a.b.c", "..", "eyJ9.xxx"]) {
     assert.equal(readSession("tajemstvi", token), undefined);
   }
 });
 
-test("cookie se rozebere i s mezerami a rovnítkem v hodnotě", () => {
+test("a cookie parses with spaces and an equals sign in the value", () => {
   assert.deepEqual(parseCookies("a=1; b=2"), { a: "1", b: "2" });
   assert.equal(parseCookies("session=abc.def%3D%3D").session, "abc.def==");
   assert.deepEqual(parseCookies(undefined), {});
   assert.deepEqual(parseCookies("=nesmysl;;"), {});
 });
 
-test("cookie je HttpOnly a bez zapamatování nepřežije zavření prohlížeče", () => {
+test("the cookie is HttpOnly and without remember-me does not outlive the browser", () => {
   const remembered = sessionCookie("t", true, false);
   assert.match(remembered, /HttpOnly/);
   assert.match(remembered, /SameSite=Lax/);
   assert.match(remembered, /Max-Age=\d+/);
-  assert.ok(!sessionCookie("t", false, false).includes("Max-Age"), "bez zapamatování žádná trvanlivost");
+  assert.ok(!sessionCookie("t", false, false).includes("Max-Age"), "no remember-me, no persistence");
   assert.ok(!sessionCookie("t", true, false).includes("Secure"), "na HTTP by Secure cookie zahodilo");
   assert.match(sessionCookie("t", true, true), /Secure/);
 });

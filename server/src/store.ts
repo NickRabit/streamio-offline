@@ -29,12 +29,12 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   librarySuggestions?: Record<string, LibrarySuggestion>;
   /** Episode texts of bound series, keyed by title and numbering, not by path. */
   libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
-  /** Cesty označené jako oblíbené. Nic se nepřesouvá, je to jen příznak. */
+  /** Paths marked as favourites. Nothing is moved; it is only a flag. */
   favorites?: string[];
-  /** Tituly z katalogu označené hvězdičkou. Vede se zvlášť od cest v knihovně,
-   *  protože titul žádný soubor mít nemusí. */
+  /** Starred catalogue titles. Kept apart from library paths, because a title need not have
+   *  a file at all. */
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
-  /** Rozkoukané: klíč titulu na pozici v sekundách. */
+  /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
 const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
 
@@ -71,7 +71,7 @@ export class Store {
   progress() { return this.state.progress ?? {}; }
   watchlist() { return this.state.watchlist ?? {}; }
   private chain: Promise<void> = Promise.resolve();
-  /** Zápisy jdou za sebou, jinak si dvě souběžná uložení přeberou stejný .tmp soubor. */
+  /** Writes run one after another, or two concurrent saves would fight over the same .tmp file. */
   async update(mutator: (state: State) => void) {
     mutator(this.state);
     this.chain = this.chain.then(async () => {

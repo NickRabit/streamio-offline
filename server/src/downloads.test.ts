@@ -71,7 +71,7 @@ const flakyServer = () => new Promise<{ server: Server; port: number; drops: () 
   server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port, drops: () => drops }));
 });
 
-test("po výpadku a rozjetém přenosu se rozpočet pokusů vrátí", async () => {
+test("after an outage and a resumed transfer the retry budget comes back", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-dl-"));
   const { server, port, drops } = await flakyServer();
   const manager = new DownloadQueue(() => 1, () => 1, path.join(directory, "data"), path.join(directory, "downloads"));
@@ -83,9 +83,9 @@ test("po výpadku a rozjetém přenosu se rozpočet pokusů vrátí", async () =
       return job.status === "completed" || job.status === "failed";
     }, 60_000);
     const job = manager.list()[0];
-    assert.equal(drops(), 1, "server měl spojení utnout právě jednou");
-    assert.equal(job.status, "completed", `stahování mělo dojet, stav: ${job.status} ${job.error ?? ""}`);
-    assert.equal(job.retryCount, 0, "po rozjetém přenosu má být rozpočet pokusů zase plný");
+    assert.equal(drops(), 1, "the server should have cut the connection exactly once");
+    assert.equal(job.status, "completed", `the download should have finished, status: ${job.status} ${job.error ?? ""}`);
+    assert.equal(job.retryCount, 0, "after a resumed transfer the retry budget should be full again");
     assert.equal((await stat(path.join(directory, "downloads", job.target))).size, TOTAL);
   } finally {
     manager.stop();
@@ -124,12 +124,12 @@ const runThree = async (perProvider: number) => {
   }
 };
 
-test("z jednoho poskytovatele běží jen povolený počet přenosů", async () => {
-  assert.equal(await runThree(1), 1, "při jedničce se přenosy z jednoho hosta nesmí potkat");
+test("only the allowed number of transfers runs from one provider", async () => {
+  assert.equal(await runThree(1), 1, "at one, transfers from a single host must not meet");
 });
 
-test("vyšší limit na poskytovatele přenosy zase pustí souběžně", async () => {
-  assert.equal(await runThree(2), 2, "při dvojce mají běžet právě dva najednou");
+test("a higher per-provider limit lets transfers run side by side again", async () => {
+  assert.equal(await runThree(2), 2, "at two, exactly two should run at once");
 });
 
 test("the same source cannot be queued twice", async () => {

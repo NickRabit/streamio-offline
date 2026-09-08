@@ -7,19 +7,19 @@ export interface LibraryFile {
   path: string; label: string; season: number | null; episode: number | null; size: number; modified: string;
 }
 
-/** Přehled bez souborů. Složka může mít tisíce položek, seznam se proto dotahuje zvlášť. */
+/** The overview without files. A folder may hold thousands of items, so the list is fetched separately. */
 export type LibraryKind = "movie" | "series" | "collection";
 
 export interface LibrarySummary {
   key: string; kind: LibraryKind; title: string;
   fileCount: number; size: number; modified: string;
-  /** Adresa náhledu, když existuje. Klient neřeší, jestli leží u videa nebo v datech. */
+  /** The thumbnail address, when there is one. The client does not care whether it sits next to the video or in the data directory. */
   poster?: string;
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }
 
 export interface LibraryEntry {
-  /** Složka, ze které položka vznikla. Stabilní i po přejmenování titulu z metadat. */
+  /** The folder the item came from. Stable even after the title is renamed from metadata. */
   key: string;
   kind: LibraryKind;
   title: string;
@@ -30,7 +30,7 @@ export interface LibraryEntry {
   meta?: { type: string; id: string; name?: string; poster?: string; background?: string; description?: string; year?: string };
 }
 
-/** "01 serie", "Season 2", "S03" — složku série píše fronta, ale ručně zkopírované soubory se liší. */
+/** "01 serie", "Season 2", "S03" -- the queue writes the season folder, but hand-copied files differ. */
 export function parseSeason(folder: string): number | null {
   const match = /^(?:s(?:eason)?|serie|série|series|sezona|sezóna)?[\s._-]*(\d{1,3})(?:\s*(?:serie|série|season|sezona|sezóna))?$/i.exec(folder.trim())
     ?? /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(folder.trim());
@@ -38,7 +38,7 @@ export function parseSeason(folder: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-/** "07 - Název", "S01E07 Název", "7." — číslo dílu je vpředu, zbytek je název. */
+/** "07 - Name", "S01E07 Name", "7." -- the episode number comes first, the rest is the name. */
 export function parseEpisode(filename: string): { episode: number | null; title: string } {
   const base = filename.replace(/\.[^.]+$/, "").trim();
   const tagged = /^s\d{1,3}[\s._-]*e(\d{1,4})[\s._-]*(.*)$/i.exec(base);
@@ -71,7 +71,7 @@ export function numberedEpisode(relative: string): { season: number; episode: nu
 
 export const isVideo = (filename: string) => VIDEO.has(path.extname(filename).toLowerCase());
 
-/** Cesta nesmí vést mimo adresář se stahováním, ani přes symlink. */
+/** The path must not lead outside the download directory, not even through a symlink. */
 export function resolveInside(root: string, relative: string): string | undefined {
   const base = path.resolve(root);
   const target = path.resolve(base, relative);
@@ -79,7 +79,7 @@ export function resolveInside(root: string, relative: string): string | undefine
   return target === base || target.startsWith(prefix) ? target : undefined;
 }
 
-/** Přepíše cestu samotné položky i všech jejích potomků. */
+/** Rewrites the path of the item itself and of everything under it. */
 export function remapPath(value: string, from: string, to: string): string {
   return value === from || value.startsWith(`${from}${path.sep}`) ? to + value.slice(from.length) : value;
 }
@@ -88,9 +88,9 @@ export function isPathWithin(value: string, parent: string): boolean {
   return value === parent || value.startsWith(`${parent}${path.sep}`);
 }
 
-/** Tituly katalogu, na které po smazání cesty už v knihovně nic neukazuje.
- * Co drží i jiná cesta -- třeba seriál rozdělený do dvou složek --, zůstává:
- * mazání jedné z nich neznamená, že titul z knihovny zmizel. */
+/** Catalogue titles nothing in the library points at once the path is deleted.
+ * What another path still holds -- a series split across two folders, say -- stays:
+ * deleting one of them does not mean the title left the library. */
 export function orphanedCatalogKeys(meta: Record<string, { type: string; id: string }>, relative: string): Set<string> {
   const removed = new Set<string>(); const kept = new Set<string>();
   for (const [key, value] of Object.entries(meta)) {
@@ -105,7 +105,7 @@ export interface FoundFile { relative: string; size: number; modified: string }
 
 /** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles. */
 export async function listVideos(root: string, relative = "", depth = 0): Promise<FoundFile[]> {
-  // Struktura je na uživateli: downloads/serialy/Seriál/01 serie/díl.mkv i hlubší.
+  // The structure is the user's own: downloads/series/Show/01 serie/episode.mkv and deeper.
   if (depth > 8) return [];
   let entries;
   try { entries = await readdir(path.join(root, relative), { withFileTypes: true }); }
@@ -119,17 +119,17 @@ export async function listVideos(root: string, relative = "", depth = 0): Promis
     try {
       const info = await stat(path.join(root, next));
       found.push({ relative: next, size: info.size, modified: info.mtime.toISOString() });
-    } catch { /* soubor mezitím zmizel */ }
+    } catch { /* the file disappeared meanwhile */ }
   }
   return found;
 }
 
-/** Jedna složka je jeden titul. Víc souborů v ní jsou verze nebo díly téhož, ne samostatné položky. */
+/** One folder is one title. Several files in it are versions or episodes of the same thing, not separate items. */
 export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
   const groups = new Map<string, FoundFile[]>();
   for (const file of files) {
     const parts = file.relative.split(path.sep);
-    // Soubor ležící rovnou v kořeni nemá složku, zastupuje sám sebe.
+    // A file sitting in the root has no folder and stands for itself.
     const key = parts.length === 1 ? file.relative : parts[0];
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(file);
   }
@@ -150,7 +150,7 @@ export function buildLibrary(files: FoundFile[]): LibraryEntry[] {
 
     return {
       key,
-      // Jeden film, seriál se sezónami, nebo složka s hromadou souborů k procházení.
+      // One film, a series with seasons, or a folder with a pile of files to browse.
       kind: inSeason ? "series" : items.length > 1 ? "collection" : "movie",
       title: key.replace(/\.[^.]+$/, ""),
       files: items,
@@ -168,11 +168,11 @@ export async function scanLibrary(root: string): Promise<LibraryEntry[]> {
 
 export const summarize = ({ files, ...entry }: LibraryEntry): LibrarySummary => ({ ...entry, fileCount: files.length });
 
-/** Složka položky vůči kořeni stahování. Soubor v kořeni vlastní složku nemá. */
+/** The item's folder relative to the download root. A file in the root has no folder of its own. */
 export const entryDirectory = (entry: { key: string; files: { path: string }[] }) =>
   entry.files[0]?.path.includes(path.sep) ? entry.key : "";
 
-/** Výřez souborů jedné položky, volitelně filtrovaný podle názvu. */
+/** A slice of one item's files, optionally filtered by name. */
 export function pageFiles(entry: LibraryEntry, query: string, skip: number, limit: number) {
   const needle = query.trim().toLowerCase();
   const matching = needle ? entry.files.filter((file) => file.label.toLowerCase().includes(needle)) : entry.files;
@@ -181,8 +181,8 @@ export function pageFiles(entry: LibraryEntry, query: string, skip: number, limi
 
 export type LibrarySort = "name" | "added" | "size" | "random";
 
-/** Náhodné pořadí musí být mezi stránkami stejné, jinak by se položky opakovaly.
- *  Klient proto posílá semínko a řazení je z něj odvozené, ne skutečně náhodné. */
+/** A random order has to stay the same across pages, or items would repeat.
+ *  The client therefore sends a seed and the order derives from it rather than being truly random. */
 const seededKey = (value: string, seed: string) => {
   let hash = 2166136261;
   for (const char of `${seed}:${value}`) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); }
@@ -198,14 +198,14 @@ export function sortFiles<T extends { label: string; size: number; modified: str
   list.sort((a, b) => {
     if (sort === "added") return (a.modified.localeCompare(b.modified)) * dir;
     if (sort === "size") return (a.size - b.size) * dir;
-    // Výchozí pořadí drží díly seriálu pohromadě, jinak řadí podle názvu.
+    // The default order keeps episodes of a series together, otherwise it sorts by name.
     return ((a.season ?? 0) - (b.season ?? 0) || (a.episode ?? 0) - (b.episode ?? 0) || a.label.localeCompare(b.label, "cs")) * dir;
   });
   return list;
 }
 
-/** Popíše jednu cestu jako položku seznamu. Používá se pro virtuální složku oblíbených,
- *  kde položky pocházejí z různých míst stromu. */
+/** Describes one path as a list item. Used for the virtual favourites folder, whose items
+ *  come from all over the tree. */
 export async function describePath(root: string, relative: string): Promise<BrowseItem | undefined> {
   const target = resolveInside(root, relative);
   if (!target) return undefined;
@@ -236,10 +236,10 @@ export type BrowseMeta = { year?: string; description?: string; catalogName?: st
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder & BrowseMeta)
   | ({ kind: "file"; favorite?: boolean } & LibraryFile & BrowseMeta);
-/** Jeden seřazený seznam. Dvě pole by při vykreslení pořadí zase rozdělila na skupiny. */
+/** One sorted list. Two arrays would split that order back into groups when rendered. */
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number }
 
-/** Obsah jedné složky: podsložky a videa v ní. Do hloubky se nesestupuje, od toho je proklik. */
+/** The contents of one folder: its subfolders and videos. It does not descend; that is what opening a folder is for. */
 export async function browseDirectory(root: string, relative: string, query = "", skip = 0, limit = 60,
   sort: LibrarySort = "name", descending = false, seed = "", onlyPaths?: ReadonlySet<string>): Promise<BrowseResult> {
   const target = resolveInside(root, relative);
@@ -279,8 +279,8 @@ export async function browseDirectory(root: string, relative: string, query = ""
     } catch { /* it disappeared in the meantime */ }
   }
 
-  // Složky a soubory se řadí jako jeden seznam. Kdyby se braly zvlášť, vznikly by
-  // při řazení podle data nebo velikosti dvě nezávislé řady za sebou.
+  // Folders and files are sorted as one list. Taken separately, sorting by date or size
+  // would produce two independent runs one after the other.
   type Mixed = {
     path: string; label: string; size: number; modified: string;
     season?: number | null; episode?: number | null; folder?: BrowseFolder; file?: LibraryFile;
@@ -289,8 +289,8 @@ export async function browseDirectory(root: string, relative: string, query = ""
     ...folders.map((folder) => ({ path: folder.path, label: folder.name, size: folder.size, modified: folder.modified, folder })),
     ...files.map((file) => ({ path: file.path, label: file.label, size: file.size, modified: file.modified, season: file.season, episode: file.episode, file })),
   ];
-  // Filtr musí proběhnout před stránkováním. Jinak by oblíbená položka na druhé
-  // stránce nebyla nikdy vidět a celkový počet by byl chybný.
+  // The filter has to run before paging. Otherwise a favourite on the second page would
+  // never be seen and the total would be wrong.
   const ordered = sortFiles(mixed, sort, descending, seed)
     .filter((item) => !onlyPaths || onlyPaths.has(item.path));
   const page = ordered.slice(skip, skip + limit);

@@ -7,7 +7,7 @@ import { browseDirectory, buildLibrary, numberedEpisode, isPathWithin, isVideo, 
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
-test("číslo série se pozná z různých zápisů složky", () => {
+test("the season number is recognised in the different folder spellings", () => {
   assert.equal(parseSeason("01 serie"), 1);
   assert.equal(parseSeason("12 série"), 12);
   assert.equal(parseSeason("Season 2"), 2);
@@ -20,27 +20,27 @@ test("číslo série se pozná z různých zápisů složky", () => {
   assert.equal(parseSeason("Film 2"), null);
 });
 
-test("z názvu dílu se oddělí číslo a titulek", () => {
+test("the episode number and the title split out of the file name", () => {
   assert.deepEqual(parseEpisode("07 - Vánoce.mkv"), { episode: 7, title: "Vánoce" });
   assert.deepEqual(parseEpisode("S01E06 The Date.mkv"), { episode: 6, title: "The Date" });
   assert.deepEqual(parseEpisode("03.mkv"), { episode: 3, title: "Epizoda 3" });
   assert.deepEqual(parseEpisode("Bonus.mkv"), { episode: null, title: "Bonus" });
 });
 
-test("víc souborů v jedné složce je jedna položka, ne několik", () => {
-  // Přesně případ, kdy se složka objevila dvakrát: jednou za každý soubor.
+test("several files in one folder are one item, not several", () => {
+  // Exactly the case where the folder showed up twice: once per file.
   const library = buildLibrary([
     file("xxx/prvni.mp4", 10),
     file("xxx/druhy.mp4", 20),
   ]);
-  assert.equal(library.length, 1, "složka se nesmí opakovat");
+  assert.equal(library.length, 1, "the folder must not repeat");
   assert.equal(library[0].title, "xxx");
-  assert.equal(library[0].kind, "collection", "složka s víc soubory se prochází, není to film");
+  assert.equal(library[0].kind, "collection", "a folder with several files is browsed, it is not a film");
   assert.equal(library[0].files.length, 2);
-  assert.equal(library[0].size, 30, "velikost je součtem souborů ve složce");
+  assert.equal(library[0].size, 30, "the size is the sum of the files in the folder");
 });
 
-test("epizody se poskládají pod seriál a seřadí", () => {
+test("episodes are gathered under the series and sorted", () => {
   const library = buildLibrary([
     file("Friday Night Dinner/01 serie/06 - The Date.mkv"),
     file("Friday Night Dinner/01 serie/02 - The Jingle.mkv"),
@@ -54,26 +54,26 @@ test("epizody se poskládají pod seriál a seřadí", () => {
   assert.deepEqual(serial.files.map((f) => f.label), ["The Jingle", "The Date", "Nový"]);
 });
 
-test("film ve vlastní složce se pojmenuje podle složky", () => {
+test("a film in a folder of its own is named after the folder", () => {
   const [movie] = buildLibrary([file("The Matrix/The Matrix.mkv")]);
   assert.equal(movie.kind, "movie");
   assert.equal(movie.title, "The Matrix");
   assert.equal(movie.files[0].path, "The Matrix/The Matrix.mkv");
 });
 
-test("soubor v kořeni stojí sám za sebe", () => {
+test("a file in the root stands for itself", () => {
   const library = buildLibrary([file("Interstellar.avi"), file("Jiny.mkv")]);
-  assert.equal(library.length, 2, "kořenové soubory se neslučují dohromady");
+  assert.equal(library.length, 2, "root files are not merged together");
   assert.deepEqual(library.map((e) => e.title).sort(), ["Interstellar", "Jiny"]);
 });
 
-test("složka se sezónami je seriál i když má díly volně vedle", () => {
+test("a folder with seasons is a series even with loose episodes beside them", () => {
   const [entry] = buildLibrary([file("S/01 serie/01.mkv"), file("S/bonus.mkv")]);
   assert.equal(entry.kind, "series");
   assert.equal(entry.files.length, 2);
 });
 
-test("nejnovější přírůstky jsou nahoře", () => {
+test("the newest additions come first", () => {
   const library = buildLibrary([
     file("Stary/Stary.mkv", 1, "2025-01-01T00:00:00.000Z"),
     file("Novy/Novy.mkv", 1, "2026-06-01T00:00:00.000Z"),
@@ -81,55 +81,55 @@ test("nejnovější přírůstky jsou nahoře", () => {
   assert.deepEqual(library.map((item) => item.title), ["Novy", "Stary"]);
 });
 
-test("mimo adresář se stahováním se cesta nedostane", () => {
+test("a path cannot get outside the download directory", () => {
   const root = "/downloads";
   assert.equal(resolveInside(root, "Film/Film.mkv"), "/downloads/Film/Film.mkv");
   assert.equal(resolveInside(root, "../etc/passwd"), undefined);
   assert.equal(resolveInside(root, "/etc/passwd"), undefined);
   assert.equal(resolveInside(root, "Film/../../secret"), undefined);
-  // Adresář, jehož jméno začíná stejně, není totéž co podadresář.
+  // A directory whose name merely starts the same is not a subdirectory.
   assert.equal(resolveInside("/downloads", "../downloads-jine/x.mkv"), undefined);
 });
 
-test("přejmenování cesty zachová potomky a nesáhne na podobný název", () => {
+test("renaming a path keeps its children and leaves a similar name alone", () => {
   assert.equal(remapPath("Serial/01 serie/01.mkv", "Serial", "Novy serial"), "Novy serial/01 serie/01.mkv");
   assert.equal(remapPath("Serial 2/01.mkv", "Serial", "Novy serial"), "Serial 2/01.mkv");
   assert.equal(isPathWithin("Serial/01 serie/01.mkv", "Serial"), true);
   assert.equal(isPathWithin("Serial 2/01.mkv", "Serial"), false);
 });
 
-test("nevideo soubory se ignorují", () => {
+test("non-video files are ignored", () => {
   assert.equal(isVideo("film.mkv"), true);
   assert.equal(isVideo("film.MP4"), true);
   assert.equal(isVideo("titulky.srt"), false);
   assert.equal(isVideo("film.mkv.part"), false);
 });
 
-test("přehled neposílá soubory, jen jejich počet", () => {
+test("the overview sends no files, only their count", () => {
   const [entry] = buildLibrary([file("xxx/a.mp4", 5), file("xxx/b.mp4", 7)]);
   const prehled = summarize(entry);
   assert.equal(prehled.fileCount, 2);
   assert.equal(prehled.size, 12);
-  assert.ok(!("files" in prehled), "seznam souborů do přehledu nepatří");
+  assert.ok(!("files" in prehled), "the file list does not belong in the overview");
 });
 
-test("velká složka se vydává po stránkách", () => {
+test("a large folder is handed out page by page", () => {
   const many = Array.from({ length: 1000 }, (_, i) => file(`xxx/klip ${String(i).padStart(4, "0")}.mp4`, 1));
   const [entry] = buildLibrary(many);
   assert.equal(entry.files.length, 1000);
 
   const prvni = pageFiles(entry, "", 0, 100);
   assert.equal(prvni.files.length, 100);
-  assert.equal(prvni.total, 1000, "celkový počet se hlásí i při stránkování");
+  assert.equal(prvni.total, 1000, "the total is reported even while paging");
 
   const dalsi = pageFiles(entry, "", 100, 100);
-  assert.notEqual(prvni.files[0].path, dalsi.files[0].path, "druhá stránka nesmí opakovat první");
+  assert.notEqual(prvni.files[0].path, dalsi.files[0].path, "the second page must not repeat the first");
 
   const posledni = pageFiles(entry, "", 950, 100);
-  assert.equal(posledni.files.length, 50, "za koncem se nic nedomýšlí");
+  assert.equal(posledni.files.length, 50, "nothing is invented past the end");
 });
 
-test("filtr zúží seznam i celkový počet", () => {
+test("the filter narrows both the list and the total", () => {
   const many = [
     ...Array.from({ length: 30 }, (_, i) => file(`xxx/klip ${i}.mp4`, 1)),
     file("xxx/jiny nazev.mp4", 1),
@@ -138,21 +138,21 @@ test("filtr zúží seznam i celkový počet", () => {
   const filtr = pageFiles(entry, "jiny", 0, 100);
   assert.equal(filtr.total, 1);
   assert.equal(filtr.files[0].label, "jiny nazev");
-  assert.equal(pageFiles(entry, "KLIP", 0, 100).total, 30, "filtr nerozlišuje velikost písmen");
+  assert.equal(pageFiles(entry, "KLIP", 0, 100).total, 30, "the filter is case-insensitive");
 });
 
-test("druh položky se pozná podle obsahu složky", () => {
+test("the item kind follows from what the folder holds", () => {
   const [film] = buildLibrary([file("Matrix/Matrix.mkv")]);
   assert.equal(film.kind, "movie", "jeden soubor je film");
 
   const [serial] = buildLibrary([file("S/01 serie/01.mkv"), file("S/01 serie/02.mkv")]);
-  assert.equal(serial.kind, "series", "složka se sezónou je seriál");
+  assert.equal(serial.kind, "series", "a folder with a season is a series");
 
   const [kolekce] = buildLibrary([file("xxx/a.mp4"), file("xxx/b.mp4"), file("xxx/c.mp4")]);
-  assert.equal(kolekce.kind, "collection", "hromada souborů je kolekce k procházení");
+  assert.equal(kolekce.kind, "collection", "a pile of files is a collection to browse");
 });
 
-test("řazení nabízí jméno, přidání, velikost a náhodu", () => {
+test("sorting offers name, date added, size and random", () => {
   const files = [
     { path: "a", label: "Cesta", size: 30, modified: "2026-01-01T00:00:00.000Z" },
     { path: "b", label: "Alej", size: 10, modified: "2026-03-01T00:00:00.000Z" },
@@ -164,17 +164,17 @@ test("řazení nabízí jméno, přidání, velikost a náhodu", () => {
   assert.deepEqual(sortFiles(files, "added", true).map((f) => f.label), ["Alej", "Bota", "Cesta"]);
 });
 
-test("náhodné pořadí je pro stejné semínko stabilní, jinak by se stránky opakovaly", () => {
+test("a random order is stable for one seed, or pages would repeat", () => {
   const files = Array.from({ length: 40 }, (_, i) => ({ path: `p${i}`, label: `f${i}`, size: i, modified: "2026-01-01T00:00:00.000Z" }));
   const prvni = sortFiles(files, "random", false, "seed-1").map((f) => f.path);
   const znovu = sortFiles(files, "random", false, "seed-1").map((f) => f.path);
   const jine = sortFiles(files, "random", false, "seed-2").map((f) => f.path);
-  assert.deepEqual(prvni, znovu, "stejné semínko musí dát stejné pořadí");
-  assert.notDeepEqual(prvni, jine, "jiné semínko má zamíchat jinak");
-  assert.equal(new Set(prvni).size, 40, "nic se neztratí ani nezdvojí");
+  assert.deepEqual(prvni, znovu, "the same seed has to give the same order");
+  assert.notDeepEqual(prvni, jine, "a different seed has to shuffle differently");
+  assert.equal(new Set(prvni).size, 40, "nothing is lost or duplicated");
 });
 
-test("řazení platí i na složky, ne jen na soubory", () => {
+test("sorting applies to folders too, not only to files", () => {
   const folders = [
     { path: "b", label: "Beta", size: 10, modified: "2026-03-01T00:00:00.000Z" },
     { path: "a", label: "Alfa", size: 30, modified: "2026-01-01T00:00:00.000Z" },
@@ -183,7 +183,7 @@ test("řazení platí i na složky, ne jen na soubory", () => {
   assert.deepEqual(sortFiles(folders, "added", true).map((f) => f.label), ["Beta", "Alfa"]);
 });
 
-test("oblíbené se filtrují před stránkováním", async () => {
+test("favourites are filtered before paging", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "stremio-library-"));
   try {
     await mkdir(path.join(root, "kolekce"));
@@ -211,14 +211,14 @@ test("listVideos walks the same tree scanLibrary uses", async () => {
   }
 });
 
-test("smazaný titul přestane mít vazbu na katalog", () => {
+test("a deleted title loses its catalogue binding", () => {
   const meta = {
     "filmy/Duna": { type: "movie", id: "tt1160419" },
     "serialy/Přátelé": { type: "series", id: "tt0108778" },
   };
   assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna")], ["movie:tt1160419"]);
-  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy")], ["movie:tt1160419"], "smazaná nadsložka platí taky");
-  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna 2")], [], "cizí cesta nic nezapomíná");
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy")], ["movie:tt1160419"], "a deleted parent folder counts too");
+  assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna 2")], [], "an unrelated path forgets nothing");
 });
 
 test("unmatch sentinel is not a catalog orphan", () => {
@@ -229,12 +229,12 @@ test("unmatch sentinel is not a catalog orphan", () => {
   assert.deepEqual([...orphanedCatalogKeys(meta, "filmy/Duna")], []);
 });
 
-test("titul držený ještě jinou cestou zůstává", () => {
+test("a title another path still holds stays", () => {
   const meta = {
     "serialy/Přátelé": { type: "series", id: "tt0108778" },
     "archiv/Přátelé": { type: "series", id: "tt0108778" },
   };
-  assert.deepEqual([...orphanedCatalogKeys(meta, "serialy/Přátelé")], [], "druhá složka titul pořád drží");
+  assert.deepEqual([...orphanedCatalogKeys(meta, "serialy/Přátelé")], [], "the second folder still holds the title");
   assert.deepEqual([...orphanedCatalogKeys(meta, "archiv")], []);
 });
 

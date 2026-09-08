@@ -6,7 +6,7 @@ import { log } from "./logger.js";
 const run = promisify(execFile);
 
 export interface Track {
-  /** Index v rámci vlastního typu, tedy N v mapování 0:a:N nebo 0:s:N. */
+  /** The index within its own type, that is N in the mapping 0:a:N or 0:s:N. */
   index: number;
   codec: string;
   language?: string;
@@ -27,7 +27,7 @@ export interface MediaInfo {
 
 interface ProbeStream { codec_type?: string; codec_name?: string; profile?: string; pix_fmt?: string; width?: number; height?: number; channels?: number; disposition?: Record<string, number>; tags?: Record<string, string> }
 
-// Obrázkové titulky prohlížeč nezobrazí a do WebVTT je převést nelze.
+// The browser cannot show image subtitles and they cannot be converted to WebVTT.
 const BITMAP_SUBTITLES = new Set(["dvd_subtitle", "hdmv_pgs_subtitle", "dvb_subtitle", "xsub"]);
 
 const toTrack = (stream: ProbeStream, index: number): Track => ({
@@ -40,10 +40,10 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
   forced: stream.disposition?.forced === 1,
 });
 
-/** Zjistí skutečné kodeky zdroje. Doplňky posílají nanejvýš nezávazný hint, ffprobe říká pravdu. */
+/** Finds the source's real codecs. An addon sends a non-binding hint at best; ffprobe tells the truth. */
 export async function probe(input: string): Promise<MediaInfo | undefined> {
-  // Výchozí limity čtou ze vzdáleného zdroje jen pár megabajtů a u běžných souborů stačí.
-  // Hluboká sonda (až 100 MB) přijde na řadu, jen když rychlé kolo něco podstatného nenajde.
+  // The default limits read only a few megabytes from a remote source, which is enough for ordinary files.
+  // The deep probe (up to 100 MB) comes in only when the quick round misses something that matters.
   const fast = await inspect(input, [], 20_000, "fast");
   if (fast?.video && fast.duration && fast.audioTracks.length) return fast;
   log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast ? { video: fast.video?.codec, duration: fast.duration, audioTracks: fast.audioTracks.length } : null });
@@ -73,8 +73,8 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       audioTracks, subtitleTracks,
     };
   } catch (error) {
-    // Bez tohohle záznamu se nepovedená sonda projeví až o dvě vrstvy dál jako
-    // "zdroj se nepodařilo rozebrat", bez jediné stopy po tom, co ffprobe řeklo.
+    // Without this entry a failed probe surfaces two layers later as "the source could not be
+    // parsed", with not a trace of what ffprobe actually said.
     const failure = error as { stderr?: string; killed?: boolean; code?: number };
     log("WARN", "ffprobe did not read the source", {
       stage, timeout, timedOut: Boolean(failure.killed), exitCode: failure.code,
