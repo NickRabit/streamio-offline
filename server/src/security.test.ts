@@ -75,7 +75,7 @@ test("publicAddonRestricted is an allowlist and drops token-adjacent fields", ()
   const addon = sampleAddon();
   (addon.manifest as { extra?: string }).extra = "should-not-leak";
   const published = publicAddonRestricted(addon);
-  assert.deepEqual(Object.keys(published).sort(), ["enabled", "key", "manifest", "role"]);
+  assert.deepEqual(Object.keys(published).sort(), ["enabled", "essential", "key", "manifest", "role"]);
   assert.deepEqual(Object.keys(published.manifest).sort(), ["behaviorHints", "description", "id", "logo", "name", "resources", "version"]);
   assert.equal("displayUrl" in published, false);
   assert.equal("downloadSettings" in published, false);

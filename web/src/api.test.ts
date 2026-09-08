@@ -32,9 +32,9 @@ describe("request", () => {
     fetchMock.mockImplementation(() => Promise.resolve(json({})));
     await api.libraryIdentity("Foo/Bar");
     expect(String(fetchMock.mock.calls[0][0])).toContain("/api/library/identity?path=Foo%2FBar");
-    await api.matchLibraryItem({ path: "Foo", id: "tt1", type: "movie", locked: true });
+    await api.matchLibraryItem({ path: "Foo", id: "tt1", type: "movie" });
     expect(optionsOf(1).method).toBe("POST");
-    expect(optionsOf(1).body).toBe(JSON.stringify({ path: "Foo", id: "tt1", type: "movie", locked: true }));
+    expect(optionsOf(1).body).toBe(JSON.stringify({ path: "Foo", id: "tt1", type: "movie" }));
     await api.startLibraryScan();
     expect(String(fetchMock.mock.calls[2][0])).toBe("/api/library/scan");
     expect(optionsOf(2).method).toBe("POST");

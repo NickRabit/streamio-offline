@@ -4,9 +4,9 @@ import type { AddonRecord } from "./types.js";
 import type { AuthState } from "./auth.js";
 import { normalizeDownloadSettings } from "./naming.js";
 import type { UiLanguage } from "./language.js";
-import type { LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
+import type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion } from "./library-match.js";
 
-export type { LibraryMetaRecord, LibrarySuggestion };
+export type { LibraryEpisodeRecord, LibraryMetaRecord, LibrarySuggestion };
 
 export type TileSize = "compact" | "small" | "medium" | "large";
 export interface Settings {
@@ -27,6 +27,8 @@ export function publicSettings(settings: Settings): PublicSettings {
 interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: boolean; auth?: AuthState;
   libraryMeta?: Record<string, LibraryMetaRecord>;
   librarySuggestions?: Record<string, LibrarySuggestion>;
+  /** Episode texts of bound series, keyed by title and numbering, not by path. */
+  libraryEpisodes?: Record<string, LibraryEpisodeRecord>;
   /** Cesty označené jako oblíbené. Nic se nepřesouvá, je to jen příznak. */
   favorites?: string[];
   /** Tituly z katalogu označené hvězdičkou. Vede se zvlášť od cest v knihovně,
@@ -64,6 +66,7 @@ export class Store {
   auth() { return this.state.auth; }
   libraryMeta() { return this.state.libraryMeta ?? {}; }
   librarySuggestions() { return this.state.librarySuggestions ?? {}; }
+  libraryEpisodes() { return this.state.libraryEpisodes ?? {}; }
   favorites() { return this.state.favorites ?? []; }
   progress() { return this.state.progress ?? {}; }
   watchlist() { return this.state.watchlist ?? {}; }

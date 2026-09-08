@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isPathWithin, isVideo, parseSeason, remapPath, type FoundFile } from "./library.js";
+import { isPathWithin, isVideo, numberedEpisode, parseSeason, remapPath, type FoundFile } from "./library.js";
 import { parseMediaPath, type ParsedMedia } from "./library-parse.js";
 import type { MetaItem } from "./types.js";
 
@@ -20,12 +20,15 @@ export interface ScoredHit {
   autoEligible: boolean;
 }
 
+/** A scan result for one title unit. An entry without an id is the memory of a
+ *  search that found nothing, so the next scan does not repeat it. */
 export interface LibrarySuggestion {
   type: string;
   id: string;
   name: string;
   year?: number;
   score: number;
+  scannedAt?: string;
 }
 
 export interface LibraryMetaRecord {
@@ -38,6 +41,22 @@ export interface LibraryMetaRecord {
   year?: string;
   description?: string;
   matchedAt?: string;
+  /** Last time the catalogue was asked to fill the fields above, successful or not. */
+  backfilledAt?: string;
+  /** Set when the binding names one episode instead of a whole title. */
+  season?: number;
+  episode?: number;
+}
+
+/** One episode of a bound series, keyed by title and numbering rather than by path,
+ *  so a rename or a second copy of the same episode reuses it. */
+export interface LibraryEpisodeRecord {
+  season: number;
+  episode: number;
+  name?: string;
+  description?: string;
+  released?: string;
+  thumbnail?: string;
 }
 
 export interface ViewedMeta {
@@ -145,9 +164,12 @@ export function autoAccept(hits: ScoredHit[], nowYear = new Date().getFullYear()
   return Math.max(...years) >= nowYear - 2 ? top : undefined;
 }
 
-export function pickSuggestion(hits: ScoredHit[]): LibrarySuggestion | undefined {
+/** Below this the best hit is noise -- offering it would only teach the user to distrust the list. */
+export const SUGGESTION_MIN_SCORE = 60;
+
+export function pickSuggestion(hits: ScoredHit[], minScore = SUGGESTION_MIN_SCORE): LibrarySuggestion | undefined {
   const top = [...hits].sort((a, b) => b.score - a.score)[0];
-  if (!top) return undefined;
+  if (!top || top.score < minScore) return undefined;
   const year = yearFromMeta(top.item);
   return {
     type: top.item.type,
@@ -156,6 +178,17 @@ export function pickSuggestion(hits: ScoredHit[]): LibrarySuggestion | undefined
     score: top.score,
     ...(year != null ? { year } : {}),
   };
+}
+
+/** Remembers that the unit was searched for and nothing usable came back. */
+export const scanMiss = (kind: TitleKind, at = new Date().toISOString()): LibrarySuggestion =>
+  ({ type: kind, id: "", name: "", score: 0, scannedAt: at });
+
+export const SCAN_MEMORY_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function scannedRecently(suggestion: LibrarySuggestion | undefined, maxAgeMs = SCAN_MEMORY_MS, now = Date.now()): boolean {
+  const at = suggestion?.scannedAt ? Date.parse(suggestion.scannedAt) : NaN;
+  return Number.isFinite(at) && now - at < maxAgeMs;
 }
 
 export function viewMeta(raw?: LibraryMetaRecord): ViewedMeta | undefined {
@@ -183,30 +216,53 @@ export function lookupSkipped(relative: string, records: Record<string, LibraryM
 
 export type MatchStatus = "unmatched" | "matched" | "suggested" | "rejected";
 
-const DESCRIPTION_MAX = 180;
+const DESCRIPTION_MAX = 1200;
+const EPISODE_DESCRIPTION_MAX = 600;
+const MAX_EPISODES = 1000;
+const BACKFILL_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-export function knownTitleOf(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined {
+/** The binding that covers this path, together with the path it is stored at. */
+export function knownTitleEntry(
+  relative: string,
+  records: Record<string, LibraryMetaRecord>,
+): { key: string; record: LibraryMetaRecord } | undefined {
   const parts = relative.split(path.sep);
-  let found = records[relative];
-  for (let depth = parts.length - 1; !found && depth > 0; depth -= 1) found = records[parts.slice(0, depth).join(path.sep)];
-  if (!found || !viewMeta(found)?.id) return undefined;
-  return found;
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const key = parts.slice(0, depth).join(path.sep);
+    const found = records[key];
+    if (!found) continue;
+    return viewMeta(found)?.id ? { key, record: found } : undefined;
+  }
+  return undefined;
 }
 
-/** Clear the binding on this path only. A child of a matched folder gets a sentinel so siblings keep the parent. */
+export function knownTitleOf(relative: string, records: Record<string, LibraryMetaRecord>): LibraryMetaRecord | undefined {
+  return knownTitleEntry(relative, records)?.record;
+}
+
+/** Clear the binding on this path only. A path that still inherits one from a matched
+ *  folder gets a sentinel, so siblings keep the parent while this one comes loose. */
 export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: string): Record<string, LibraryMetaRecord> {
   const next = { ...records };
-  if (next[relative]?.id) {
-    delete next[relative];
-    return next;
-  }
+  const previous = next[relative];
+  delete next[relative];
   const inherited = knownTitleOf(relative, next);
   if (inherited?.id) {
-    next[relative] = { type: inherited.type, id: "", source: "user" };
-    return next;
+    next[relative] = { type: inherited.type, id: "", source: "user", ...(previous?.skipLookup ? { skipLookup: true } : {}) };
+  } else if (previous?.skipLookup) {
+    next[relative] = { type: previous.type, id: "", source: previous.source ?? "user", skipLookup: true };
   }
-  delete next[relative];
   return next;
+}
+
+/** The scan result covering this path, ignoring the memory of a fruitless search. */
+export function suggestionFor(relative: string, suggestions: Record<string, LibrarySuggestion>): LibrarySuggestion | undefined {
+  const parts = relative.split(path.sep);
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const found = suggestions[parts.slice(0, depth).join(path.sep)];
+    if (found?.id) return found;
+  }
+  return undefined;
 }
 
 export function matchStatus(
@@ -216,18 +272,24 @@ export function matchStatus(
 ): MatchStatus {
   if (knownTitleOf(relative, records)?.id) return "matched";
   if (lookupSkipped(relative, records)) return "rejected";
-  const parts = relative.split(path.sep);
-  for (let depth = parts.length; depth >= 1; depth -= 1) {
-    const key = parts.slice(0, depth).join(path.sep);
-    if (suggestions[key]) return "suggested";
-  }
-  return "unmatched";
+  return suggestionFor(relative, suggestions) ? "suggested" : "unmatched";
+}
+
+/** Cut on a word boundary. The stored text is what the detail view shows, so a
+ *  hard slice would lose the rest of the sentence for good. */
+export function clipText(value: string, max: number): string {
+  const text = value.trim().replace(/\s+/g, " ");
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }
 
 export function cacheFieldsFromMeta(meta: MetaItem | null | undefined): { name?: string; year?: string; description?: string } {
   if (!meta) return {};
   const year = yearFromMeta(meta);
-  const description = typeof meta.description === "string" ? meta.description.slice(0, DESCRIPTION_MAX) : undefined;
+  const description = typeof meta.description === "string" && meta.description.trim()
+    ? clipText(meta.description, DESCRIPTION_MAX) : undefined;
   return {
     ...(meta.name ? { name: meta.name } : {}),
     ...(year != null ? { year: String(year) } : {}),
@@ -235,10 +297,73 @@ export function cacheFieldsFromMeta(meta: MetaItem | null | undefined): { name?:
   };
 }
 
-export function needsBackfill(raw?: LibraryMetaRecord): boolean {
+const number = (value: unknown): number | undefined => {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(parsed) ? parsed : undefined;
+};
+const text = (value: unknown): string | undefined => (typeof value === "string" && value.trim() ? value.trim() : undefined);
+
+export const episodeKey = (type: string, id: string, season: number, episode: number) => `${type}:${id}:${season}:${episode}`;
+
+/** Episode rows of a series meta. A catalogue that answers with hundreds of them
+ *  would otherwise blow up the state file, hence the cap. */
+export function episodesFromMeta(meta: MetaItem | null | undefined, limit = MAX_EPISODES): Record<string, LibraryEpisodeRecord> {
+  const out: Record<string, LibraryEpisodeRecord> = {};
+  if (!meta?.id || !Array.isArray(meta.videos)) return out;
+  const type = meta.type || "series";
+  for (const video of meta.videos.slice(0, limit)) {
+    const season = number(video.season);
+    const episode = number(video.episode ?? video.number);
+    if (season == null || episode == null) continue;
+    const name = text(video.name ?? video.title);
+    const description = text(video.overview ?? video.description);
+    const released = text(video.released ?? video.firstAired);
+    const thumbnail = text(video.thumbnail);
+    out[episodeKey(type, meta.id, season, episode)] = {
+      season, episode,
+      ...(name ? { name } : {}),
+      ...(description ? { description: clipText(description, EPISODE_DESCRIPTION_MAX) } : {}),
+      ...(released ? { released } : {}),
+      ...(thumbnail ? { thumbnail } : {}),
+    };
+  }
+  return out;
+}
+
+/** Which episode a file holds: an explicit binding wins, then S01E02 in the name,
+ *  then a plain number inside a season folder. */
+export function episodeNumberOf(relative: string, record?: LibraryMetaRecord): { season: number; episode: number } | undefined {
+  if (record?.episode != null) return { season: record.season ?? 1, episode: record.episode };
+  return numberedEpisode(relative);
+}
+
+export function needsBackfill(raw?: LibraryMetaRecord, now = Date.now()): boolean {
   const viewed = viewMeta(raw);
   if (!viewed?.id) return false;
-  return !raw?.name || raw.year == null || !raw.description;
+  const tried = raw?.backfilledAt ? Date.parse(raw.backfilledAt) : NaN;
+  if (Number.isFinite(tried) && now - tried < BACKFILL_TTL_MS) return false;
+  return !raw?.name || !raw.year || !raw.description;
+}
+
+/** A bound series whose episode rows are not cached yet. */
+export function needsEpisodes(
+  record: LibraryMetaRecord | undefined,
+  numbers: { season: number; episode: number } | undefined,
+  episodes: Record<string, LibraryEpisodeRecord>,
+): boolean {
+  if (!record?.id || record.type !== "series" || !numbers) return false;
+  return !episodes[episodeKey(record.type, record.id, numbers.season, numbers.episode)];
+}
+
+export interface BrowseMetaView {
+  match: MatchStatus;
+  year?: string;
+  description?: string;
+  catalogName?: string;
+  skipLookup?: boolean;
+  season?: number;
+  episode?: number;
+  suggestion?: LibrarySuggestion;
 }
 
 export function browseMeta(
@@ -246,16 +371,41 @@ export function browseMeta(
   label: string,
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
-): { match: MatchStatus; year?: string; description?: string; catalogName?: string; skipLookup?: boolean } {
+  episodes: Record<string, LibraryEpisodeRecord> = {},
+): BrowseMetaView {
   const match = matchStatus(relative, records, suggestions);
   const skipLookup = Boolean(records[relative]?.skipLookup);
-  if (match !== "matched") return { match, ...(skipLookup ? { skipLookup } : {}) };
-  const known = knownTitleOf(relative, records);
-  if (!known) return { match, ...(skipLookup ? { skipLookup } : {}) };
-  const catalogName = known.name && normalizeTitle(known.name) !== normalizeTitle(label) ? known.name : undefined;
+  const base: BrowseMetaView = { match, ...(skipLookup ? { skipLookup } : {}) };
+  if (match === "suggested") {
+    const suggestion = suggestionFor(relative, suggestions);
+    return suggestion ? { ...base, suggestion } : base;
+  }
+  if (match !== "matched") return base;
+  const entry = knownTitleEntry(relative, records);
+  if (!entry) return base;
+  const known = entry.record;
+  const named = (value?: string) => (value && normalizeTitle(value) !== normalizeTitle(label) ? value : undefined);
+
+  if (known.type === "series" && isVideo(path.basename(relative))) {
+    const numbers = episodeNumberOf(relative, records[relative]?.id ? records[relative] : undefined);
+    // Without the episode text the series plot would repeat on every row, which
+    // says nothing about the file in front of the user.
+    const found = numbers ? episodes[episodeKey(known.type, known.id, numbers.season, numbers.episode)] : undefined;
+    const catalogName = named(found?.name);
+    return {
+      ...base,
+      ...(numbers ? { season: numbers.season, episode: numbers.episode } : {}),
+      ...(found?.released?.slice(0, 4).match(/^(19|20)\d{2}$/) ? { year: found.released.slice(0, 4) } : {}),
+      ...(found?.description ? { description: found.description } : {}),
+      ...(catalogName ? { catalogName } : {}),
+    };
+  }
+  // A season folder sits under the series that already carries the plot.
+  if (known.type === "series" && entry.key !== relative) return base;
+
+  const catalogName = named(known.name);
   return {
-    match,
-    ...(skipLookup ? { skipLookup } : {}),
+    ...base,
     ...(known.year ? { year: known.year } : {}),
     ...(known.description ? { description: known.description } : {}),
     ...(catalogName ? { catalogName } : {}),

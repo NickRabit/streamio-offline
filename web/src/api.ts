@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -96,10 +96,12 @@ export const api = {
   deleteLibraryItem: (path: string) => request<void>(`/api/library/item?${q({ path })}`, { method: "DELETE" }),
   renameLibraryItem: (path: string, name: string) => request<{ path: string }>("/api/library/rename", { method: "POST", body: JSON.stringify({ path, name }) }),
   libraryIdentity: (path: string) => request<IdentityPreview>(`/api/library/identity?${q({ path })}`),
-  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; locked?: boolean; skipLookup?: boolean }) =>
+  matchLibraryItem: (body: { path?: string; key?: string; id?: string; type?: string; scope?: "unit" | "file"; season?: number; episode?: number; skipLookup?: boolean }) =>
     request<{ key: string; type: string; id: string | null }>("/api/library/match", { method: "POST", body: JSON.stringify(body) }),
+  librarySuggestions: () => request<{ items: SuggestionRow[]; total: number }>("/api/library/suggestions"),
+  dismissLibrarySuggestion: (key: string) => request<void>(`/api/library/suggestion?${q({ key })}`, { method: "DELETE" }),
   libraryScan: () => request<ScanState>("/api/library/scan"),
-  startLibraryScan: () => request<ScanState>("/api/library/scan", { method: "POST" }),
+  startLibraryScan: (force = false) => request<ScanState>("/api/library/scan", { method: "POST", body: JSON.stringify({ force }) }),
   stopLibraryScan: () => request<void>("/api/library/scan/stop", { method: "POST" }),
   watchlist: () => request<WatchlistEntry[]>("/api/watchlist"),
   setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>

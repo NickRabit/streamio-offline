@@ -32,7 +32,7 @@ export interface LibraryEntry {
 
 /** "01 serie", "Season 2", "S03" — složku série píše fronta, ale ručně zkopírované soubory se liší. */
 export function parseSeason(folder: string): number | null {
-  const match = /^(?:s(?:eason)?\s*)?(\d{1,3})(?:\s*(?:serie|série|season|sezona|sezóna))?$/i.exec(folder.trim())
+  const match = /^(?:s(?:eason)?|serie|série|series|sezona|sezóna)?[\s._-]*(\d{1,3})(?:\s*(?:serie|série|season|sezona|sezóna))?$/i.exec(folder.trim())
     ?? /(?:^|\D)s(\d{1,3})(?:\D|$)/i.exec(folder.trim());
   const value = match ? Number(match[1]) : NaN;
   return Number.isFinite(value) ? value : null;
@@ -49,6 +49,24 @@ export function parseEpisode(filename: string): { episode: number | null; title:
     return { episode, title: numbered[2].trim() || `Epizoda ${episode}` };
   }
   return { episode: null, title: base };
+}
+
+const TAGGED_EPISODE = /\bs(\d{1,3})[\s._-]*e(\d{1,4})\b/i;
+const CROSS_EPISODE = /\b(\d{1,2})x(\d{1,3})\b/i;
+
+/** Season and episode of a video file: "S01E02" or "1x02" in its own name first,
+ *  then a plain leading number inside a season folder. */
+export function numberedEpisode(relative: string): { season: number; episode: number } | undefined {
+  const base = path.basename(relative);
+  if (!isVideo(base)) return undefined;
+  const name = base.replace(/\.[^.]+$/, "");
+  const tagged = TAGGED_EPISODE.exec(name) ?? CROSS_EPISODE.exec(name);
+  if (tagged) return { season: Number(tagged[1]), episode: Number(tagged[2]) };
+  const folder = path.dirname(relative);
+  const season = folder && folder !== "." ? parseSeason(path.basename(folder)) : null;
+  const { episode } = parseEpisode(base);
+  if (season != null && episode != null) return { season, episode };
+  return undefined;
 }
 
 export const isVideo = (filename: string) => VIDEO.has(path.extname(filename).toLowerCase());
@@ -252,10 +270,13 @@ export async function browseDirectory(root: string, relative: string, query = ""
     if (needle && !label.toLowerCase().includes(needle)) continue;
     try {
       const info = await stat(path.join(root, childRelative));
-      const season = parseSeason(path.basename(relative));
-      const { episode } = parseEpisode(entry.name);
-      files.push({ path: childRelative, label, season, episode: season != null ? episode : null, size: info.size, modified: info.mtime.toISOString() });
-    } catch { /* zmizelo mezitím */ }
+      const numbers = numberedEpisode(childRelative);
+      files.push({
+        path: childRelative, label,
+        season: numbers?.season ?? null, episode: numbers?.episode ?? null,
+        size: info.size, modified: info.mtime.toISOString(),
+      });
+    } catch { /* it disappeared in the meantime */ }
   }
 
   // Složky a soubory se řadí jako jeden seznam. Kdyby se braly zvlášť, vznikly by

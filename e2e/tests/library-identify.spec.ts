@@ -5,10 +5,15 @@ import path from "node:path";
 const sample = path.resolve("e2e/fixtures/media/sample.mp4");
 const folderName = "Zkušební film (2024)";
 const folder = path.resolve("e2e/.tmp/downloads", folderName);
+const seriesName = "Zkušební seriál";
+const seriesFolder = path.resolve("e2e/.tmp/downloads", seriesName);
 
 test.beforeAll(async () => {
   await mkdir(folder, { recursive: true });
   await copyFile(sample, path.join(folder, "Zkušební film.mkv"));
+  await mkdir(seriesFolder, { recursive: true });
+  await copyFile(sample, path.join(seriesFolder, "Zkušební seriál S01E01.mkv"));
+  await copyFile(sample, path.join(seriesFolder, "Zkušební seriál S01E02.mkv"));
 });
 
 const fixtureTile = (page: Page) => page.locator(".browse-item", { hasText: folderName });
@@ -82,4 +87,25 @@ test("skip catalog lookup keeps the title unmatched through a scan", async ({ pa
   await page.getByRole("button", { name: `Možnosti: ${folderName}` }).click();
   await page.getByRole("button", { name: "Zahrnout do přiřazování" }).click();
   await expect(page.getByText("Zahrnuto do přiřazování.")).toBeVisible();
+});
+
+test("each episode of a matched series shows its own plot", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Knihovna", exact: true }).click();
+  const seriesTile = page.locator(".browse-item", { hasText: seriesName });
+  await expect(seriesTile).toBeVisible();
+  await page.getByRole("button", { name: `Možnosti: ${seriesName}` }).click();
+  const identify = page.getByRole("button", { name: "Přiřadit…" });
+  if (await identify.isVisible()) await identify.click();
+  else await page.getByRole("button", { name: "Opravit přiřazení…" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: /Zkušební seriál/ }).first().click();
+  await dialog.getByRole("button", { name: "Použít tento titul" }).click();
+  await expect(dialog).toHaveCount(0);
+
+  await seriesTile.getByRole("button", { name: /Otevřít složku/ }).click();
+  const first = page.locator(".browse-item", { hasText: "S01E01" });
+  const second = page.locator(".browse-item", { hasText: "S01E02" });
+  await expect(first.locator(".library-desc")).toContainText("V prvním dílu");
+  await expect(second.locator(".library-desc")).toContainText("Ve druhém dílu");
 });

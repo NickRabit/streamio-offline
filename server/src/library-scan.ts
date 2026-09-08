@@ -3,8 +3,9 @@ import path from "node:path";
 import type { SearchResult } from "./addons.js";
 import { log } from "./logger.js";
 import {
-  autoAccept, cacheFieldsFromMeta, knownTitleOf, lookupSkipped, pickSuggestion, scanSkipReason, scoreHit,
-  type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
+  autoAccept, cacheFieldsFromMeta, episodesFromMeta, knownTitleOf, lookupSkipped, pickSuggestion, scanMiss,
+  scannedRecently, scanSkipReason, scoreHit,
+  type LibraryEpisodeRecord, type LibraryMetaRecord, type LibrarySuggestion, type TitleUnit,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -38,7 +39,12 @@ export interface LibraryScanOpts {
   metadata: (addons: AddonRecord[], type: string, id: string) => Promise<MetaItem | null>;
   addons: () => AddonRecord[];
   libraryMeta: () => Record<string, LibraryMetaRecord>;
-  updateMeta: (mutator: (meta: Record<string, LibraryMetaRecord>, suggestions: Record<string, LibrarySuggestion>) => void) => Promise<void>;
+  librarySuggestions: () => Record<string, LibrarySuggestion>;
+  updateMeta: (mutator: (
+    meta: Record<string, LibraryMetaRecord>,
+    suggestions: Record<string, LibrarySuggestion>,
+    episodes: Record<string, LibraryEpisodeRecord>,
+  ) => void) => Promise<void>;
   savePoster: (key: string, url: string | undefined) => void;
   deleteGeneratedArt: (key: string) => Promise<void>;
   busy: () => ScanPauseReason | undefined;
@@ -114,23 +120,32 @@ export class LibraryScan {
     }
   }
 
-  async start(): Promise<ScanState> {
+  /** `force` throws away the memory of earlier fruitless searches and asks the
+   *  catalogues about every unbound title again. */
+  async start(force = false): Promise<ScanState> {
     if (this.state.status === "running" || this.state.status === "paused") return this.snapshot();
     const files = await this.opts.listVideos(this.opts.downloadDir);
     const units = this.opts.titleUnits(files);
     this.units = new Map(units.map((unit) => [unit.key, unit]));
     this.cancelled = false;
+    const records = this.opts.libraryMeta();
+    const suggestions = this.opts.librarySuggestions();
+    const queued = units.filter((unit) => {
+      if (lookupSkipped(unit.key, records) || scanSkipReason(records[unit.key]) || knownTitleOf(unit.key, records)?.id) return false;
+      return force || !scannedRecently(suggestions[unit.key]);
+    });
+    if (force) await this.opts.updateMeta((_meta, current) => { for (const unit of units) delete current[unit.key]; });
     this.state = {
       status: "running",
       startedAt: nowIso(),
       updatedAt: nowIso(),
-      total: units.length,
+      total: queued.length,
       done: 0, matched: 0, skipped: 0, failed: 0,
-      remaining: units.map((unit) => unit.key),
-      current: units[0]?.key,
+      remaining: queued.map((unit) => unit.key),
+      current: queued[0]?.key,
     };
     await this.save();
-    log("INFO", "Library scan started", { total: units.length });
+    log("INFO", "Library scan started", { total: queued.length, titles: units.length, force });
     this.schedulePump();
     return this.snapshot();
   }
@@ -201,8 +216,7 @@ export class LibraryScan {
       if (lookupSkipped(key, records) || scanSkipReason(records[key]) || knownTitleOf(key, records)?.id) { await this.finishUnit("skipped"); return; }
 
       const parsed = parseMediaPath(key);
-      const busy = this.opts.busy();
-      if (busy) return;
+      if (this.opts.busy()) { delete this.state.current; return; }
 
       const identified = await this.identify(unit, parsed);
       addonCall = identified.called;
@@ -214,13 +228,15 @@ export class LibraryScan {
         const meta = await this.opts.metadata(this.opts.addons(), item.type, item.id);
         addonCall = true;
         const fields = cacheFieldsFromMeta(meta ?? item);
+        const episodeRows = episodesFromMeta(meta ?? item);
         let wrote = false;
-        await this.opts.updateMeta((metaMap, suggestions) => {
+        await this.opts.updateMeta((metaMap, suggestions, episodes) => {
           if (lookupSkipped(key, metaMap) || scanSkipReason(metaMap[key]) || knownTitleOf(key, metaMap)?.id) return;
           metaMap[key] = {
             type: item.type, id: item.id, source: "scan", locked: false,
-            matchedAt: nowIso(), ...fields,
+            matchedAt: nowIso(), backfilledAt: nowIso(), ...fields,
           };
+          Object.assign(episodes, episodeRows);
           delete suggestions[key];
           wrote = true;
         });
@@ -234,9 +250,12 @@ export class LibraryScan {
         return;
       }
 
-      if (identified.suggestion) {
-        await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = identified.suggestion!; });
-      }
+      // Either way the unit is remembered as searched, so a later scan can walk
+      // past it instead of asking the catalogues the same question again.
+      const outcome = identified.suggestion
+        ? { ...identified.suggestion, scannedAt: nowIso() }
+        : scanMiss(unit.kind);
+      await this.opts.updateMeta((_metaMap, suggestions) => { suggestions[key] = outcome; });
       await this.finishUnit("skipped");
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : String(error);

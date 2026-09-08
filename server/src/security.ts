@@ -94,6 +94,12 @@ export function redirectedHeaders(input: HeadersInit, from: URL, to: URL): Heade
   return forwarded;
 }
 
+/** Cinemeta names every title the library matches against. Without it the whole
+ *  metadata side goes quiet, so it stays installed and switched on. */
+const ESSENTIAL_ADDON_IDS = new Set(["com.linvo.cinemeta"]);
+
+export const essentialAddon = (addon: import("./types.js").AddonRecord) => ESSENTIAL_ADDON_IDS.has(addon.manifest.id);
+
 export function publicAddon(addon: import("./types.js").AddonRecord) {
   const url = new URL(addon.manifestUrl);
   const sensitivePath = url.pathname !== "/manifest.json";
@@ -101,6 +107,7 @@ export function publicAddon(addon: import("./types.js").AddonRecord) {
     key: addon.key,
     role: addon.role,
     enabled: addon.enabled,
+    essential: essentialAddon(addon),
     addedAt: addon.addedAt,
     manifest: addon.manifest,
     displayUrl: `${url.origin}${sensitivePath ? "/…/manifest.json" : url.pathname}`,
@@ -117,6 +124,7 @@ export function publicAddonRestricted(addon: import("./types.js").AddonRecord) {
     key: addon.key,
     role: addon.role,
     enabled: addon.enabled,
+    essential: essentialAddon(addon),
     manifest: {
       id: addon.manifest.id,
       name: addon.manifest.name,

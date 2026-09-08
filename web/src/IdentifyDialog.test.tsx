@@ -30,10 +30,29 @@ afterEach(() => {
 const identity = {
   path: "Father Ted",
   key: "Father Ted",
+  file: false,
+  label: "Father Ted",
   kind: "series" as const,
   parsed: { title: "Father Ted", query: "Father Ted", year: 1995 },
   match: "unmatched" as const,
   suggestion: { type: "series", id: "tt0111958", name: "Father Ted", year: 1995, score: 92 },
+};
+
+const episodeIdentity = {
+  ...identity,
+  path: "Father Ted/dil.mkv",
+  file: true,
+  label: "dil.mkv",
+  parsed: { title: "Father Ted", query: "Father Ted", year: 1995, season: 1, episode: 2 },
+  suggestion: undefined,
+};
+
+const seriesMeta = {
+  id: "tt0111958", type: "series", name: "Father Ted",
+  videos: [
+    { season: 1, episode: 1, name: "Good Luck" },
+    { season: 1, episode: 2, name: "Entertaining Father Stone" },
+  ],
 };
 
 describe("IdentifyDialog", () => {
@@ -75,6 +94,42 @@ describe("IdentifyDialog", () => {
     const matchCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/library/match"));
     expect(matchCall?.[1]).toMatchObject({ method: "POST" });
     expect(JSON.parse(String((matchCall?.[1] as RequestInit).body))).toMatchObject({ path: "Father Ted", id: "tt0111958", type: "series" });
+    expect(onApplied).toHaveBeenCalled();
+  });
+
+  it("binds one file to a chosen episode", async () => {
+    const onApplied = vi.fn();
+    fetchMock.mockImplementation((url: string) => {
+      if (String(url).includes("/api/library/identity")) return Promise.resolve(json(episodeIdentity));
+      if (String(url).includes("/api/search")) return Promise.resolve(json({
+        items: [{ id: "tt0111958", type: "series", name: "Father Ted", releaseInfo: "1995" }],
+        hasMore: false, cursor: "", sources: 1,
+      }));
+      if (String(url).includes("/api/meta/")) return Promise.resolve(json(seriesMeta));
+      if (String(url).includes("/api/library/match")) return Promise.resolve(json({ key: "Father Ted/dil.mkv", type: "series", id: "tt0111958" }));
+      return Promise.resolve(json({}));
+    });
+    await act(async () => { root.render(<IdentifyDialog path="Father Ted/dil.mkv" onClose={() => undefined} onApplied={onApplied}/>); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    // Nothing is preselected without a suggestion: the user picks the title first.
+    expect(host.querySelector(".identify-results button.selected")).toBeNull();
+    const hit = [...host.querySelectorAll(".identify-results button")][0] as HTMLButtonElement;
+    await act(async () => { hit.click(); });
+    const onlyThisFile = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("This file only"));
+    await act(async () => { onlyThisFile!.click(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const episodeSelect = [...host.querySelectorAll("select")].at(-1)!;
+    expect(episodeSelect.textContent).toContain("Entertaining Father Stone");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(episodeSelect, "2");
+      episodeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const apply = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Use this title"));
+    await act(async () => { apply!.click(); });
+    await act(async () => { await Promise.resolve(); });
+    const matchCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/api/library/match"));
+    expect(JSON.parse(String((matchCall?.[1] as RequestInit).body)))
+      .toMatchObject({ path: "Father Ted/dil.mkv", id: "tt0111958", scope: "file", season: 1, episode: 2 });
     expect(onApplied).toHaveBeenCalled();
   });
 

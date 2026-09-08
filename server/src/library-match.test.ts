@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { test } from "node:test";
 import {
-  autoAccept, browseMeta, cacheFieldsFromMeta, dropKeyed, isExtraName, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus,
-  needsBackfill, pickSuggestion, remapKeyed, scanSkipReason, scoreHit, titleUnits, unmatchAt, viewMeta,
+  autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
+  knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pickSuggestion, remapKeyed, scanMiss,
+  scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import type { FoundFile } from "./library.js";
@@ -203,4 +204,106 @@ test("suggestions remap and drop like libraryMeta", () => {
   const suggestions = { "Foo/Bar": { type: "movie", id: "tt1", name: "Foo", score: 90 } };
   assert.deepEqual(remapKeyed(suggestions, "Foo", "Baz")["Baz/Bar"]?.id, "tt1");
   assert.deepEqual(dropKeyed(suggestions, "Foo"), {});
+});
+
+const seriesMeta = (): MetaItem => ({
+  id: "tt1", type: "series", name: "Father Ted", description: "A priest.",
+  videos: [
+    { season: 1, episode: 1, name: "Good Luck", overview: "The parochial house.", released: "1995-04-21", thumbnail: "https://art/1.jpg" },
+    { season: 1, episode: 2, name: "Entertaining Father", overview: "A visitor.", released: "1995-04-28" },
+  ],
+});
+
+test("episode rows are read out of the series meta", () => {
+  const rows = episodesFromMeta(seriesMeta());
+  assert.deepEqual(rows[episodeKey("series", "tt1", 1, 1)], {
+    season: 1, episode: 1, name: "Good Luck", description: "The parochial house.",
+    released: "1995-04-21", thumbnail: "https://art/1.jpg",
+  });
+  assert.equal(rows[episodeKey("series", "tt1", 1, 2)]?.thumbnail, undefined);
+  assert.deepEqual(episodesFromMeta({ id: "tt1", type: "series", name: "X" }), {});
+});
+
+test("episode numbering comes from the file name, then from the season folder", () => {
+  assert.deepEqual(episodeNumberOf("Ted/Ted.S01E02.mkv"), { season: 1, episode: 2 });
+  assert.deepEqual(episodeNumberOf("Ted/Ted 1x03.mkv"), { season: 1, episode: 3 });
+  assert.deepEqual(episodeNumberOf(path.join("Ted", "Serie 2", "04 - Nazev.mkv")), { season: 2, episode: 4 });
+  assert.equal(episodeNumberOf("Film (2024)/Film.mkv"), undefined);
+  assert.deepEqual(episodeNumberOf("Ted/anything.mkv", { type: "series", id: "tt1", season: 3, episode: 7 }), { season: 3, episode: 7 });
+});
+
+test("each episode of a bound series gets its own copy, never the series plot", () => {
+  const records = { Ted: { type: "series", id: "tt1", name: "Father Ted", year: "1995", description: "A priest." } };
+  const episodes = episodesFromMeta(seriesMeta());
+  const first = browseMeta(path.join("Ted", "Ted.S01E01.mkv"), "Ted.S01E01", records, {}, episodes);
+  const second = browseMeta(path.join("Ted", "Ted.S01E02.mkv"), "Ted.S01E02", records, {}, episodes);
+  assert.equal(first.description, "The parochial house.");
+  assert.equal(second.description, "A visitor.");
+  assert.equal(first.catalogName, "Good Luck");
+  assert.equal(first.year, "1995");
+  assert.deepEqual([first.season, first.episode], [1, 1]);
+  // An episode nobody cached says nothing rather than repeating the series plot.
+  const unknown = browseMeta(path.join("Ted", "Ted.S09E09.mkv"), "Ted.S09E09", records, {}, episodes);
+  assert.equal(unknown.description, undefined);
+  assert.equal(unknown.match, "matched");
+  // The series folder itself still carries it.
+  assert.equal(browseMeta("Ted", "Ted", records, {}, episodes).description, "A priest.");
+  // And so does no season folder under it.
+  assert.equal(browseMeta(path.join("Ted", "Serie 1"), "Serie 1", records, {}, episodes).description, undefined);
+});
+
+test("a file bound to one episode wins over the numbering in its name", () => {
+  const key = path.join("Ted", "whatever.mkv");
+  const records = {
+    Ted: { type: "series", id: "tt1", name: "Father Ted" },
+    [key]: { type: "series", id: "tt1", source: "user" as const, season: 1, episode: 2 },
+  };
+  const view = browseMeta(key, "whatever", records, {}, episodesFromMeta(seriesMeta()));
+  assert.equal(view.description, "A visitor.");
+  assert.deepEqual([view.season, view.episode], [1, 2]);
+});
+
+test("unmatching a file inside a matched folder leaves a sentinel, not the parent binding", () => {
+  const key = path.join("Ted", "a.mkv");
+  const records = {
+    Ted: { type: "series", id: "tt1" },
+    [key]: { type: "series", id: "tt2", source: "user" as const },
+  };
+  const next = unmatchAt(records, key);
+  assert.equal(next[key]?.id, "");
+  assert.equal(knownTitleOf(key, next), undefined);
+  assert.equal(knownTitleOf(path.join("Ted", "b.mkv"), next)?.id, "tt1");
+  // Exclusion from matching survives the unmatch.
+  const excluded = unmatchAt({ ...records, [key]: { type: "movie", id: "tt2", skipLookup: true } }, key);
+  assert.equal(excluded[key]?.skipLookup, true);
+});
+
+test("a weak hit is no suggestion and a fruitless search is remembered", () => {
+  const parsed = parseMediaPath("Nazev filmu (2024)");
+  const weak = pickSuggestion([scoreHit(parsed, { id: "tt9", type: "movie", name: "Something else entirely" })]);
+  assert.equal(weak, undefined);
+  const miss = scanMiss("movie");
+  assert.equal(scannedRecently(miss), true);
+  assert.equal(scannedRecently(miss, 1, Date.now() + 10), false);
+  assert.equal(scannedRecently(undefined), false);
+  assert.equal(matchStatus("Foo", {}, { Foo: miss }), "unmatched");
+  assert.equal(suggestionFor("Foo", { Foo: miss }), undefined);
+  const real = { type: "movie", id: "tt1", name: "Film", score: 90 };
+  assert.equal(matchStatus(path.join("Foo", "a.mkv"), {}, { Foo: real }), "suggested");
+  assert.deepEqual(browseMeta(path.join("Foo", "a.mkv"), "a", {}, { Foo: real }).suggestion, real);
+});
+
+test("a description is cut on a word boundary and a finished backfill holds", () => {
+  const long = `${"slovo ".repeat(400)}konec`;
+  const stored = cacheFieldsFromMeta({ id: "tt1", type: "movie", name: "Film", description: long }).description!;
+  assert.ok(stored.length <= 1201);
+  assert.ok(stored.endsWith("…"));
+  assert.equal(stored.includes("slov…"), false);
+  assert.equal(clipText("kratky popis", 100), "kratky popis");
+  const at = new Date().toISOString();
+  assert.equal(needsBackfill({ type: "movie", id: "tt1", backfilledAt: at }), false);
+  assert.equal(needsBackfill({ type: "movie", id: "tt1", backfilledAt: "2000-01-01T00:00:00.000Z" }), true);
+  assert.equal(needsEpisodes({ type: "series", id: "tt1" }, { season: 1, episode: 1 }, {}), true);
+  assert.equal(needsEpisodes({ type: "series", id: "tt1" }, { season: 1, episode: 1 }, episodesFromMeta(seriesMeta())), false);
+  assert.equal(needsEpisodes({ type: "movie", id: "tt1" }, undefined, {}), false);
 });

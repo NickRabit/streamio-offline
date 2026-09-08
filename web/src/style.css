@@ -478,6 +478,19 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-poster img{width:100%;height:100%;object-fit:cover}
 .identify-results strong,.identify-results small{display:block}
 .identify-results small{color:var(--muted);margin-top:3px;font-size:11px}
+.identify-scope{border:0;padding:0;margin:0;display:grid;gap:6px;min-width:0}
+.identify-scope legend{font-size:10px;color:var(--muted);padding:0;margin-bottom:6px}
+.identify-scope button{justify-content:flex-start;text-align:left;padding:8px 10px;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+.identify-episode{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
+.identify-episode select{padding:8px 10px;font-size:12px}
+.suggestion-list{display:grid;gap:8px;max-height:min(50dvh,420px);overflow:auto}
+.suggestion-row{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
+.suggestion-copy strong{display:block;font-size:12px;overflow-wrap:anywhere}
+.suggestion-copy small{display:block;font-size:11px;color:var(--muted);margin-top:3px}
+.suggestion-actions{display:flex;flex-wrap:wrap;gap:6px}
+.suggestion-actions button{padding:6px 10px;font-size:11px}
+.addon-essential{display:grid;place-items:center;width:37px;height:37px;color:var(--green)}
+.addon-essential svg{width:17px;height:17px}
 @media(max-width:700px){.identify-row{grid-template-columns:1fr}.identify-overlay{padding:12px;align-items:end}}
 .library-action{display:flex;align-items:center;gap:7px;min-height:44px;font-size:12px;color:var(--accent2);padding:8px 2px}
 .library-action svg{width:18px;height:18px;flex-shrink:0}.library-action svg:last-child:not(:first-child){margin-left:auto}
