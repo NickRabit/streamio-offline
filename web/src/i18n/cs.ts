@@ -320,6 +320,7 @@ export const cs: Catalog = {
   "library.downloadToDevice": "Uložit do tohoto zařízení",
   "library.continue": "Pokračovat",
   "library.thisFile": "Tento soubor",
+  "library.tools": "Nástroje knihovny",
   "library.scan": "Prohledat knihovnu",
   "library.scanHint": "Některé složky ještě nemají plakát. Prohledejte knihovnu a přiřaďte tituly z katalogů.",
   "library.scanProgress": "{done} z {total} · {matched} spárováno",

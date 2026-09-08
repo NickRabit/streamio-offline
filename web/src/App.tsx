@@ -1038,12 +1038,22 @@ export function App() {
             <button title={t(browseView === "grid" ? "library.viewRows" : "library.viewTiles")} onClick={() => setBrowseView((value) => value === "grid" ? "list" : "grid")}>
               {browseView === "grid" ? <List/> : <LayoutGrid/>}
             </button>
-            <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
-              <Sparkles/> {t("library.scan")}
-            </button>
-            <button title={t("library.rescanHint")} onClick={() => void startScan(true)} disabled={scanning}>
-              <RefreshCw/> {t("library.rescan")}
-            </button>
+            <div className="library-maintenance" onKeyDown={(event) => {
+              if (event.key === "Escape" && menuFor === ":library-tools") event.currentTarget.querySelector<HTMLButtonElement>(".library-maintenance-toggle")?.focus();
+            }}>
+              <button className="library-maintenance-toggle" aria-label={t("library.tools")} title={t("library.tools")} aria-expanded={menuFor === ":library-tools"} aria-controls="library-maintenance-actions" onClick={(event) => {
+                event.stopPropagation();
+                setMenuFor(menuFor === ":library-tools" ? null : ":library-tools");
+              }}><MoreVertical/></button>
+              <div id="library-maintenance-actions" className={`library-maintenance-actions${menuFor === ":library-tools" ? " open" : ""}`}>
+                <button title={t("library.scan")} onClick={() => void startScan()} disabled={scanning}>
+                  <Sparkles/> {t("library.scan")}
+                </button>
+                <button title={t("library.rescanHint")} onClick={() => void startScan(true)} disabled={scanning}>
+                  <RefreshCw/> {t("library.rescan")}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
         {libraryScan && (libraryScan.status === "running" || libraryScan.status === "paused") && <div className="library-scan-status" role="status">

@@ -324,6 +324,7 @@ export const en = {
   "library.downloadToDevice": "Save to this device",
   "library.continue": "Continue",
   "library.thisFile": "This file",
+  "library.tools": "Library tools",
   "library.scan": "Scan library",
   "library.scanHint": "Some folders have no poster yet. Scan the library to match titles from your catalogs.",
   "library.scanProgress": "{done} of {total} · {matched} matched",

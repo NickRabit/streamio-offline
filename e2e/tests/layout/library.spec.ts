@@ -9,11 +9,24 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   await page.route("**/api/library/favorites?*", (route) => route.fulfill({ json: { path: ":favorites", items: [folder, file], total: 2, pending: false } }));
   await page.route("**/api/library/browse?*", (route) => {
     const path = new URL(route.request().url()).searchParams.get("path") || "";
-    return route.fulfill({ json: { path, items: path ? [episode] : [folder, file, { ...file, path: "other.mkv", label: "Film bez plakátu", poster: undefined, favorite: false }], total: path ? 1 : 3, pending: false } });
+    return route.fulfill({ json: { path, items: path ? [episode] : [folder, file, { ...file, path: "other.mkv", label: "Film bez plakátu", poster: undefined, favorite: false, description: undefined, year: undefined }], total: path ? 1 : 3, pending: false } });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Knihovna", exact: true }).click();
   await expect(page.locator(".favorites-collage img")).toHaveCount(2);
+  if (testInfo.project.name === "mobile") {
+    await expect(page.getByRole("button", { name: "Prohledat knihovnu", exact: true })).toBeHidden();
+    const tools = page.getByRole("button", { name: "Nástroje knihovny", exact: true });
+    await tools.click();
+    await expect(tools).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("button", { name: "Skenovat znovu", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Prohledat knihovnu", exact: true }).focus();
+    await page.keyboard.press("Escape");
+    await expect(tools).toBeFocused();
+    await expect(tools).toHaveAttribute("aria-expanded", "false");
+    const toolbar = (await page.locator(".browse-tools").boundingBox())!;
+    expect(toolbar.height).toBeLessThanOrEqual(100);
+  }
   const art = page.locator(".browse-grid .browse-art").first();
   const box = (await art.boundingBox())!;
   expect(box.height / box.width).toBeCloseTo(1.5, 1);
@@ -33,8 +46,7 @@ test("library cards, favorites and folder navigation", async ({ page }, testInfo
   await expect(page.getByRole("button", { name: "Odebrat z oblíbených", exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.getByRole("button", { name: "Opravit přiřazení…", exact: true })).toBeVisible();
-  if (testInfo.project.name === "mobile") await expect(page.locator(".browse-grid .library-desc").first()).toBeHidden();
-  else await expect(page.locator(".browse-grid .library-desc").first()).toBeVisible();
+  await expect(page.locator(".browse-grid .library-desc").first()).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.locator(".browse-actions")).toHaveCount(0);
   await page.getByRole("button", { name: /Seriály.*Otevřít složku/ }).click();
