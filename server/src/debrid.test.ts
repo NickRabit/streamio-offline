@@ -78,10 +78,25 @@ test("a cached torrent is unrestricted without waiting", async () => {
 });
 
 test("an uncached torrent stays waiting after files are selected", async () => {
-  const { calls, fetchImpl } = fakeRd({ status: "downloading" });
+  const { calls, fetchImpl } = fakeRd({ status: "waiting_files_selection" });
   const result = await advanceTorrent("token", HASH, 1, undefined, fetchImpl);
-  assert.deepEqual(result, { ready: false, torrentId: "rd1", progress: 40, status: "downloading" });
+  assert.deepEqual(result, { ready: false, torrentId: "rd1", progress: 40, status: "waiting_files_selection" });
   assert.ok(calls.includes("POST /torrents/selectFiles/rd1"));
+});
+
+test("no selection is attempted while the magnet is still being converted", async () => {
+  // Real-Debrid answers selectFiles with 404 parameter_missing until it knows
+  // the file list, which used to fail the whole job on the very first poll.
+  const { calls, fetchImpl } = fakeRd({ status: "magnet_conversion", files: [] });
+  const result = await advanceTorrent("token", HASH, 1, undefined, fetchImpl);
+  assert.equal(result.ready, false);
+  assert.equal(calls.some((call) => call.includes("selectFiles")), false);
+});
+
+test("a torrent already downloading is not selected again", async () => {
+  const { calls, fetchImpl } = fakeRd({ status: "downloading" });
+  await advanceTorrent("token", HASH, 1, "rd1", fetchImpl);
+  assert.equal(calls.some((call) => call.includes("selectFiles")), false);
 });
 
 test("a later poll reuses the torrent id and does not add it again", async () => {

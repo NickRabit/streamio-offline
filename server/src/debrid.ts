@@ -172,15 +172,21 @@ export async function advanceTorrent(
   fetchImpl: FetchLike = guardedFetch,
 ): Promise<DebridAdvance> {
   let id = torrentId;
-  if (!id) {
-    id = await addMagnet(token, magnetFromHash(infoHash), fetchImpl);
-    const created = await torrentInfo(token, id, fetchImpl);
-    if (created.status === "waiting_files_selection" || created.status === "magnet_conversion" || !created.links?.length) {
-      await selectFiles(token, id, videoFileIds(created.files, fileIdx), fetchImpl);
-    }
-  }
-  const info = await torrentInfo(token, id, fetchImpl);
+  if (!id) id = await addMagnet(token, magnetFromHash(infoHash), fetchImpl);
+
+  let info = await torrentInfo(token, id, fetchImpl);
   if (FAILED.has(info.status)) throw new DebridError("Real-Debrid torrent selhal.", 400, info.status);
+
+  // Real-Debrid accepts a file selection only once it has pulled the magnet's
+  // metadata. While the status is `magnet_conversion` the file list is still
+  // empty and selectFiles answers 404 parameter_missing, so the selection has
+  // to wait for a later poll — which is also why it lives here and not behind
+  // the `!torrentId` branch above.
+  if (info.status === "waiting_files_selection" && info.files?.length) {
+    await selectFiles(token, id, videoFileIds(info.files, fileIdx), fetchImpl);
+    info = await torrentInfo(token, id, fetchImpl);
+    if (FAILED.has(info.status)) throw new DebridError("Real-Debrid torrent selhal.", 400, info.status);
+  }
   if (info.status === "downloaded" && info.links?.length) {
     const unrestricted = await unrestrictLink(token, linkForFile(info, fileIdx), fetchImpl);
     return { ready: true, url: unrestricted.download, filename: unrestricted.filename, torrentId: id };
