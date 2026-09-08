@@ -172,6 +172,15 @@ export function scanSkipReason(raw?: LibraryMetaRecord): "bound" | "ignored" | u
   return undefined;
 }
 
+export function lookupSkipped(relative: string, records: Record<string, LibraryMetaRecord>): boolean {
+  const parts = relative.split(path.sep);
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const key = parts.slice(0, depth).join(path.sep);
+    if (records[key]?.skipLookup) return true;
+  }
+  return false;
+}
+
 export type MatchStatus = "unmatched" | "matched" | "suggested" | "rejected";
 
 const DESCRIPTION_MAX = 180;
@@ -184,13 +193,29 @@ export function knownTitleOf(relative: string, records: Record<string, LibraryMe
   return found;
 }
 
+/** Clear the binding on this path only. A child of a matched folder gets a sentinel so siblings keep the parent. */
+export function unmatchAt(records: Record<string, LibraryMetaRecord>, relative: string): Record<string, LibraryMetaRecord> {
+  const next = { ...records };
+  if (next[relative]?.id) {
+    delete next[relative];
+    return next;
+  }
+  const inherited = knownTitleOf(relative, next);
+  if (inherited?.id) {
+    next[relative] = { type: inherited.type, id: "", source: "user" };
+    return next;
+  }
+  delete next[relative];
+  return next;
+}
+
 export function matchStatus(
   relative: string,
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
 ): MatchStatus {
-  if (records[relative]?.skipLookup) return "rejected";
   if (knownTitleOf(relative, records)?.id) return "matched";
+  if (lookupSkipped(relative, records)) return "rejected";
   const parts = relative.split(path.sep);
   for (let depth = parts.length; depth >= 1; depth -= 1) {
     const key = parts.slice(0, depth).join(path.sep);
@@ -221,14 +246,16 @@ export function browseMeta(
   label: string,
   records: Record<string, LibraryMetaRecord>,
   suggestions: Record<string, LibrarySuggestion> = {},
-): { match: MatchStatus; year?: string; description?: string; catalogName?: string } {
+): { match: MatchStatus; year?: string; description?: string; catalogName?: string; skipLookup?: boolean } {
   const match = matchStatus(relative, records, suggestions);
-  if (match !== "matched") return { match };
+  const skipLookup = Boolean(records[relative]?.skipLookup);
+  if (match !== "matched") return { match, ...(skipLookup ? { skipLookup } : {}) };
   const known = knownTitleOf(relative, records);
-  if (!known) return { match };
+  if (!known) return { match, ...(skipLookup ? { skipLookup } : {}) };
   const catalogName = known.name && normalizeTitle(known.name) !== normalizeTitle(label) ? known.name : undefined;
   return {
     match,
+    ...(skipLookup ? { skipLookup } : {}),
     ...(known.year ? { year: known.year } : {}),
     ...(known.description ? { description: known.description } : {}),
     ...(catalogName ? { catalogName } : {}),

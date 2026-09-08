@@ -95,8 +95,8 @@ export interface LibrarySummary {
 }
 export interface LibraryPage extends LibrarySummary { files: LibraryFile[]; total: number }
 export type LibraryMatch = "unmatched" | "matched" | "suggested" | "rejected";
-export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string; year?: string; description?: string; catalogName?: string; match?: LibraryMatch }
-export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number }; year?: string; description?: string; catalogName?: string; match?: LibraryMatch }
+export interface BrowseFolder { path: string; name: string; fileCount: number; size: number; poster?: string; year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean }
+export interface BrowseFile extends LibraryFile { poster?: string; progress?: { position: number; duration: number }; year?: string; description?: string; catalogName?: string; match?: LibraryMatch; skipLookup?: boolean }
 export type BrowseItem =
   | ({ kind: "folder"; favorite?: boolean } & BrowseFolder)
   | ({ kind: "file"; favorite?: boolean } & BrowseFile);
