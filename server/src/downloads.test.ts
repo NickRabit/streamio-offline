@@ -485,3 +485,116 @@ test("a damaged queue file is quarantined and the server still starts", async ()
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+const SEGMENTED_TOTAL = 48 * MB;
+const byteAt = (position: number) => position % 251;
+const filled = (from: number, length: number) => Buffer.from(Array.from({ length }, (_unused, index) => byteAt(from + index)));
+
+/** Serves byte ranges, and every byte says where in the file it belongs, so a segment written
+ *  to the wrong offset cannot pass unnoticed. */
+const rangeServer = (options: { total?: number; ranges?: boolean; cutAt?: number } = {}) => new Promise<{
+  server: Server; port: number; peak: () => number; requests: () => string[];
+}>((resolve) => {
+  const total = options.total ?? SEGMENTED_TOTAL;
+  let inflight = 0; let peak = 0; let cut = options.cutAt != null;
+  const requests: string[] = [];
+  const server = createServer(async (req, res) => {
+    requests.push(req.headers.range ?? "");
+    const match = /bytes=(\d+)-(\d*)/.exec(req.headers.range ?? "");
+    if (!match || options.ranges === false) {
+      res.writeHead(200, { "content-length": String(total), "content-type": "video/mp4" });
+      for (let sent = 0; sent < total; sent += MB) res.write(filled(sent, Math.min(MB, total - sent)));
+      res.end();
+      return;
+    }
+    inflight += 1; peak = Math.max(peak, inflight);
+    const from = Number(match[1]);
+    const to = match[2] ? Number(match[2]) : total - 1;
+    res.writeHead(206, { "content-length": String(to - from + 1), "content-range": `bytes ${from}-${to}/${total}` });
+    for (let sent = from; sent <= to; sent += 64 * 1024) {
+      const length = Math.min(64 * 1024, to - sent + 1);
+      if (cut && options.cutAt != null && sent + length > from + options.cutAt) { cut = false; req.socket.destroy(); inflight -= 1; return; }
+      res.write(filled(sent, length));
+      await new Promise((done) => setTimeout(done, 1));
+    }
+    res.end();
+    inflight -= 1;
+  });
+  server.listen(0, "127.0.0.1", () => resolve({ server, port: (server.address() as { port: number }).port, peak: () => peak, requests: () => requests }));
+});
+
+const assertContent = async (file: string, total: number) => {
+  const data = await readFile(file);
+  assert.equal(data.length, total);
+  for (let position = 0; position < total; position += 7919) {
+    assert.equal(data[position], byteAt(position), `byte ${position} came from the wrong place in the file`);
+  }
+};
+
+test("a file is fetched over several connections and lands byte for byte", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 3 });
+  const { server, port, peak } = await rangeServer();
+  try {
+    const job = await queue.add("Segmented", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status !== "downloading" && queue.list()[0].status !== "queued", 60_000);
+    const done = queue.list()[0];
+    assert.equal(done.status, "completed", done.error ?? "");
+    assert.equal(done.segments, undefined, "a finished download keeps no plan");
+    assert.equal(peak(), 3, "all three segments should have run at once");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a source that ignores ranges is downloaded over one stream", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 4 });
+  const { server, port, peak } = await rangeServer({ ranges: false });
+  try {
+    const job = await queue.add("Plain", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    assert.equal(peak(), 0, "no ranged transfer should have started");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a segment cut mid-transfer resumes at its own offset", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 2 });
+  const { server, port, requests } = await rangeServer({ cutAt: 2 * MB });
+  try {
+    const job = await queue.add("Broken", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    assert.ok(requests().some((range) => /^bytes=[1-9]\d+-\d+$/.test(range)), `a retry should have asked for a later offset: ${requests().join(", ")}`);
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a paused segmented download keeps its plan and finishes after a resume", async () => {
+  const { directory, queue, downloads } = await tempQueue({ segments: () => 2 });
+  const { server, port } = await rangeServer();
+  try {
+    const job = await queue.add("Paused", { url: `http://127.0.0.1:${port}/film.mkv` });
+    await waitFor(queue, () => queue.list()[0].received > MB, 30_000);
+    await queue.pause(job.id);
+    const paused = queue.list()[0];
+    assert.equal(paused.status, "paused");
+    assert.equal(paused.segments, 2, "the plan has to survive the pause");
+    assert.equal((await stat(path.join(downloads, `${job.target}.part`))).size, SEGMENTED_TOTAL, "the part file keeps its full size");
+    await queue.resume(job.id);
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed", 60_000);
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error ?? "");
+    await assertContent(path.join(downloads, job.target), SEGMENTED_TOTAL);
+  } finally {
+    queue.stop(); server.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
