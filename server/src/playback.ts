@@ -105,6 +105,9 @@ const UNCLAIMED_MS = 45_000;
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
+// The version probe is retried once with more room: a loaded host can push the first exec past
+// the shorter limit, and losing the answer costs speed on every start and seek until a restart.
+const VERSION_TIMEOUTS_MS = [10_000, 30_000];
 
 /** Neither the log nor the user may see the source address -- it often carries an addon token. */
 const redact = (text: string) => text.replace(/https?:\/\/\S+/g, "<zdroj>");
@@ -144,16 +147,32 @@ export class PlaybackManager {
   async load() {
     await rm(this.root, { recursive: true, force: true });
     await mkdir(this.root, { recursive: true });
-    try {
-      const { stdout } = await promisify(execFile)("ffmpeg", ["-version"], { timeout: 10_000 });
+    const stdout = await this.readFfmpegVersion();
+    if (stdout !== undefined) {
       this.ffmpegVersion = stdout.split("\n")[0]?.replace(/^ffmpeg version\s*/i, "").split(" ")[0];
       const major = Number(/version\s+n?(\d+)[.\s-]/.exec(stdout)?.[1]);
       this.initialBurst = major >= 6;
       if (!this.initialBurst) log("WARN", "FFmpeg is older than 6, start and seek will be slowed by the read rate limit", { major });
-    } catch { log("WARN", "FFmpeg version could not be determined"); }
+    }
     const device = process.env.VAAPI_DEVICE;
     if (device) await this.checkVaapi(device);
     setInterval(() => this.reap(), 30_000).unref();
+  }
+
+  /** A cold container start can keep the first exec waiting on the disk past the timeout, and
+   *  without the version the read rate limit stays on for every start and seek until a restart.
+   *  A missing binary fails at once, so the second attempt only costs time when it can still help. */
+  private async readFfmpegVersion() {
+    let reason = "";
+    for (const timeout of VERSION_TIMEOUTS_MS) {
+      try {
+        return (await promisify(execFile)("ffmpeg", ["-version"], { timeout })).stdout;
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+    }
+    log("WARN", "FFmpeg version could not be determined, start and seek will be slowed by the read rate limit", { reason });
+    return undefined;
   }
 
   /** A session nobody claims holds FFmpeg and the read from the source. An unclaimed session
