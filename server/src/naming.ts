@@ -86,6 +86,10 @@ export const joinTarget = (directory: string, base: string, extension: string, c
 export function streamExtension(stream: StreamItem): string {
   const hinted = stream.behaviorHints?.filename;
   const source = hinted ?? (stream.url ? new URL(stream.url).pathname : "");
+  const extension = path.extname(source).toLowerCase();
+  // A playlist is assembled into one MP4, so that is what lands in the library;
+  // naming the file after the list would leave something nothing can open.
+  if (extension === ".m3u8") return ".mp4";
   return path.extname(source) || ".mp4";
 }
 

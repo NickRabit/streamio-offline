@@ -54,7 +54,11 @@ export async function probe(input: string): Promise<MediaInfo | undefined> {
 async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<MediaInfo | undefined> {
   try {
     const { stdout } = await run("ffprobe", [
-      "-v", "error", "-print_format", "json", ...limits,
+      "-v", "error", "-print_format", "json",
+      // Playlists name their segments as they please, and ffprobe refuses the
+      // unfamiliar endings by default — which reads as an unplayable source.
+      "-allowed_extensions", "ALL", "-extension_picky", "0",
+      ...limits,
       "-show_format", "-show_streams", input,
     ], { timeout, maxBuffer: 8 * 1024 * 1024 });
     const data = JSON.parse(stdout) as { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] };
