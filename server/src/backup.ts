@@ -67,6 +67,7 @@ function parseSettings(value: unknown): Settings {
     trackProgress: boolean("trackProgress"),
     showResumeRow: boolean("showResumeRow"),
     libraryAutoScan: boolean("libraryAutoScan"),
+    libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),
     catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,

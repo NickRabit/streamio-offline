@@ -16,6 +16,9 @@ export interface Settings {
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean;
   /** Look up metadata for titles copied into the download folder without asking. */
   libraryAutoScan: boolean;
+  /** Hold the library scan back while a file is downloading. Off by default: the scan
+   *  only makes a few small addon calls, which no transfer notices. */
+  libraryScanPauseOnDownload: boolean;
   /** Artwork is fetched by the server, so no provider ever sees the browser. */
   secureMode: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
@@ -40,7 +43,7 @@ interface State { addons: AddonRecord[]; settings: Settings; defaultsInstalled: 
   watchlist?: Record<string, { type: string; id: string; name: string; poster?: string; addedAt: string }>;
   /** The resume list: a title key against a position in seconds. */
   progress?: Record<string, { position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }> }
-const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
+const initialState: State = { addons: [], settings: { concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: "en", audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridToken: "" }, defaultsInstalled: false };
 
 /** Settings written before the interface spoke anything but Czech. Defaulting them
  *  to the new English default would flip a running install on upgrade. */

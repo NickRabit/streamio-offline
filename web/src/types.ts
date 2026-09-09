@@ -70,7 +70,7 @@ export interface StatsSummary {
 }
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
-  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean;
+  mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   secureMode: boolean;
   catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
 }
