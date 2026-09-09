@@ -1068,7 +1068,7 @@ const libraryScan = new LibraryScan({
   deleteGeneratedArt: (key) => clearGeneratedArt(key),
   busy: () => {
     if (playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS)) return "playback";
-    if (queue.list().some((job) => job.status === "downloading")) return "download";
+    if (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")) return "download";
     const searchHosts = new Set(searchableCatalogs(store.addons()).map(({ addon }) => hostOf(addon.manifestUrl)));
     if (outbound.diagnostics().some((row) => row.state === "open" && searchHosts.has(row.host))) return "breaker";
     return undefined;
@@ -1085,7 +1085,7 @@ const libraryAutoScan = new LibraryAutoScan({
   files: () => libraryFiles(),
   status: () => libraryScan.snapshot(),
   start: () => libraryScan.start(),
-  busy: () => playbackBusy() || queue.list().some((job) => job.status === "downloading"),
+  busy: () => playbackBusy() || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")),
   watch: (onChange) => watchLibrary(DOWNLOAD_DIR, () => { invalidateLibrary(); onChange(); }),
   ...(Number.isFinite(autoScanIntervalMs) ? { intervalMs: autoScanIntervalMs } : {}),
 });
@@ -1535,6 +1535,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.trackProgress !== undefined) state.settings.trackProgress = Boolean(req.body.trackProgress);
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
     if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
+    if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.artworkLocation !== undefined) {
       state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";

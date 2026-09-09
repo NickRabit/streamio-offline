@@ -464,7 +464,7 @@ const busy = (): "playback" | "download" | "breaker" | undefined => {
 ```
 
 - Pause while any playback session is still inside the existing idle window (`IDLE_MS` = 5 minutes in `server/src/playback.ts`). Direct play counts; Celeron is the constraint. Sessions with `idleSeconds >= 300` are ignored (the reaper is about to stop them). Unclaimed sessions still count until they age out.
-- Active HTTP downloads pause the scan. `waiting` Real-Debrid jobs and `queued` jobs do not.
+- Active HTTP downloads pause the scan only when `libraryScanPauseOnDownload` is on in Settings; it is off by default, because the scan is a handful of small addon calls that no transfer notices. `waiting` Real-Debrid jobs and `queued` jobs never pause it.
 - Breaker: pause when **any** host that `searchableCatalogs` would hit is `open`. Resume on `closed` or `half-open`. Do not special-case the Cinemeta hostname; several catalog addons may be enabled.
 - Pause writes `status: "paused"`, `pauseReason`, persists, and wakes every `wakeMs` (default 15 s). When `busy()` is empty, resume.
 - Check `busy()` before each unit and between the search and the poster save.
@@ -938,7 +938,7 @@ No feature flag. The scan does not run until the user presses the button.
 | --- | --- | --- |
 | Czech titles auto-matched to the wrong English Cinemeta row | High | Search the Latin segment, including a hyphen without spaces; auto-accept only at similarity ≥ 0.90 and year/type eligibility; leave unmatched otherwise. Identify is the fix. |
 | Addon rate limits / circuit breaker during a full scan | High | Serial identification, gap only after addon calls, pause when any searchable host breaker is `open`, type-filtered first-page `searchAll`. Do not mark remaining units failed on a 429. |
-| Celeron + ffmpeg thumbs already queued; scan piles more | High | Scan never calls `saveFrame`. Browse jobs re-check `knownTitle` immediately before `saveFrame`. `ArtworkQueue` chains a second `run` instead of dropping it. Pause while a non-idle playback session or active download exists. |
+| Celeron + ffmpeg thumbs already queued; scan piles more | High | Scan never calls `saveFrame`. Browse jobs re-check `knownTitle` immediately before `saveFrame`. `ArtworkQueue` chains a second `run` instead of dropping it. Pause while a non-idle playback session exists, and while a download runs if the user asked for that (`libraryScanPauseOnDownload`). |
 | Opening Library before Scan leaves ffmpeg thumbs after a match | High | Match deletes the hashed data-dir file and writes the catalog poster even if a hashed thumb existed. Browse’s pre-`saveFrame` re-check will not overwrite that with a frame. `POSTER_NAMES` in the media folder are never deleted. |
 | Same `ArtworkQueue` key drops the catalog save | High | Do not rely on same-key coalescing. Chain instead of drop; re-check before `saveFrame`; match overwrites hashed thumbs. |
 | `collection` folders (adult dumps, mixed extras) matched as one title | High | Collections are not title units. Auto-scan does not recurse into folders with unrelated direct videos. Identify on a child file binds the child. |
