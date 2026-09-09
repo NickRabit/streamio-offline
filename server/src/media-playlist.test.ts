@@ -50,3 +50,19 @@ test("oversized playlist transfers stop at the byte budget", async () => {
   await assert.rejects(readMediaText(response, 20), /supported size/);
   assert.equal(canceled, true);
 });
+
+test("an attribute that is not modelled is dropped, not fatal", () => {
+  // PROGRAM-ID is deprecated but still emitted, and it used to reject the whole
+  // master playlist, which left the source unplayable.
+  const master = [
+    "#EXTM3U",
+    '#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=232612,RESOLUTION=256x144,CODECS="avc1.4d4015"',
+    "144p.m3u8",
+  ].join("\n");
+
+  const out = rewritePlaylist(master, (uri) => `/media/${uri}`);
+  assert.match(out, /BANDWIDTH=232612/);
+  assert.match(out, /RESOLUTION=256x144/);
+  assert.doesNotMatch(out, /PROGRAM-ID/);
+  assert.match(out, /\/media\/144p\.m3u8/);
+});

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, isPlaylistSource } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -409,4 +409,13 @@ test("probe caching separates credentials for the same source URL", async () => 
     await manager.inspect({ url: "https://provider.test/media", behaviorHints: { proxyHeaders: { request: { authorization } } } });
   }
   assert.equal(probes, 2);
+});
+
+test("a playlist source is recognised by its address or by the probe", () => {
+  // The filename says .mp4 because that is what a download of it should be
+  // called; it must not decide this.
+  assert.equal(isPlaylistSource({ url: "https://cdn.example/a/1080.mp4.m3u8", behaviorHints: { filename: "Film.mp4" } }), true);
+  assert.equal(isPlaylistSource({ url: "https://cdn.example/opaque" }, { container: "hls,applehttp", audioTracks: [], subtitleTracks: [] }), true);
+  assert.equal(isPlaylistSource({ url: "https://cdn.example/video-1080p.mp4" }, { container: "mov,mp4,m4a", audioTracks: [], subtitleTracks: [] }), false);
+  assert.equal(isPlaylistSource({ url: "" }), false);
 });

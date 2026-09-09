@@ -40,11 +40,29 @@ export interface PlaybackDescriptor {
   audioTrack: number; subtitleTrack: number | null;
   quality: number | null;
   sidecarUrl?: string;
+  /**
+   * Whether `url` addresses a playlist rather than the media. The client cannot
+   * tell: a proxied source has no extension to read it from, and in direct mode
+   * the difference decides whether the element can be handed the address at all.
+   */
+  playlist?: boolean;
 }
 
 /** The allowed target qualities and the video bitrate ceiling for each. */
 /** What the source is called in the statistics. Shared with index.ts so transferred bytes
  * and started playbacks land in one entry instead of two nearly identical ones. */
+/** A source that lists segments: by its address, or by what the probe made of it. */
+export function isPlaylistSource(stream: StreamItem, info?: MediaInfo): boolean {
+  const container = (info?.container ?? "").toLowerCase();
+  if (container.split(",").some((token) => token.trim() === "hls")) return true;
+
+  try {
+    return new URL(stream.url ?? "").pathname.toLowerCase().endsWith(".m3u8");
+  } catch {
+    return false;
+  }
+}
+
 export const sourceTitle = (stream: StreamItem) => stream.behaviorHints?.filename ?? stream.title ?? stream.name;
 
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
@@ -415,6 +433,7 @@ export class PlaybackManager {
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
       sidecarUrl: session.mode === "direct" && session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
+      playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
 

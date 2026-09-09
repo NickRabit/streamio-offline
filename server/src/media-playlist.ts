@@ -46,9 +46,13 @@ export function rewritePlaylist(text: string, resource: (uri: string) => string,
     let remaining = value;
     while (remaining) {
       const match = /^([A-Z0-9-]+)=("[^"\r\n]*"|[^,]+)(?:,|$)/.exec(remaining);
-      if (!match || !allowed.has(match[1]) || seen.has(match[1])) return fail();
+      if (!match || seen.has(match[1])) return fail();
       const [, name, encoded] = match;
       seen.add(name);
+      // An attribute we do not model is dropped, the same way an unmodelled tag
+      // is. Rejecting the playlist over one made whole sources unplayable — a
+      // master that carries the long-deprecated PROGRAM-ID, say.
+      if (!allowed.has(name)) { remaining = remaining.slice(match[0].length); continue; }
       const quoted = encoded.startsWith('"');
       const decoded = quoted ? encoded.slice(1, -1) : encoded;
       if (name === "URI") {

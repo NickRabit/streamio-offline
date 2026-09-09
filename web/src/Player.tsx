@@ -378,10 +378,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (id) void api.stopPlayback(id).catch(() => undefined);
   };
 
-  const attach = (url: string, mode: PlaybackMode, autoplay = true) => {
+  const attach = (url: string, mode: PlaybackMode, autoplay = true, playlist = false) => {
     const video = videoRef.current; if (!video) return;
     detach();
-    if (mode === "direct") { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
+    // Direct play normally means handing the element the address and letting the
+    // browser get on with it. A playlist is the exception: only Safari reads one
+    // natively, so it falls through to hls.js the same way a converted stream
+    // does — and costs the server nothing, unlike converting it would.
+    if (mode === "direct" && !playlist) { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
     if (Hls.isSupported()) {
       // A longer buffer on both sides means the browser handles an ordinary few-second
@@ -437,7 +441,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
     if (next.subtitleIds) setSubtitleIds(next.subtitleIds);
-    attach(next.url, next.mode, autoplay);
+    attach(next.url, next.mode, autoplay, Boolean(next.playlist));
   };
 
   useEffect(() => {
