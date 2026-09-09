@@ -8,6 +8,9 @@
  *  favorites, movies and series. */
 export const en = {
   "downloads.durationValue": "{hours} h {minutes} min {seconds} s",
+  "downloads.details": "Details",
+  "downloads.filters": "Filters and sorting",
+  "downloads.activeFilters": "Active filters: {count}",
   "downloads.search": "Search title or path",
   "downloads.filterStatus": "Status",
   "downloads.all": "All statuses",

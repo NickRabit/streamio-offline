@@ -106,7 +106,10 @@ and re-checks every manifest before saving.
 
 ## Queue browsing
 
-The queue displays 20, 50 or 100 jobs per page. Search matches titles and paths;
+The queue displays 20, 50 or 100 jobs per page. Filters and sorting are collapsed
+by default; the summary indicates active filters and a custom sort order.
+On narrow phones, each job keeps its path and timestamps under Details. Long
+titles wrap to two lines, with the full title available when Details is expanded. Search matches titles and paths;
 status and inclusive local-date filters can be combined. Dates can refer to
 when a job was added, first started or completed. Sorting changes the view only;
 priority arrows are enabled in ascending queue-priority order.

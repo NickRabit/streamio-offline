@@ -674,3 +674,41 @@ img.broken{visibility:hidden}
 @media(max-width:700px){.queue-tools{gap:10px}.queue-tools label:first-child{grid-column:1/-1}.queue-pagination{justify-content:center}.queue-pagination label{margin-right:0}.queue-pagination span{flex-basis:100%;text-align:center}.downloads-page .download-row{grid-template-areas:"title status" "progress progress" "meta meta" "actions actions"}.queue-times{flex-direction:column;gap:6px}}
 
 .downloads-page{scroll-margin-top:90px}
+
+.queue-filters{margin-bottom:16px;border:1px solid var(--line);border-radius:12px;padding:0 12px}
+.queue-filters>summary{display:flex;align-items:center;gap:8px;min-height:44px;padding:10px 0;cursor:pointer;font-size:13px;list-style:none;flex-wrap:wrap}
+.queue-filters>summary::-webkit-details-marker{display:none}
+.queue-filters>summary span{font-size:11px;color:var(--muted);overflow-wrap:anywhere;flex:1;min-width:0}
+.queue-filters>summary svg{width:16px;height:16px;flex-shrink:0}
+.queue-filters[open]>summary svg{transform:rotate(180deg)}
+.queue-filters .queue-tools{margin:4px 0 12px}
+
+.downloads-page,.downloads-page .downloads,.download-row>*{min-width:0;max-width:100%}
+.download-job .job-link{width:100%;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.queue-job-details{min-width:0;max-width:100%}
+.queue-details-toggle{display:none}
+.download-job .queue-job-error{white-space:normal;overflow-wrap:anywhere;color:var(--red)}
+@media(max-width:700px){
+  .downloads-page .download-row{grid-template-columns:minmax(0,1fr);grid-template-areas:"title" "status" "progress" "meta" "actions";gap:8px;padding:14px 4px}
+  .downloads-page .download-row>.job-status{justify-self:start;align-self:start}
+  .download-job .job-link>span,.download-job>strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow-wrap:anywhere;line-height:1.4;font-size:13px}
+  .download-row.details-expanded .job-link>span,.download-row.details-expanded .download-job>strong{-webkit-line-clamp:unset}
+  .download-row:not(.details-expanded) .queue-job-details{display:none}
+  .queue-job-details>small{display:block;white-space:normal;overflow-wrap:anywhere;margin-top:8px}
+  .queue-times{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  .queue-times div:last-child{grid-column:1/-1}
+  .queue-details-toggle{display:inline-flex;margin-right:auto;font-size:11px}
+  .queue-details-toggle[aria-expanded="true"] svg{transform:rotate(180deg)}
+  .download-row:not([data-status="downloading"]) .download-speed,.download-row[data-status="completed"] .queue-priority{display:none}
+  .downloads-page .queue-actions{min-width:0;flex-wrap:wrap}
+  .queue-filters>summary span{flex-basis:100%;order:2}
+  .queue-filters>summary span:empty{display:none}
+  .queue-filters>summary svg{margin-left:auto}
+}
+
+.download-job>strong,.queue-job-details>small{overflow-wrap:anywhere;max-width:100%;min-width:0}
+
+.queue-tools input[type="date"]{display:block;appearance:none;-webkit-appearance:none;min-inline-size:0;max-inline-size:100%;height:40px}
+.queue-tools input[type="date"]::-webkit-date-and-time-value{min-width:0;text-align:left}
+.queue-tools input[type="date"]::-webkit-datetime-edit{min-width:0;padding:0}
+@media(max-width:700px){.queue-tools .queue-date{grid-column:1/-1}}
