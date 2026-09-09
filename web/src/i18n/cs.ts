@@ -3,6 +3,28 @@ import type { Catalog } from "./index";
 /** Same order as `en.ts`, so the two read side by side. Czech keeps the polite
  *  plural and avoids gendered forms: "kde jste skončili", never "skončil". */
 export const cs: Catalog = {
+  "downloads.search": "Hledat název nebo cestu",
+  "downloads.filterStatus": "Stav",
+  "downloads.all": "Všechny stavy",
+  "downloads.sort": "Řadit podle",
+  "downloads.order": "Pořadí ve frontě",
+  "downloads.titleSort": "Název",
+  "downloads.createdAt": "Přidáno",
+  "downloads.startedAt": "Začátek",
+  "downloads.completedAt": "Dokončení",
+  "downloads.duration": "Uplynulá doba (včetně přerušení)",
+  "downloads.direction": "Směr",
+  "downloads.asc": "Vzestupně",
+  "downloads.desc": "Sestupně",
+  "downloads.dateField": "Filtrovat datum",
+  "downloads.from": "Od",
+  "downloads.to": "Do",
+  "downloads.pageSize": "Položek na stránce",
+  "downloads.page": "Stránka {page} z {pages} · {count} položek",
+  "downloads.previous": "Předchozí",
+  "downloads.next": "Další",
+  "downloads.noMatches": "Žádné odpovídající položky",
+  "downloads.reset": "Zrušit filtry",
 
   // Přihlášení, první spuštění a účet v nastavení.
   "auth.brandEyebrow": "DOMÁCÍ MEDIATÉKA",

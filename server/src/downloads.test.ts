@@ -85,6 +85,9 @@ test("after an outage and a resumed transfer the retry budget comes back", async
     const job = manager.list()[0];
     assert.equal(drops(), 1, "the server should have cut the connection exactly once");
     assert.equal(job.status, "completed", `the download should have finished, status: ${job.status} ${job.error ?? ""}`);
+    assert.ok(job.startedAt);
+    assert.ok(job.completedAt);
+    assert.ok(Date.parse(job.completedAt) >= Date.parse(job.startedAt));
     assert.equal(job.retryCount, 0, "after a resumed transfer the retry budget should be full again");
     assert.equal((await stat(path.join(directory, "downloads", job.target))).size, TOTAL);
   } finally {

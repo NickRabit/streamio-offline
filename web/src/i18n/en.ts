@@ -7,6 +7,28 @@
  *  where there is one, what to do next. Spelling follows the docs: catalog,
  *  favorites, movies and series. */
 export const en = {
+  "downloads.search": "Search title or path",
+  "downloads.filterStatus": "Status",
+  "downloads.all": "All statuses",
+  "downloads.sort": "Sort by",
+  "downloads.order": "Queue priority",
+  "downloads.titleSort": "Title",
+  "downloads.createdAt": "Added",
+  "downloads.startedAt": "Started",
+  "downloads.completedAt": "Completed",
+  "downloads.duration": "Elapsed time (including pauses)",
+  "downloads.direction": "Direction",
+  "downloads.asc": "Ascending",
+  "downloads.desc": "Descending",
+  "downloads.dateField": "Date filter",
+  "downloads.from": "From",
+  "downloads.to": "Through",
+  "downloads.pageSize": "Items per page",
+  "downloads.page": "Page {page} of {pages} · {count} items",
+  "downloads.previous": "Previous",
+  "downloads.next": "Next",
+  "downloads.noMatches": "No matching downloads",
+  "downloads.reset": "Reset filters",
 
   // Sign-in, first-run setup and the account section of Settings.
   "auth.brandEyebrow": "HOME MEDIA LIBRARY",

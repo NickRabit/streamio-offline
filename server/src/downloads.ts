@@ -39,7 +39,7 @@ export interface DownloadJob {
   /** Present only while a segmented transfer is unfinished; it is what lets each connection
    *  pick up at its own offset after a restart. */
   segments?: Segment[];
-  createdAt: string; updatedAt: string;
+  createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 export type StreamResolver = (type: string, videoId: string, tried: string[]) => Promise<{ stream: StreamItem; settings: AddonDownloadSettings } | undefined>;
 export interface DebridEngine {
@@ -596,7 +596,7 @@ export class DownloadQueue {
   }
 
   private async download(job: DownloadJob) {
-    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
+    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
@@ -711,7 +711,7 @@ export class DownloadQueue {
       const expected = expectedSize(job.total, hinted);
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
       await rename(partial, target);
-      job.status = "completed"; job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
+      job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
       log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
       try { await this.onCompleted?.(job); }
       catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
