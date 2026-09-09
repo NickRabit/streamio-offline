@@ -84,6 +84,8 @@ export interface PlaybackSession {
   id: string; mode: PlaybackMode; url: string; offset: number; duration?: number; video?: string; audio?: string; hardware: boolean; acceleration: boolean;
   audioTracks: Track[]; subtitleTracks: Track[]; audioTrack: number; subtitleTrack: number | null;
   quality: number | null; sidecarUrl?: string; subtitleIds?: Record<string, string>;
+  /** `url` addresses a playlist, so the element cannot simply be handed it. */
+  playlist?: boolean;
 }
 
 export interface Session { username: string; language?: Locale }
