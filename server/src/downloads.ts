@@ -1,4 +1,5 @@
 import { AppError } from "./errors.js";
+import { spawn } from "node:child_process";
 import { createWriteStream as fsCreateWriteStream } from "node:fs";
 import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
@@ -595,6 +596,86 @@ export class DownloadQueue {
     if (segment.received < size) throw new IncompleteDownloadError(segment.received, size);
   }
 
+  /**
+   * Assembles a playlist into one file with ffmpeg, copying the streams rather
+   * than re-encoding, and renames it in when ffmpeg is done. There is no
+   * resuming and no expected size: a playlist states neither, so progress is
+   * the size of the file as it grows.
+   */
+  private async downloadPlaylist(job: DownloadJob, stream: StreamItem, partial: string, target: string, controller: AbortController) {
+    await unlink(partial).catch(() => undefined);
+    job.received = 0; job.total = undefined; job.segments = undefined;
+
+    const headers = Object.entries(stream.behaviorHints?.proxyHeaders?.request ?? {})
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join("");
+
+    const args = [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+      // Segment names do not always end in .ts, and ffmpeg refuses the unfamiliar ones by default.
+      "-allowed_extensions", "ALL", "-extension_picky", "0",
+      ...(headers ? ["-headers", headers] : []),
+      "-i", stream.url!,
+      // No -map: a master playlist offers every rendition as its own program,
+      // and taking them all would write each quality into the file. The default
+      // selection keeps one video and one audio, the best of what is offered.
+      "-c", "copy",
+      // ADTS frames out of a transport stream need this to be legal inside MP4.
+      "-bsf:a", "aac_adtstoasc",
+      "-movflags", "+faststart",
+      // The file being written is a .part, so the container cannot be inferred
+      // from its name.
+      "-f", "mp4", "-y", partial,
+    ];
+
+    log("INFO", "Assembling a playlist", { id: job.id, target: job.target });
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
+
+    let lastSize = 0; let lastAt = this.now();
+    const progress = setInterval(() => {
+      void stat(partial).then((info) => {
+        const grown = info.size - lastSize;
+        if (grown <= 0) return;
+        job.received = info.size;
+        const now = this.now();
+        job.speed = grown / Math.max(0.001, (now - lastAt) / 1000);
+        lastSize = info.size; lastAt = now; job.updatedAt = new Date().toISOString();
+        this.onProgress?.(job, grown);
+        this.saveSoon();
+      }, () => undefined);
+    }, 1000);
+
+    const abort = () => child.kill("SIGKILL");
+    controller.signal.addEventListener("abort", abort);
+
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      if (controller.signal.aborted) throw new Error("The assembly was stopped.");
+      if (code !== 0) throw new SourceError(`The playlist could not be assembled. ${stderr.trim().split("\n").pop() ?? ""}`.trim());
+    } finally {
+      clearInterval(progress);
+      controller.signal.removeEventListener("abort", abort);
+    }
+
+    const written = await stat(partial).then((info) => info.size, () => 0);
+    if (!written) throw new IncompleteDownloadError(0, undefined);
+
+    job.received = written; job.total = written;
+    await rename(partial, target);
+    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; this.setError(job);
+    log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
+    try { await this.onCompleted?.(job); }
+    catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    await this.save();
+  }
+
   private async download(job: DownloadJob) {
     const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
@@ -613,6 +694,11 @@ export class DownloadQueue {
       if (!stream.url) throw new SourceError("Only a direct HTTP stream can be downloaded.");
       const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
       await mkdir(path.dirname(target), { recursive: true });
+
+      // A playlist is a list of segments, not a file. Transferring it byte for
+      // byte saves the list; the video has to be assembled instead.
+      if (isPlaylist(stream.url)) { await this.downloadPlaylist(job, stream, partial, target, controller); return; }
+
       let offset = 0; try { offset = (await stat(partial)).size; } catch { /* new download */ }
       // A segmented file is written at its full size from the first byte. If the part file no
       // longer has that size, the plan describes something that is not there any more.
@@ -759,5 +845,14 @@ export class DownloadQueue {
       await this.save();
       if (!retryScheduled) this.pump();
     }
+  }
+}
+
+/** A source that lists segments rather than being the video itself. */
+export function isPlaylist(url: string): boolean {
+  try {
+    return new URL(url).pathname.toLowerCase().endsWith(".m3u8");
+  } catch {
+    return false;
   }
 }

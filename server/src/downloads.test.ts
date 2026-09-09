@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import test from "node:test";
-import { DownloadQueue } from "./downloads.js";
+import { DownloadQueue, isPlaylist } from "./downloads.js";
 import { defaultDownloadSettings } from "./naming.js";
 
 const MB = 1024 * 1024;
@@ -600,4 +600,16 @@ test("a paused segmented download keeps its plan and finishes after a resume", a
     queue.stop(); server.close();
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("a playlist is told apart from a file, whatever the segments are named", () => {
+  // The addresses that prompted this: the extension sits after another one, and
+  // a query string follows it.
+  assert.equal(isPlaylist("https://cdn.example/media/1080.mp4.m3u8"), true);
+  assert.equal(isPlaylist("https://cdn.example/a/index.M3U8?token=x"), true);
+  assert.equal(isPlaylist("https://cdn.example/video-1080p.mp4"), false);
+  assert.equal(isPlaylist("https://cdn.example/clip.vid"), false);
+  // A path that merely mentions it is still a file.
+  assert.equal(isPlaylist("https://cdn.example/m3u8/clip.mp4"), false);
+  assert.equal(isPlaylist("not a url"), false);
 });
