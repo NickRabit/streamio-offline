@@ -7,6 +7,7 @@
  *  where there is one, what to do next. Spelling follows the docs: catalog,
  *  favorites, movies and series. */
 export const en = {
+  "downloads.durationValue": "{hours} h {minutes} min {seconds} s",
   "downloads.search": "Search title or path",
   "downloads.filterStatus": "Status",
   "downloads.all": "All statuses",

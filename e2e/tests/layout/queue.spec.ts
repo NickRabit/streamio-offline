@@ -15,13 +15,13 @@ test("queue pages, sorts and filters without overflowing the viewport", async ({
   await expect(rows).toHaveCount(20);
   await page.getByRole("button", { name: "Další", exact: true }).click();
   await expect(rows.first()).toContainText("Queue 20");
-  await page.getByLabel("Řadit podle", { exact: true }).selectOption("titleSort");
-  await page.getByLabel("Směr", { exact: true }).selectOption("desc");
+  await page.getByRole("combobox", { name: "Řadit podle", exact: true }).selectOption("titleSort");
+  await page.getByRole("combobox", { name: "Směr", exact: true }).selectOption("desc");
   await expect(rows.first()).toContainText("Queue 44");
-  await page.getByLabel("Stav", { exact: true }).selectOption("completed");
-  await page.getByLabel("Položek na stránce").selectOption("50");
+  await page.getByRole("combobox", { name: "Stav", exact: true }).selectOption("completed");
+  await page.getByRole("combobox", { name: "Položek na stránce", exact: true }).selectOption("50");
   await expect(rows).toHaveCount(23);
-  await page.getByLabel("Filtrovat datum").selectOption("completedAt");
+  await page.getByRole("combobox", { name: "Filtrovat datum", exact: true }).selectOption("completedAt");
   await page.getByLabel("Od", { exact: true }).fill("2026-09-03");
   await expect(rows).toHaveCount(0);
   await expect(page.getByText("Žádné odpovídající položky")).toBeVisible();

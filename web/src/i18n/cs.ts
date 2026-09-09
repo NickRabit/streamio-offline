@@ -3,6 +3,7 @@ import type { Catalog } from "./index";
 /** Same order as `en.ts`, so the two read side by side. Czech keeps the polite
  *  plural and avoids gendered forms: "kde jste skončili", never "skončil". */
 export const cs: Catalog = {
+  "downloads.durationValue": "{hours} h {minutes} min {seconds} s",
   "downloads.search": "Hledat název nebo cestu",
   "downloads.filterStatus": "Stav",
   "downloads.all": "Všechny stavy",
@@ -20,7 +21,7 @@ export const cs: Catalog = {
   "downloads.from": "Od",
   "downloads.to": "Do",
   "downloads.pageSize": "Položek na stránce",
-  "downloads.page": "Stránka {page} z {pages} · {count} položek",
+  "downloads.page": "Stránka {page} z {pages} · Počet: {count}",
   "downloads.previous": "Předchozí",
   "downloads.next": "Další",
   "downloads.noMatches": "Žádné odpovídající položky",
