@@ -103,3 +103,19 @@ does **not** hold the account, the library, or watch history.
 Personalized addon URLs and the Real-Debrid API token are stored in the file in
 the clear — treat it as a password. Import replaces the current configuration
 and re-checks every manifest before saving.
+
+## Queue browsing
+
+The queue displays 20, 50 or 100 jobs per page. Filters and sorting are collapsed
+by default; the summary indicates active filters and a custom sort order.
+On narrow phones, each job keeps its path and timestamps under Details. Long
+titles wrap to two lines, with the full title available when Details is expanded. Search matches titles and paths;
+status and inclusive local-date filters can be combined. Dates can refer to
+when a job was added, first started or completed. Sorting changes the view only;
+priority arrows are enabled in ascending queue-priority order.
+
+New downloads persist their first start and successful completion timestamps.
+Elapsed time is the interval between them, including pauses and retry waits.
+Older jobs without these timestamps display a dash and are excluded from filters
+that require the missing date. Missing values sort last in either direction.
+Pagination limits rendered rows; the live queue snapshot still contains all jobs.

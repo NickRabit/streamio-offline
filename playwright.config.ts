@@ -52,6 +52,12 @@ export default defineConfig({
       dependencies: ["setup", "chromium"],
       use: { ...devices["iPhone 13 landscape"], browserName: "webkit", storageState },
     },
+    {
+      name: "safari-queue",
+      testMatch: /layout\/queue\.spec\.ts/,
+      dependencies: ["setup"],
+      use: { ...devices["iPhone 13"], viewport: { width: 360, height: 780 }, browserName: "webkit", storageState },
+    },
     // The layout projects run after the journeys, not merely after setup: the
     // journeys leave a queued download and a library file behind, and a baseline
     // has to be taken against a state that is the same every run.

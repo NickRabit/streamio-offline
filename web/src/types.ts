@@ -30,7 +30,7 @@ export interface Download {
   pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   /** How many connections the file is being split across; missing while it runs over one. */
   segments?: number;
-  createdAt: string; updatedAt: string;
+  createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
 
