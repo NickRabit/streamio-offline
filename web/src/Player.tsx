@@ -378,10 +378,23 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (id) void api.stopPlayback(id).catch(() => undefined);
   };
 
+  /** An address that lists segments rather than being the media itself. */
+  const isPlaylist = (url: string) => {
+    try {
+      return new URL(url, window.location.origin).pathname.toLowerCase().endsWith(".m3u8");
+    } catch {
+      return false;
+    }
+  };
+
   const attach = (url: string, mode: PlaybackMode, autoplay = true) => {
     const video = videoRef.current; if (!video) return;
     detach();
-    if (mode === "direct") { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
+    // Direct play normally means handing the element the address and letting the
+    // browser get on with it. A playlist is the exception: only Safari reads one
+    // natively, so it falls through to hls.js the same way a converted stream
+    // does — and costs the server nothing, unlike converting it would.
+    if (mode === "direct" && !isPlaylist(url)) { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
     if (Hls.isSupported()) {
       // A longer buffer on both sides means the browser handles an ordinary few-second
