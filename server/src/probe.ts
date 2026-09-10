@@ -70,18 +70,31 @@ export async function playlistArgs(binary: "ffprobe" | "ffmpeg") {
   return playlistArgsFrom(await help);
 }
 
+// ffprobe folds a dead connection and a dead server into the same kind of stderr line. When one
+// of these shows up, a second attempt against the same address is not going to end differently --
+// it is not worth the deep probe's 45 extra seconds.
+const UNREACHABLE = /connection refused|no route to host|network is unreachable|could not resolve|name or service not known|nodename nor servname|server returned 4\d\d|server returned 5\d\d|connection timed out/i;
+
+interface Inspection { info?: MediaInfo; unreachable: boolean }
+
 /** Finds the source's real codecs. An addon sends a non-binding hint at best; ffprobe tells the truth. */
 export async function probe(input: string): Promise<MediaInfo | undefined> {
   // The default limits read only a few megabytes from a remote source, which is enough for ordinary files.
   // The deep probe (up to 100 MB) comes in only when the quick round misses something that matters.
   const fast = await inspect(input, [], 20_000, "fast");
-  if (fast?.video && fast.duration && fast.audioTracks.length) return fast;
-  log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast ? { video: fast.video?.codec, duration: fast.duration, audioTracks: fast.audioTracks.length } : null });
+  if (fast.info?.video && fast.info.duration && fast.info.audioTracks.length) return fast.info;
+  if (fast.unreachable) {
+    log("DEBUG", "The source refused the connection, skipping the deeper probe");
+    return undefined;
+  }
+  log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast.info ? { video: fast.info.video?.codec, duration: fast.info.duration, audioTracks: fast.info.audioTracks.length } : null });
   const deep = await inspect(input, ["-analyzeduration", "60M", "-probesize", "100M"], 45_000, "deep");
-  return deep ?? fast;
+  return deep.info ?? fast.info;
 }
 
-async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<MediaInfo | undefined> {
+export const looksUnreachable = (stderr: string) => UNREACHABLE.test(stderr);
+
+async function inspect(input: string, limits: string[], timeout: number, stage: string): Promise<Inspection> {
   try {
     const { stdout } = await run("ffprobe", [
       "-v", "error", "-print_format", "json",
@@ -98,20 +111,21 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
     const audio = streams.find((item) => item.codec_type === "audio");
     const duration = Number(data.format?.duration);
     return {
-      container: data.format?.format_name ?? "",
-      duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
-      video: video?.codec_name ? { codec: video.codec_name, width: video.width, height: video.height, profile: video.profile, pixelFormat: video.pix_fmt } : undefined,
-      audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
-      audioTracks, subtitleTracks,
+      unreachable: false,
+      info: {
+        container: data.format?.format_name ?? "",
+        duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
+        video: video?.codec_name ? { codec: video.codec_name, width: video.width, height: video.height, profile: video.profile, pixelFormat: video.pix_fmt } : undefined,
+        audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
+        audioTracks, subtitleTracks,
+      },
     };
   } catch (error) {
     // Without this entry a failed probe surfaces two layers later as "the source could not be
     // parsed", with not a trace of what ffprobe actually said.
     const failure = error as { stderr?: string; killed?: boolean; code?: number };
-    log("WARN", "ffprobe did not read the source", {
-      stage, timeout, timedOut: Boolean(failure.killed), exitCode: failure.code,
-      reason: (failure.stderr ?? String(error)).split("\n").map((line) => line.trim()).filter(Boolean).slice(-2).join(" | ").slice(0, 300),
-    });
-    return undefined;
+    const reason = (failure.stderr ?? String(error)).split("\n").map((line) => line.trim()).filter(Boolean).slice(-2).join(" | ").slice(0, 300);
+    log("WARN", "ffprobe did not read the source", { stage, timeout, timedOut: Boolean(failure.killed), exitCode: failure.code, reason });
+    return { unreachable: looksUnreachable(failure.stderr ?? "") };
   }
 }

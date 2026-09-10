@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, isPlaylistSource } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -176,6 +176,35 @@ test("concurrent inspect of the same URL runs ffprobe once", async () => {
   assert.equal(first, second);
   await manager.inspect(stream);
   assert.equal(calls, 1);
+});
+
+test("sourceReachable answers from a one-byte range request", async (t) => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
+  t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 206 }));
+  assert.equal(await sourceReachable({ url: "https://cdn.example/movie.mkv" }), true);
+});
+
+test("sourceReachable is false for a connection the source refuses", async (t) => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
+  t.mock.method(globalThis, "fetch", async () => { throw new Error("connect ECONNREFUSED"); });
+  assert.equal(await sourceReachable({ url: "https://cdn.example/movie.mkv" }), false);
+});
+
+test("sourceReachable skips the check for a local file", async (t) => {
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 200 }));
+  assert.equal(await sourceReachable({ url: "file:///downloads/movie.mkv" }), true);
+  assert.equal(fetchMock.mock.callCount(), 0);
+});
+
+test("an unreachable source is never handed to ffprobe", async (t) => {
+  process.env.ALLOW_PRIVATE_ADDONS = "1";
+  t.after(() => { delete process.env.ALLOW_PRIVATE_ADDONS; });
+  t.mock.method(globalThis, "fetch", async () => { throw new Error("connect ETIMEDOUT"); });
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const info = await manager.inspect({ url: "https://cdn.example/movie.mkv" });
+  assert.equal(info, undefined);
 });
 
 test("inspect of different URLs is not coalesced", async () => {

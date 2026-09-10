@@ -79,6 +79,14 @@ track nor an external subtitle from an addon is available. External SRT and
 WebVTT subtitles are saved as a language-tagged `.vtt` sidecar next to the
 video. The queue shows the resolved languages and whether a fallback was used.
 
+A dead link -- an expired debrid cache entry, a torrent with no seeders -- is
+ruled out with a one-byte range request before ffprobe is ever started, and a
+source ffprobe can reach but not open (refused, timed out, a 4xx/5xx) skips
+the slower deep probe instead of retrying it. Resolving one episode also gives
+up after checking 15 candidates rather than working through an addon's whole
+list, so an obscure title with mostly dead or wrong-language sources still
+fails in bounded time instead of stalling the queue.
+
 ### Segmented downloads
 
 One file can also be pulled over several connections at once, each fetching its
