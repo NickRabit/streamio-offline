@@ -41,13 +41,17 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
 });
 
 // Playlists name their segments as they please, and ffmpeg refuses the unfamiliar endings by
-// default -- which reads as an unplayable source. -extension_picky is recent, and a build
-// without it dies on the option instead of ignoring it, so every probe would fail. Ask the
-// binary once and leave the option out when it is not there.
+// default -- which reads as an unplayable source. Newer ffmpeg split the old single option into
+// one for the playlist file and one for its segments, and a build without either flag dies on
+// the unknown option instead of ignoring it, so every probe would fail. Ask the binary once and
+// leave out whichever options it does not have.
 const ALLOW_ANY_SEGMENT = ["-allowed_extensions", "ALL"];
 
-export const playlistArgsFrom = (help: string) =>
-  help.includes("extension_picky") ? [...ALLOW_ANY_SEGMENT, "-extension_picky", "0"] : ALLOW_ANY_SEGMENT;
+export const playlistArgsFrom = (help: string) => [
+  ...ALLOW_ANY_SEGMENT,
+  ...(help.includes("allowed_segment_extensions") ? ["-allowed_segment_extensions", "ALL"] : []),
+  ...(help.includes("extension_picky") ? ["-extension_picky", "0"] : []),
+];
 
 const helpCache = new Map<string, Promise<string>>();
 
