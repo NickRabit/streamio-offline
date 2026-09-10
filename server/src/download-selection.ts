@@ -1,3 +1,4 @@
+import { log } from "./logger.js";
 import type { DownloadResolution, DownloadSelection } from "./downloads.js";
 import { rankStreams, streamLanguages, streamSize } from "./ranking.js";
 import type { MediaInfo } from "./probe.js";
@@ -6,6 +7,11 @@ import type { StreamItem, SubtitleItem } from "./types.js";
 /** Below this a "movie" or "episode" is almost certainly a sample, a trailer, or a fake --
  *  not worth the ffprobe round trip, and never worth downloading. */
 const MIN_STREAM_DURATION_SECONDS = 60;
+
+/** Each candidate can cost up to a minute of ffprobe before it is ruled out, and resolving a
+ *  source holds one of the queue's concurrency slots the whole time. An obscure title with many
+ *  dead or wrong-language sources must still give up in bounded time rather than stall the queue. */
+const MAX_PROBED_CANDIDATES = 15;
 
 interface Choice {
   stream: StreamItem;
@@ -62,6 +68,10 @@ export async function selectDownloadSource(input: {
   let checkedCandidates = 0;
 
   for (const stream of candidates) {
+    if (checkedCandidates >= MAX_PROBED_CANDIDATES) {
+      log("WARN", "Gave up looking for a source after the probe limit", { limit: MAX_PROBED_CANDIDATES, remaining: candidates.length - checkedCandidates });
+      break;
+    }
     const info = await input.inspect(stream).catch(() => undefined);
     checkedCandidates += 1;
     if (!info?.video || !info.audioTracks.length) continue;

@@ -87,6 +87,17 @@ test("a source with no known duration is not rejected", async () => {
   assert.equal(chosen?.stream.addonKey, "first");
 });
 
+test("probing gives up after a bounded number of candidates instead of checking every source", async () => {
+  const candidates = Array.from({ length: 25 }, (_, index) => stream(`https://source-${index}.test/episode.mkv`, "first"));
+  let checked = 0;
+  const chosen = await selectDownloadSource({
+    candidates, subtitles: [], selection: selection(), tried: [],
+    inspect: async () => { checked += 1; return info(["de"]); },
+  });
+  assert.equal(chosen, undefined);
+  assert.equal(checked, 15);
+});
+
 test("required subtitles reject a source while optional subtitles do not", async () => {
   const candidates = [stream("https://one.test/episode.mkv", "first")];
   const inspect = async () => info(["cs"]);

@@ -11,7 +11,27 @@ import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
 import { probe, type MediaInfo, type Track } from "./probe.js";
+import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
+
+const REACHABILITY_TIMEOUT_MS = 8_000;
+
+/** A one-byte range request is far cheaper than spawning ffprobe, so a source that is simply
+ *  gone -- a dead torrent, an expired debrid link -- is ruled out before paying for that. Only
+ *  a plain HTTP(S) address can be checked this way; a local file has nothing to connect to. */
+export async function sourceReachable(stream: StreamItem, timeoutMs = REACHABILITY_TIMEOUT_MS): Promise<boolean> {
+  if (!stream.url || !/^https?:\/\//i.test(stream.url)) return true;
+  try {
+    const response = await safeFetch(stream.url, {
+      headers: { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}), range: "bytes=0-0" },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    await response.body?.cancel().catch(() => undefined);
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
 
 /** direct = the browser plays the file as is, remux = repackaging without re-encoding video, transcode = a real conversion. */
 export type PlaybackMode = "direct" | "remux" | "transcode";
@@ -242,9 +262,15 @@ export class PlaybackManager {
     }
   }
 
-  private probeSource(stream: StreamItem) {
+  private async probeSource(stream: StreamItem) {
+    if (!(await sourceReachable(stream))) {
+      log("INFO", "Source unreachable, ffprobe was skipped", { host: this.hostOf(stream.url) });
+      return undefined;
+    }
     return probe(this.localUrl(this.proxyPath(stream)));
   }
+
+  private hostOf(url?: string) { try { return url ? new URL(url).hostname : undefined; } catch { return undefined; } }
 
   async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
