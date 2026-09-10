@@ -1,7 +1,11 @@
 import type { DownloadResolution, DownloadSelection } from "./downloads.js";
-import { rankStreams, streamSize } from "./ranking.js";
+import { rankStreams, streamLanguages, streamSize } from "./ranking.js";
 import type { MediaInfo } from "./probe.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
+
+/** Below this a "movie" or "episode" is almost certainly a sample, a trailer, or a fake --
+ *  not worth the ffprobe round trip, and never worth downloading. */
+const MIN_STREAM_DURATION_SECONDS = 60;
 
 interface Choice {
   stream: StreamItem;
@@ -36,8 +40,14 @@ export async function selectDownloadSource(input: {
   const priority = new Map(selection.addonKeys.map((key, index) => [key, index]));
   const available = input.candidates.filter((stream) => Boolean(stream.url) && !input.tried.includes(stream.url!));
   const selected = available.filter((stream) => priority.has(stream.addonKey ?? ""));
+  // A source's real audio is only known after ffprobe reads it, which is slow over the network.
+  // The addon text is a hint at best, but a stream whose name or title names the wanted language
+  // is far likelier to match, so it is still worth checking first -- largest strategy included.
+  const bySpokenLanguage = (stream: StreamItem) => streamLanguages(stream).includes(selection.audioLanguage) ? 0 : 1;
   const candidates = selection.sourceStrategy === "largest"
     ? [...selected].sort((left, right) => {
+      const byLanguage = bySpokenLanguage(left) - bySpokenLanguage(right);
+      if (byLanguage) return byLanguage;
       const leftSize = streamSize(left), rightSize = streamSize(right);
       if (leftSize === undefined || rightSize === undefined) {
         if (leftSize !== rightSize) return leftSize === undefined ? 1 : -1;
@@ -55,6 +65,7 @@ export async function selectDownloadSource(input: {
     const info = await input.inspect(stream).catch(() => undefined);
     checkedCandidates += 1;
     if (!info?.video || !info.audioTracks.length) continue;
+    if (info.duration !== undefined && info.duration < MIN_STREAM_DURATION_SECONDS) continue;
     const primary = info.audioTracks.find((track) => track.language === selection.audioLanguage);
     const secondary = selection.fallbackAudioLanguage
       ? info.audioTracks.find((track) => track.language === selection.fallbackAudioLanguage)

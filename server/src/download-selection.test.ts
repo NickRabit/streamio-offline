@@ -60,6 +60,33 @@ test("largest strategy compares an episode size instead of its torrent pack size
   assert.equal(chosen?.stream.url, "https://single.test/episode.mkv");
 });
 
+test("largest strategy still checks a source named in the wanted language before a bigger, untagged one", async () => {
+  const untagged = stream("https://big.test/episode.mkv", "first", 5e9);
+  const tagged = { ...stream("https://tagged.test/episode.mkv", "second", 1e9), title: "Episode CZ dabing" };
+  const checked: string[] = [];
+  const chosen = await selectDownloadSource({
+    candidates: [untagged, tagged], subtitles: [], selection: selection({ sourceStrategy: "largest" }), tried: [],
+    inspect: async (item) => { checked.push(item.url!); return info(["cs"]); },
+  });
+  assert.equal(checked[0], "https://tagged.test/episode.mkv");
+  assert.equal(chosen?.stream.url, "https://tagged.test/episode.mkv");
+});
+
+test("a suspiciously short source is rejected even when its audio matches", async () => {
+  const candidates = [stream("https://sample.test/episode.mkv", "first"), stream("https://full.test/episode.mkv", "second")];
+  const chosen = await selectDownloadSource({
+    candidates, subtitles: [], selection: selection(), tried: [],
+    inspect: async (item) => ({ ...info(["cs"]), duration: item.addonKey === "first" ? 12 : 1320 }),
+  });
+  assert.equal(chosen?.stream.addonKey, "second");
+});
+
+test("a source with no known duration is not rejected", async () => {
+  const candidates = [stream("https://one.test/episode.mkv", "first")];
+  const chosen = await selectDownloadSource({ candidates, subtitles: [], selection: selection(), tried: [], inspect: async () => info(["cs"]) });
+  assert.equal(chosen?.stream.addonKey, "first");
+});
+
 test("required subtitles reject a source while optional subtitles do not", async () => {
   const candidates = [stream("https://one.test/episode.mkv", "first")];
   const inspect = async () => info(["cs"]);

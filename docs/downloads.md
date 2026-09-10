@@ -60,10 +60,16 @@ Each episode enters the queue as a small rule rather than a preselected URL.
 Only when that episode reaches the front does the queue ask the selected addons
 for current streams and inspect the real audio and text-subtitle tracks. The
 dialog can either respect the selected addon order or ignore that order and
-choose the largest matching file across all enabled sources. A
-primary-language match anywhere in the chosen sources wins over a fallback
-match; addon order decides between otherwise equivalent matches. Unknown or
-missing audio metadata is not treated as a match.
+choose the largest matching file across all enabled sources. Either way, a
+source whose own name or title already names the wanted audio language is
+checked before one that does not -- ffprobe is the only way to learn a
+source's real tracks, and that round trip is slow, so a likely match is worth
+trying first even under "largest". A primary-language match anywhere in the
+chosen sources wins over a fallback match; addon order (or, under "largest",
+size) decides between otherwise equivalent matches. Unknown or missing audio
+metadata is not treated as a match, and a source shorter than a minute is
+skipped outright once its duration is known -- almost always a sample, a
+trailer, or a fake.
 
 Optional subtitles never displace a source with the preferred audio. When only
 fallback audio is available, a matching embedded subtitle track is preferred
