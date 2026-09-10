@@ -17,6 +17,7 @@ import {
   type QueueHalt,
 } from "./download-policy.js";
 import { isRetryableDebridFailure, type DebridAdvance } from "./debrid.js";
+import { playlistArgs } from "./probe.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
@@ -613,8 +614,7 @@ export class DownloadQueue {
     const args = [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
-      // Segment names do not always end in .ts, and ffmpeg refuses the unfamiliar ones by default.
-      "-allowed_extensions", "ALL", "-extension_picky", "0",
+      ...await playlistArgs("ffmpeg"),
       ...(headers ? ["-headers", headers] : []),
       "-i", stream.url!,
       // No -map: a master playlist offers every rendition as its own program,
