@@ -43,6 +43,14 @@ test("public sources allowlist fields and never contain provider addresses or en
   assert.equal("proxyHeaders" in publicSource.behaviorHints, false);
 });
 
+test("a library source may expose its own local subtitle sidecars", () => {
+  const registry = new MediaResources(() => 0);
+  const publicSource = registry.publicStream({ url: "file://Show/01.mkv", subtitles: [{ url: "file://Show/01.cs.vtt", lang: "cs" }] }, owner);
+  assert.equal(publicSource.subtitles.length, 1);
+  assert.equal(publicSource.subtitles[0].lang, "cs");
+  assert.equal(registry.get(publicSource.subtitles[0].subtitleId, owner.sid, "subtitle").stream.url, "file://Show/01.cs.vtt");
+});
+
 test("resources enforce owners, scope, expiry, revocation and deduplication", () => {
   let now = 0;
   const registry = new MediaResources(() => now);

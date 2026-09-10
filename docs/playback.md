@@ -64,6 +64,9 @@ two places:
   pass, so the file is not downloaded twice,
 - **subtitle addons** (for example OpenSubtitles) — attached in the browser.
 
+Downloaded language-tagged `.srt` and `.vtt` sidecars are discovered beside
+library videos and offered in the player as external tracks.
+
 Switching a track remaps FFmpeg, so conversion restarts at the current position,
 same as a seek. Bitmap subtitles (PGS, VobSub) are not offered; they cannot be
 turned into WebVTT.

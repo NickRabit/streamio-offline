@@ -24,13 +24,25 @@ export interface Stream {
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 export interface Download {
-  id: string; title: string; status: "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
+  id: string; title: string; status: "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
   target: string; received: number; total?: number; speed: number; order: number;
   error?: string; errorKey?: string; errorVars?: Record<string, string | number>;
   pauseReason?: "user" | "storage"; pending?: boolean; debridProgress?: number;
   /** How many connections the file is being split across; missing while it runs over one. */
   segments?: number;
+  resolution?: { checkedCandidates: number; audioLanguage?: string; fallbackUsed?: boolean; subtitleLanguage?: string; subtitleSource?: "embedded" | "addon"; subtitleStatus?: "ready" | "missing" };
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
+}
+export type SubtitleMode = "off" | "optional" | "required";
+export type DownloadSourceStrategy = "priority" | "largest";
+export interface DownloadSelection {
+  addonKeys: string[];
+  sourceStrategy: DownloadSourceStrategy;
+  audioLanguage: string;
+  fallbackAudioLanguage?: string;
+  subtitleMode: SubtitleMode;
+  subtitleLanguage?: string;
+  fallbackSubtitleLanguage?: string;
 }
 export interface DownloadSnapshot { jobs: Download[]; halt: QueueHalt | null }
 

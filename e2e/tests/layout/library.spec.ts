@@ -148,6 +148,7 @@ test("showing a finished download highlights the file in a crowded folder", asyn
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Stahování", exact: true }).click();
+  await page.locator(".queue-history-toggle").click();
   await page.locator(".job-link").click();
   const focused = page.locator(".browse-item.focused");
   await expect(focused).toBeVisible();

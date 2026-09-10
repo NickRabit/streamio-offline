@@ -499,6 +499,26 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .addon-essential{display:grid;place-items:center;width:37px;height:37px;color:var(--green)}
 .addon-essential svg{width:17px;height:17px}
 @media(max-width:700px){.identify-row{grid-template-columns:1fr}.identify-overlay{padding:12px;align-items:end}}
+.job-status.checking{color:var(--accent2)}
+.bulk-card{width:min(620px,100%)}
+.bulk-strategy{display:grid;gap:6px}
+.bulk-strategy label{display:grid;gap:5px}
+.bulk-strategy label span{font-size:10px;color:var(--muted)}
+.bulk-strategy .identify-hint,.bulk-subtitle-hint{margin:0}
+.bulk-sources{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin:0;padding:12px;border:1px solid var(--line);border-radius:9px}
+.bulk-sources legend{padding:0 5px;font-size:11px;font-weight:700}
+.bulk-sources>p{grid-column:1/-1}
+.bulk-sources>div{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:#10151d}
+.bulk-sources>div.selected{border-color:#ff5b3855}
+.bulk-sources label{display:flex;align-items:center;gap:9px;min-width:0;font-size:12px;font-weight:700}
+.bulk-sources input{width:auto}
+.bulk-sources>div>span{display:flex;gap:4px}
+.bulk-sources .icon-button{padding:5px}
+.bulk-sources .icon-button svg{width:14px;height:14px}
+.bulk-language-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.bulk-language-grid label{display:grid;gap:5px}
+.bulk-language-grid label span{font-size:10px;color:var(--muted)}
+@media(max-width:700px){.bulk-sources,.bulk-language-grid{grid-template-columns:1fr}.bulk-card{max-height:92dvh}}
 .library-action{display:flex;align-items:center;gap:7px;min-height:44px;font-size:12px;color:var(--accent2);padding:8px 2px}
 .library-action svg{width:18px;height:18px;flex-shrink:0}.library-action svg:last-child:not(:first-child){margin-left:auto}
 .library-page .browse-menu{opacity:1;width:36px;height:36px;top:8px;right:8px;padding:8px;border:1px solid #ffffff24;background:#10151eeb;z-index:2}
@@ -744,7 +764,7 @@ img.broken{visibility:hidden}
 .queue-block-list .download-row.details-expanded .download-job>strong,.queue-block-list .download-row.details-expanded .job-link>span{-webkit-line-clamp:unset}
 .queue-block-list .queue-job-details>small{display:block;white-space:normal;overflow-wrap:anywhere;margin-top:10px}
 .queue-block-list .progress{height:5px;margin-top:8px}
-.queue-block-active .progress i{background:#70dfbc}
+.queue-block-active .progress i{background:#70dfbc;transition:width 1.15s linear}
 .queue-block-active .download-speed{color:#70dfbc;font-size:15px;font-weight:700}
 .queue-block-list .download-row:not([data-status="downloading"]) .download-speed{display:none}
 .queue-block-list .download-row:not([data-status="downloading"]){grid-template-areas:"title status" "progress progress" "actions actions"}
@@ -752,10 +772,11 @@ img.broken{visibility:hidden}
 .queue-block .queue-pagination{padding:12px 20px;margin:0;border-top:1px solid var(--line)}
 .queue-block .queue-pagination>span{margin-right:auto}
 @media(min-width:1100px){
-  .downloads-page .queue-block-list .download-row{grid-template-columns:minmax(0,1.4fr) minmax(180px,1fr) auto;grid-template-areas:"title progress meta" "status actions actions"}
-  .downloads-page .queue-block-list .download-row:not([data-status="downloading"]){grid-template-columns:minmax(0,1.4fr) minmax(180px,1fr) auto;grid-template-areas:"title progress status" "actions actions actions"}
+  .downloads-page .queue-block-list .download-row{grid-template-columns:minmax(0,1.4fr) minmax(180px,1fr) 150px;grid-template-areas:"title progress meta" "status actions actions"}
+  .downloads-page .queue-block-list .download-row:not([data-status="downloading"]){grid-template-columns:minmax(0,1.4fr) minmax(180px,1fr) 150px;grid-template-areas:"title progress status" "actions actions actions"}
   .queue-block-list .download-row[data-status="downloading"]>.job-status{justify-self:start}
 }
+@media(prefers-reduced-motion:reduce){.queue-block-active .progress i{transition:none}}
 @media(max-width:700px){
   .queue-blocks{gap:14px}.queue-block-head{padding:14px}.queue-block-head h3{gap:8px;font-size:14px}.queue-live-speed{font-size:12px}
   .queue-block-hint,.queue-block-empty{padding:0 14px 14px}.downloads-page .queue-block-list{padding:0 14px}

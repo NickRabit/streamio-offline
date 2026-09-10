@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -63,7 +63,7 @@ export const api = {
   download: (title: string, stream: Stream, media?: Record<string, unknown>) => request<Download>("/api/downloads", { method: "POST", body: JSON.stringify({ title, sourceId: stream.sourceId, media }) }),
   prepareDeviceDownload: (payload: { title?: string; stream?: Stream; media?: Record<string, unknown>; path?: string }) =>
     request<{ url: string; filename: string }>("/api/device-download", { method: "POST", body: JSON.stringify({ title: payload.title, sourceId: payload.stream?.sourceId, media: payload.media }) }),
-  downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, media?: { id?: string; metaType?: string; poster?: string }) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, media }) }),
+  downloadBulk: (title: string, type: string, episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>, selection: DownloadSelection, media?: { id?: string; metaType?: string; poster?: string }) => request<{ added: number; skipped: number }>("/api/downloads/bulk", { method: "POST", body: JSON.stringify({ title, type, episodes, selection, media }) }),
   downloadAction: (id: string, action: "pause" | "resume" | "retry") => request<void>(`/api/downloads/${id}/${action}`, { method: "POST" }),
   moveDownload: (id: string, direction: -1 | 1) => request<void>(`/api/downloads/${id}/move`, { method: "POST", body: JSON.stringify({ direction }) }),
   removeDownload: (id: string) => request<void>(`/api/downloads/${id}`, { method: "DELETE" }),

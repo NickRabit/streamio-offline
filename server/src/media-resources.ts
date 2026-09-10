@@ -200,7 +200,7 @@ export class MediaResources {
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
       behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize },
-      subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url)).map((item) => ({
+      subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
         subtitleId: this.add({ url: item.url }, owner, "subtitle"),
         lang: safeSourceText(item.lang, stream), addonName: safeSourceText(item.addonName, stream),
       })),

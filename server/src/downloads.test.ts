@@ -366,7 +366,7 @@ test("HTTP 404 fails a direct job and moves a lazy job to the next source", asyn
     await waitFor(queue, () => queue.list()[0].status === "failed");
     assert.match(queue.list()[0].error ?? "", /HTTP 404/);
 
-    queue.setResolver(async (_type, _id, tried) => {
+    queue.setResolver(async ({ tried }) => {
       const url = tried.includes(`http://127.0.0.1:${port}/missing.mp4`)
         ? `http://127.0.0.1:${port}/ok.mp4`
         : `http://127.0.0.1:${port}/missing.mp4`;
@@ -381,6 +381,36 @@ test("HTTP 404 fails a direct job and moves a lazy job to the next source", asyn
     queue.stop();
     server.close();
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a smart job stores selected addon subtitles beside the completed episode", async () => {
+  const { server, port } = await listen((req, res) => {
+    if (req.url === "/episode.srt") {
+      res.writeHead(200, { "content-type": "application/x-subrip" });
+      res.end("1\n00:00:01,000 --> 00:00:02,000\nAhoj\n");
+      return;
+    }
+    res.writeHead(200, { "content-length": "2048", "content-type": "video/mp4" });
+    res.end(Buffer.alloc(2048));
+  });
+  const { directory, queue, downloads } = await tempQueue();
+  try {
+    queue.setResolver(async () => ({
+      stream: { url: `http://127.0.0.1:${port}/episode.mp4`, addonKey: "source" },
+      subtitle: { url: `http://127.0.0.1:${port}/episode.srt`, lang: "cs" },
+      resolution: { checkedCandidates: 1, audioLanguage: "cs", audioTrack: 0, subtitleLanguage: "cs", subtitleSource: "addon", subtitleStatus: "ready" },
+      settings: defaultDownloadSettings(),
+    }));
+    await queue.addPending("Díl", { type: "series", videoId: "tt1:1:1", selection: {
+      addonKeys: ["source"], sourceStrategy: "priority", audioLanguage: "cs", subtitleMode: "required",
+      subtitleLanguage: "cs", targetSettings: defaultDownloadSettings().series,
+    } }, { kind: "episode", title: "Show", season: 1, episode: 1 });
+    await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
+    assert.equal(queue.list()[0].status, "completed", queue.list()[0].error);
+    assert.match(await readFile(path.join(downloads, "Show", "01 serie", "01.cs.vtt"), "utf8"), /WEBVTT[\s\S]*00:00:01\.000[\s\S]*Ahoj/);
+  } finally {
+    queue.stop(); server.close(); await rm(directory, { recursive: true, force: true });
   }
 });
 
