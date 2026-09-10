@@ -279,6 +279,24 @@ export const en = {
   "episodes.bulkAdded": { one: "1 episode added to the queue.", other: "{count} episodes added to the queue." },
   "episodes.bulkSkipped": { one: "1 skipped, already queued.", other: "{count} skipped, already queued." },
 
+  "bulk.title": "Download series",
+  "bulk.episodeCount": { one: "1 episode", other: "{count} episodes" },
+  "bulk.sources": "Sources",
+  "bulk.sourcesHint": "Choose one or more addons. Their order is used as the source priority for every episode.",
+  "bulk.moveSourceUp": "Move {name} up",
+  "bulk.moveSourceDown": "Move {name} down",
+  "bulk.audio": "Audio language",
+  "bulk.audioFallback": "Fallback audio",
+  "bulk.noFallback": "No fallback",
+  "bulk.subtitles": "Subtitles",
+  "bulk.subtitlesOff": "Do not download",
+  "bulk.subtitlesOptional": "Optional",
+  "bulk.subtitlesRequired": "Required",
+  "bulk.subtitleLanguage": "Subtitle language",
+  "bulk.subtitleFallback": "Fallback subtitles",
+  "bulk.queueHint": "Each episode is checked only when it reaches the front of the queue. Languages are read from the tracks inside the source.",
+  "bulk.add": "Add to queue",
+
   // Sources for a title.
   "sources.heading": "Sources",
   "sources.load": "Load sources",
@@ -434,6 +452,7 @@ export const en = {
   "downloads.emptyText": "Pick an HTTP source, or a torrent with Real-Debrid, and choose To library.",
   "downloads.status.queued": "Queued",
   "downloads.status.waiting": "Waiting for Real-Debrid",
+  "downloads.status.checking": "Checking sources",
   "downloads.status.downloading": "Downloading",
   "downloads.status.paused": "Paused",
   "downloads.status.completed": "Done",
@@ -442,6 +461,14 @@ export const en = {
   "downloads.waitingDebrid": "Waiting for Real-Debrid.",
   "downloads.debridReady": "{title} is ready on Real-Debrid, downloading now.",
   "downloads.inLibrary": "{title} is in the library.",
+  "downloads.checkedSource": "Audio {audio} · checked {count} sources",
+  "downloads.checkedFallbackSource": "Fallback audio {audio} · checked {count} sources",
+  "downloads.subtitleReady": "Subtitles {language}",
+  "downloads.subtitleMissing": "Optional subtitles unavailable",
+
+  "err.missingDownloadSources": "Pick at least one source addon.",
+  "err.missingAudioLanguage": "Pick an audio language.",
+  "err.missingSubtitleLanguage": "Pick a subtitle language.",
 
   // Addons.
   "addons.eyebrow": "ADDONS",

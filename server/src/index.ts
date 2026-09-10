@@ -8,7 +8,8 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { rankStreams } from "./ranking.js";
-import { DownloadQueue } from "./downloads.js";
+import { DownloadQueue, type DownloadSelection, type SubtitleMode } from "./downloads.js";
+import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
@@ -40,6 +41,8 @@ import { createSettingsBackup, parseSettingsBackup } from "./backup.js";
 
 const STREAM_SORTS = new Set(["recommended", "size-desc", "size-asc", "addon"]);
 const app = express(); const store = new Store();
+let markServerReady!: () => void;
+const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
 configureSecureMode(() => store.settings().secureMode !== false);
 await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
@@ -93,11 +96,19 @@ const cachedStreams = async (type: string, id: string) => {
   streamCache.set(key, { at: Date.now(), items });
   return items;
 };
-queue.setResolver(async (type, videoId, tried) => {
+queue.setResolver(async (source) => {
   const priority = new Map(store.addons().map((addon, index) => [addon.key, index]));
-  const candidates = (await cachedStreams(type, videoId)).filter((stream) => stream.url);
+  const candidates = (await cachedStreams(source.type, source.videoId)).filter((stream) => stream.url);
+  if (source.selection) {
+    await serverReady;
+    const external = source.selection.subtitleMode === "off" ? [] : await subtitles(store.addons(), source.type, source.videoId);
+    const selected = await selectDownloadSource({ candidates, subtitles: external, selection: source.selection, tried: source.tried, inspect: (stream) => playback.inspect(stream) });
+    if (!selected) return undefined;
+    const addon = store.addons().find((item) => item.key === selected.stream.addonKey);
+    return { ...selected, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
+  }
   const ranked = rankStreams(candidates, store.settings().audioLanguage, priority);
-  const next = ranked.find((stream) => !tried.includes(stream.url!));
+  const next = ranked.find((stream) => !source.tried.includes(stream.url!));
   if (!next) return undefined;
   const addon = store.addons().find((item) => item.key === next.addonKey);
   return { stream: next, settings: addon?.downloadSettings ?? defaultDownloadSettings() };
@@ -460,6 +471,12 @@ app.get("/api/subtitle/:subtitleId", asyncRoute(async (req, res) => {
   const resource = mediaResources.get(String(req.params.subtitleId), owner.sid, "subtitle");
   trackMedia(owner, res, resource.parent);
   const raw = resource.stream.url!;
+  if (raw.startsWith("file://")) {
+    const target = await libraryTarget(raw.slice(7));
+    const text = await readFile(target, "utf8");
+    const vtt = text.trimStart().startsWith("WEBVTT") ? text : `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+    return void res.type("text/vtt; charset=utf-8").send(vtt);
+  }
   const controller = new AbortController();
   res.once("close", () => { if (!res.writableEnded) controller.abort(); });
   const response = await guardedFetch(raw, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
@@ -1085,7 +1102,7 @@ const libraryAutoScan = new LibraryAutoScan({
   files: () => libraryFiles(),
   status: () => libraryScan.snapshot(),
   start: () => libraryScan.start(),
-  busy: () => playbackBusy() || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "downloading")),
+  busy: () => playbackBusy() || (store.settings().libraryScanPauseOnDownload && queue.list().some((job) => job.status === "checking" || job.status === "downloading")),
   watch: (onChange) => watchLibrary(DOWNLOAD_DIR, () => { invalidateLibrary(); onChange(); }),
   ...(Number.isFinite(autoScanIntervalMs) ? { intervalMs: autoScanIntervalMs } : {}),
 });
@@ -1124,7 +1141,7 @@ queue.onCompleted = async (job) => {
   if (!job.source || !job.target || !job.media) return;
   const addon = store.addons().find((item) => item.key === job.stream?.addonKey);
   const settings = addon?.downloadSettings ?? defaultDownloadSettings();
-  const targetSettings = job.media.kind === "episode" ? settings.series : settings.movie;
+  const targetSettings = job.source.selection?.targetSettings ?? (job.media.kind === "episode" ? settings.series : settings.movie);
   await rememberTitle(job.target, job.media, targetSettings.layout === "flat");
 };
 queue.setDebrid({
@@ -1291,7 +1308,16 @@ app.post("/api/library/source", asyncRoute(async (req, res) => {
   const relative = String(req.body.path ?? "");
   const target = relative && await libraryTarget(relative);
   if (!target || !(await stat(target).catch(() => undefined))?.isFile()) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-  res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${relative}`, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
+  const directory = path.dirname(target);
+  const stem = path.basename(relative, path.extname(relative));
+  const escaped = stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const sidecars = (await readdir(directory, { withFileTypes: true })).flatMap((entry) => {
+    if (!entry.isFile()) return [];
+    const match = new RegExp(`^${escaped}(?:\\.([a-zA-Z]{2,3}))?\\.(?:srt|vtt)$`, "i").exec(entry.name);
+    if (!match) return [];
+    return [{ url: `file://${path.posix.join(path.posix.dirname(relative), entry.name)}`, lang: normalizeLanguage(match[1]) }];
+  });
+  res.setHeader("cache-control", "private, no-store").json(mediaResources.publicStream({ url: `file://${relative}`, subtitles: sidecars, behaviorHints: { filename: path.basename(relative) } }, ownerOf(req)));
 }));
 
 /** Keep the external address out of the download link by exchanging it for a short-lived ticket. */
@@ -1393,6 +1419,26 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const episodes = Array.isArray(req.body.episodes) ? req.body.episodes as Array<Record<string, unknown>> : [];
   if (!episodes.length) throw new AppError("Missing episode list.", "err.missingEpisodes");
   if (episodes.length > 500) throw new AppError("At most 500 episodes at a time.", "err.tooManyEpisodes");
+  const rawSelection = req.body.selection && typeof req.body.selection === "object" ? req.body.selection as Record<string, unknown> : {};
+  const addonKeys = Array.isArray(rawSelection.addonKeys)
+    ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => store.addons().some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
+    : [];
+  if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
+  const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
+  if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
+  const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
+  const subtitleMode: SubtitleMode = ["optional", "required"].includes(String(rawSelection.subtitleMode)) ? String(rawSelection.subtitleMode) as SubtitleMode : "off";
+  const subtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.subtitleLanguage ?? ""));
+  if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
+  const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
+  const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
+  const selection: DownloadSelection = {
+    addonKeys, audioLanguage,
+    fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
+    subtitleMode, subtitleLanguage,
+    fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
+    targetSettings: firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series,
+  };
   let added = 0, skipped = 0;
   for (const episode of episodes) {
     const videoId = String(episode.id ?? "").trim();
@@ -1402,7 +1448,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     const episodeTitle = episode.title ? String(episode.title) : undefined;
     const jobTitle = `${title} · ${episodeTitle ?? (season != null ? `S${String(season).padStart(2, "0")}E${String(number ?? 0).padStart(2, "0")}` : `Episode ${number ?? "?"}`)}`;
     const media: MediaInfo = { kind: "episode", title, season, episode: number, episodeTitle, id: parentId, metaType, poster };
-    const job = await queue.addPending(jobTitle, { type, videoId }, media);
+    const job = await queue.addPending(jobTitle, { type, videoId, selection }, media);
     if (job) added += 1; else skipped += 1;
   }
   log("INFO", "Bulk addition to the queue", { title, added, skipped });
@@ -1803,7 +1849,7 @@ process.on("uncaughtException", (error) => {
   log("ERROR", "Unhandled exception, the server keeps running", { reason: error instanceof Error ? error.stack ?? error.message : String(error) });
 });
 const port = Number(process.env.PORT ?? 8080);
-app.listen(port, "0.0.0.0", () => log("INFO", "Stremio Offline is listening", { port }));
+app.listen(port, "0.0.0.0", () => { markServerReady(); log("INFO", "Stremio Offline is listening", { port }); });
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.once(signal, () => {
     log("INFO", "Shutting down", { signal });

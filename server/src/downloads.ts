@@ -5,7 +5,7 @@ import { mkdir, open, readFile, rename, stat, statfs, unlink, writeFile, type Fi
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { AddonDownloadSettings, StreamItem } from "./types.js";
+import type { AddonDownloadSettings, StreamItem, SubtitleItem } from "./types.js";
 import { defaultDownloadSettings, joinTarget, streamExtension, targetPath, type MediaInfo } from "./naming.js";
 import type { DownloadTargetSettings } from "./types.js";
 import { safeFetch } from "./security.js";
@@ -21,15 +21,38 @@ import { playlistArgs } from "./probe.js";
 import {
   planSegments, segmentCount, segmentedBytes, segmentSize, usableSegments, type Segment,
 } from "./download-segments.js";
+import { readMediaText } from "./media-playlist.js";
 
 export type { QueueHalt };
-export type DownloadStatus = "queued" | "waiting" | "downloading" | "paused" | "completed" | "failed";
+export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 export type PauseReason = "user" | "storage";
+export type SubtitleMode = "off" | "optional" | "required";
+export interface DownloadSelection {
+  addonKeys: string[];
+  audioLanguage: string;
+  fallbackAudioLanguage?: string;
+  subtitleMode: SubtitleMode;
+  subtitleLanguage?: string;
+  fallbackSubtitleLanguage?: string;
+  targetSettings: DownloadTargetSettings;
+}
+export interface DownloadResolution {
+  checkedCandidates: number;
+  audioLanguage?: string;
+  audioTrack?: number;
+  fallbackUsed?: boolean;
+  subtitleLanguage?: string;
+  subtitleTrack?: number;
+  subtitleSource?: "embedded" | "addon";
+  subtitleStatus?: "ready" | "missing";
+}
 /** A job without `stream` is lazy: the resolver picks a source for it only when the queue
  *  reaches it. `tried` guards against repeating addresses that already failed. */
 export interface DownloadJob {
   id: string; title: string; stream?: StreamItem; media?: MediaInfo;
-  source?: { type: string; videoId: string; tried: string[] };
+  source?: { type: string; videoId: string; tried: string[]; selection?: DownloadSelection };
+  subtitle?: SubtitleItem;
+  resolution?: DownloadResolution;
   status: DownloadStatus; target: string; received: number; total?: number; speed: number;
   error?: string;
   /** Catalogue key for `error`, so the interface can show it in the reader's language.
@@ -43,7 +66,12 @@ export interface DownloadJob {
   segments?: Segment[];
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
-export type StreamResolver = (type: string, videoId: string, tried: string[]) => Promise<{ stream: StreamItem; settings: AddonDownloadSettings } | undefined>;
+export type StreamResolver = (source: NonNullable<DownloadJob["source"]>) => Promise<{
+  stream: StreamItem;
+  settings: AddonDownloadSettings;
+  subtitle?: SubtitleItem;
+  resolution?: DownloadResolution;
+} | undefined>;
 export interface DebridEngine {
   configured: () => boolean;
   advance: (input: { infoHash: string; fileIdx?: number; torrentId?: string }) => Promise<DebridAdvance>;
@@ -161,7 +189,7 @@ export class DownloadQueue {
       }
     }
     for (const job of this.jobs) {
-      if (job.status === "downloading") job.status = "queued";
+      if (job.status === "downloading" || job.status === "checking") job.status = "queued";
       job.updatedAt ??= job.createdAt;
       job.speed = 0;
       job.notBefore = undefined;
@@ -217,7 +245,7 @@ export class DownloadQueue {
   }
 
   /** A lazy job: both target and source are filled in when the download starts. A duplicate episode is not added. */
-  async addPending(title: string, source: { type: string; videoId: string }, media?: MediaInfo) {
+  async addPending(title: string, source: { type: string; videoId: string; selection?: DownloadSelection }, media?: MediaInfo) {
     if (this.jobs.some((job) => job.source?.videoId === source.videoId && job.status !== "completed" && job.status !== "failed")) return undefined;
     const now = new Date().toISOString();
     const job: DownloadJob = { id: crypto.randomUUID(), title, media, source: { ...source, tried: [] }, status: "queued", target: "", received: 0, speed: 0, createdAt: now, updatedAt: now };
@@ -360,7 +388,11 @@ export class DownloadQueue {
     if (index < 0) throw new AppError("The item was not found.", "err.itemNotFound");
     const [job] = this.jobs.splice(index, 1);
     this.active.get(id)?.abort();
-    if (job.status !== "completed" && job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
+    if (job.status !== "completed" && job.target) {
+      await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
+      const subtitleFiles = this.subtitleFiles(job);
+      if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
+    }
     await this.save();
     this.pump();
   }
@@ -390,7 +422,7 @@ export class DownloadQueue {
 
   private require(id: string) { const job = this.jobs.find((item) => item.id === id); if (!job) throw new AppError("The item was not found.", "err.itemNotFound"); return job; }
   /** Source addresses (often carrying tokens) must not reach the interface; only the lazy flag goes out. */
-  private publicJob({ stream, source, notBefore: _notBefore, debrid, segments, ...job }: DownloadJob) {
+  private publicJob({ stream, source, subtitle: _subtitle, notBefore: _notBefore, debrid, segments, ...job }: DownloadJob) {
     return { ...job, pending: !stream && Boolean(source), debridProgress: debrid?.progress, segments: segments?.length };
   }
   /** Saves have to run one after another: concurrent writes share one .tmp and the second
@@ -493,7 +525,11 @@ export class DownloadQueue {
       const now = this.now();
       for (const job of this.jobs) if (this.active.has(job.id)) { const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1); }
       while (this.active.size < limit) {
-        const job = this.jobs.find((item) => item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(this.provider(item)) ?? 0) < perProvider);
+        const job = this.jobs.find((item) => {
+          const provider = this.provider(item);
+          const providerLimit = provider === "?" ? 1 : perProvider;
+          return item.status === "queued" && !this.active.has(item.id) && (item.notBefore ?? 0) <= now && (taken.get(provider) ?? 0) < providerLimit;
+        });
         if (!job) break;
         const key = this.provider(job); taken.set(key, (taken.get(key) ?? 0) + 1);
         void this.download(job);
@@ -512,19 +548,71 @@ export class DownloadQueue {
   private async resolve(job: DownloadJob) {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
-    const resolved = await this.resolver(job.source.type, job.source.videoId, job.source.tried);
+    const resolved = await this.resolver(job.source);
     if (!resolved?.stream.url) {
+      const selection = job.source.selection;
+      const requested = selection
+        ? `No source contains ${selection.audioLanguage}${selection.fallbackAudioLanguage ? ` or ${selection.fallbackAudioLanguage}` : ""} audio${selection.subtitleMode === "required" ? " and the required subtitles" : ""}.`
+        : "No directly downloadable source was found.";
       throw new SourceError(job.source.tried.length
         ? `Every available source failed (${job.source.tried.length}).`
-        : "No directly downloadable source was found.");
+        : requested);
     }
     job.stream = resolved.stream;
-    const settings = job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie;
+    job.subtitle = resolved.subtitle;
+    job.resolution = resolved.resolution;
+    const settings = job.source.selection?.targetSettings ?? (job.media?.kind === "episode" ? resolved.settings.series : resolved.settings.movie);
     const extension = streamExtension(resolved.stream);
     const { directory, base } = targetPath(job.media, job.title, extension, settings);
     job.target = await this.uniqueTarget(directory, base, extension);
     await this.save();
     log("INFO", "Download source selected", { id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1 });
+  }
+
+  private subtitleFiles(job: DownloadJob) {
+    if (!job.target || !job.resolution?.subtitleLanguage || job.resolution.subtitleSource !== "addon") return undefined;
+    const extension = path.extname(job.target);
+    const base = job.target.slice(0, -extension.length);
+    const target = path.join(this.downloadDir, `${base}.${job.resolution.subtitleLanguage}.vtt`);
+    return { target, partial: `${target}.part` };
+  }
+
+  private async prepareSubtitle(job: DownloadJob, controller: AbortController) {
+    const files = this.subtitleFiles(job);
+    if (!files || !job.subtitle?.url) return;
+    if (await exists(files.partial)) return;
+    try {
+      const response = await safeFetch(job.subtitle.url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
+      if (!response.ok) { await response.body?.cancel(); throw new SourceError(`The subtitle source answered HTTP ${response.status}.`); }
+      let text = await readMediaText(response);
+      if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
+      if (!text.includes(" --> ")) throw new SourceError("The subtitle file contains no cues.");
+      await mkdir(path.dirname(files.partial), { recursive: true });
+      await writeFile(files.partial, text, { mode: 0o600 });
+      if (job.resolution) job.resolution.subtitleStatus = "ready";
+    } catch (error) {
+      if (controller.signal.aborted) throw error;
+      if (job.source?.selection?.subtitleMode === "required") throw error;
+      job.subtitle = undefined;
+      if (job.resolution) job.resolution.subtitleStatus = "missing";
+      log("WARN", "Optional subtitles could not be downloaded", { id: job.id, reason: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private async commit(job: DownloadJob, partial: string, target: string) {
+    const files = this.subtitleFiles(job);
+    const moveSubtitle = Boolean(files && await exists(files.partial));
+    if (moveSubtitle && files) await rename(files.partial, files.target);
+    try {
+      await rename(partial, target);
+    } catch (error) {
+      if (moveSubtitle && files) await rename(files.target, files.partial).catch(() => undefined);
+      throw error;
+    }
+    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
+    log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target, audioLanguage: job.resolution?.audioLanguage, subtitleLanguage: job.resolution?.subtitleLanguage });
+    try { await this.onCompleted?.(job); }
+    catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
   }
 
   /** A file is split only when the source serves byte ranges and the whole size is known.
@@ -617,10 +705,12 @@ export class DownloadQueue {
       ...await playlistArgs("ffmpeg"),
       ...(headers ? ["-headers", headers] : []),
       "-i", stream.url!,
-      // No -map: a master playlist offers every rendition as its own program,
-      // and taking them all would write each quality into the file. The default
-      // selection keeps one video and one audio, the best of what is offered.
-      "-c", "copy",
+      ...(job.resolution?.audioTrack != null
+        ? ["-map", "0:v:0?", "-map", `0:a:${job.resolution.audioTrack}?`,
+          ...(job.resolution.subtitleTrack != null ? ["-map", `0:s:${job.resolution.subtitleTrack}?`] : []),
+          "-c:v", "copy", "-c:a", "copy",
+          ...(job.resolution.subtitleTrack != null ? ["-c:s", "mov_text"] : [])]
+        : ["-c", "copy"]),
       // ADTS frames out of a transport stream need this to be legal inside MP4.
       "-bsf:a", "aac_adtstoasc",
       "-movflags", "+faststart",
@@ -668,21 +758,19 @@ export class DownloadQueue {
     if (!written) throw new IncompleteDownloadError(0, undefined);
 
     job.received = written; job.total = written;
-    await rename(partial, target);
-    job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; this.setError(job);
-    log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
-    try { await this.onCompleted?.(job); }
-    catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+    await this.commit(job, partial, target);
     await this.save();
   }
 
   private async download(job: DownloadJob) {
-    const controller = new AbortController(); this.active.set(job.id, controller); job.status = "downloading"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
+    const controller = new AbortController(); this.active.set(job.id, controller); job.status = job.stream ? "downloading" : "checking"; job.startedAt ??= new Date(this.now()).toISOString(); this.setError(job); job.pauseReason = undefined; job.updatedAt = new Date().toISOString(); log("INFO", "Download started", { id: job.id, title: job.title, target: job.target || "(to be chosen)", previousBytes: job.received }); await this.save();
     let retryScheduled = false;
     let inactivity: NodeJS.Timeout | undefined;
     let stalled = false;
     try {
       if (!job.stream) await this.resolve(job);
+      if (controller.signal.aborted) throw new Error("The download was stopped.");
+      job.status = "downloading";
       // The provider is known only after a source is picked. If it is busy, the job goes back to
       // the queue; the next pump puts it in the right bucket and leaves it alone until that frees up.
       if (this.busy(this.provider(job), job.id) >= Math.max(1, Math.min(8, this.perProvider()))) {
@@ -694,6 +782,7 @@ export class DownloadQueue {
       if (!stream.url) throw new SourceError("Only a direct HTTP stream can be downloaded.");
       const partial = path.join(this.downloadDir, `${job.target}.part`); const target = path.join(this.downloadDir, job.target);
       await mkdir(path.dirname(target), { recursive: true });
+      await this.prepareSubtitle(job, controller);
 
       // A playlist is a list of segments, not a file. Transferring it byte for
       // byte saves the list; the video has to be assembled instead.
@@ -796,11 +885,7 @@ export class DownloadQueue {
       }
       const expected = expectedSize(job.total, hinted);
       if (!expected || job.received !== expected) throw new IncompleteDownloadError(job.received, expected);
-      await rename(partial, target);
-      job.status = "completed"; job.completedAt = new Date(this.now()).toISOString(); job.speed = 0; job.retryCount = 0; job.segments = undefined; this.setError(job);
-      log("INFO", "Download finished", { id: job.id, received: job.received, target: job.target });
-      try { await this.onCompleted?.(job); }
-      catch (error) { log("WARN", "The library could not be refreshed after completion", { id: job.id, reason: error instanceof Error ? error.message : String(error) }); }
+      await this.commit(job, partial, target);
     } catch (error) {
       job.speed = 0;
       const message = stalled ? "The transfer carried no data." : (error instanceof Error ? error.message : String(error));
@@ -828,7 +913,9 @@ export class DownloadQueue {
         // A lazy job tries the next source in order; the address of the failed one is never used again.
         job.source.tried.push(job.stream.url);
         if (job.target) await unlink(path.join(this.downloadDir, `${job.target}.part`)).catch(() => undefined);
-        job.stream = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.retryCount = 0; job.notBefore = undefined;
+        const subtitleFiles = this.subtitleFiles(job);
+        if (subtitleFiles) await unlink(subtitleFiles.partial).catch(() => undefined);
+        job.stream = undefined; job.subtitle = undefined; job.resolution = undefined; job.target = ""; job.received = 0; job.total = undefined; job.segments = undefined; job.retryCount = 0; job.notBefore = undefined;
         job.status = "queued"; this.setError(job, `Source failed (${message}), trying the next one\u2026`, "err.sourceFailedTryingNext", { reason: message });
         retryScheduled = true; log("WARN", "The source failed, trying the next one", { id: job.id, title: job.title, reason: message, tried: job.source.tried.length });
         if (this.retryTimer) clearTimeout(this.retryTimer);

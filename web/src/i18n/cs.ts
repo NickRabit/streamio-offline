@@ -275,6 +275,24 @@ export const cs: Catalog = {
   "episodes.bulkAdded": { one: "Do fronty přidána 1 epizoda.", few: "Do fronty přidány {count} epizody.", other: "Do fronty přidáno {count} epizod." },
   "episodes.bulkSkipped": { one: "1 přeskočena, už je ve frontě.", few: "{count} přeskočeny, už jsou ve frontě.", other: "{count} přeskočeno, už jsou ve frontě." },
 
+  "bulk.title": "Stažení seriálu",
+  "bulk.episodeCount": { one: "1 epizoda", few: "{count} epizody", other: "{count} epizod" },
+  "bulk.sources": "Zdroje",
+  "bulk.sourcesHint": "Vyberte jeden nebo více doplňků. Jejich pořadí určuje prioritu zdrojů pro každou epizodu.",
+  "bulk.moveSourceUp": "Posunout {name} výš",
+  "bulk.moveSourceDown": "Posunout {name} níž",
+  "bulk.audio": "Jazyk zvuku",
+  "bulk.audioFallback": "Záložní zvuk",
+  "bulk.noFallback": "Bez záložního jazyka",
+  "bulk.subtitles": "Titulky",
+  "bulk.subtitlesOff": "Nestahovat",
+  "bulk.subtitlesOptional": "Volitelné",
+  "bulk.subtitlesRequired": "Povinné",
+  "bulk.subtitleLanguage": "Jazyk titulků",
+  "bulk.subtitleFallback": "Záložní titulky",
+  "bulk.queueHint": "Každá epizoda se kontroluje až ve chvíli, kdy přijde na řadu. Jazyky se čtou ze stop uvnitř zdroje.",
+  "bulk.add": "Přidat do fronty",
+
   // Zdroje k titulu.
   "sources.heading": "Zdroje",
   "sources.load": "Načíst zdroje",
@@ -430,6 +448,7 @@ export const cs: Catalog = {
   "downloads.emptyText": "Vyberte HTTP zdroj nebo torrent s Real-Debrid a zvolte Do knihovny.",
   "downloads.status.queued": "Ve frontě",
   "downloads.status.waiting": "Čeká na Real-Debrid",
+  "downloads.status.checking": "Ověřuji zdroje",
   "downloads.status.downloading": "Stahuji",
   "downloads.status.paused": "Pozastaveno",
   "downloads.status.completed": "Dokončeno",
@@ -438,6 +457,14 @@ export const cs: Catalog = {
   "downloads.waitingDebrid": "Čeká na Real-Debrid.",
   "downloads.debridReady": "{title} je připravený na Real-Debrid, stahuji.",
   "downloads.inLibrary": "{title} je v knihovně.",
+  "downloads.checkedSource": "Zvuk {audio} · ověřeno zdrojů: {count}",
+  "downloads.checkedFallbackSource": "Záložní zvuk {audio} · ověřeno zdrojů: {count}",
+  "downloads.subtitleReady": "Titulky {language}",
+  "downloads.subtitleMissing": "Volitelné titulky nejsou dostupné",
+
+  "err.missingDownloadSources": "Vyberte alespoň jeden zdrojový doplněk.",
+  "err.missingAudioLanguage": "Vyberte jazyk zvuku.",
+  "err.missingSubtitleLanguage": "Vyberte jazyk titulků.",
 
   // Doplňky.
   "addons.eyebrow": "DOPLŇKY",
