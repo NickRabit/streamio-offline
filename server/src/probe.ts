@@ -40,6 +40,36 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
   forced: stream.disposition?.forced === 1,
 });
 
+// Playlists name their segments as they please, and ffmpeg refuses the unfamiliar endings by
+// default -- which reads as an unplayable source. -extension_picky is recent, and a build
+// without it dies on the option instead of ignoring it, so every probe would fail. Ask the
+// binary once and leave the option out when it is not there.
+const ALLOW_ANY_SEGMENT = ["-allowed_extensions", "ALL"];
+
+export const playlistArgsFrom = (help: string) =>
+  help.includes("extension_picky") ? [...ALLOW_ANY_SEGMENT, "-extension_picky", "0"] : ALLOW_ANY_SEGMENT;
+
+const helpCache = new Map<string, Promise<string>>();
+
+export async function playlistArgs(binary: "ffprobe" | "ffmpeg") {
+  let help = helpCache.get(binary);
+  if (!help) {
+    help = run(binary, ["-hide_banner", "-h", "demuxer=hls"], { timeout: 10_000 })
+      .then(({ stdout }) => {
+        if (!stdout.includes("extension_picky")) log("INFO", "This FFmpeg has no -extension_picky, playlists with unusual segment endings may not open", { binary });
+        return stdout;
+      })
+      .catch((error: unknown) => {
+        log("WARN", "The playlist demuxer options could not be read, segment endings stay picky", {
+          binary, reason: error instanceof Error ? error.message : String(error),
+        });
+        return "";
+      });
+    helpCache.set(binary, help);
+  }
+  return playlistArgsFrom(await help);
+}
+
 /** Finds the source's real codecs. An addon sends a non-binding hint at best; ffprobe tells the truth. */
 export async function probe(input: string): Promise<MediaInfo | undefined> {
   // The default limits read only a few megabytes from a remote source, which is enough for ordinary files.
@@ -55,9 +85,7 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
   try {
     const { stdout } = await run("ffprobe", [
       "-v", "error", "-print_format", "json",
-      // Playlists name their segments as they please, and ffprobe refuses the
-      // unfamiliar endings by default — which reads as an unplayable source.
-      "-allowed_extensions", "ALL", "-extension_picky", "0",
+      ...await playlistArgs("ffprobe"),
       ...limits,
       "-show_format", "-show_streams", input,
     ], { timeout, maxBuffer: 8 * 1024 * 1024 });
