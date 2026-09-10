@@ -88,7 +88,7 @@ export async function probe(input: string): Promise<MediaInfo | undefined> {
   const fast = await inspect(input, [], 20_000, "fast");
   if (fast.info?.video && fast.info.duration && fast.info.audioTracks.length) return fast.info;
   if (fast.unreachable) {
-    log("DEBUG", "The source refused the connection, skipping the deeper probe");
+    log("INFO", "The source refused the connection, the deeper probe was skipped");
     return undefined;
   }
   log("DEBUG", "The fast probe was not enough, reading more of the source", { found: fast.info ? { video: fast.info.video?.codec, duration: fast.info.duration, audioTracks: fast.info.audioTracks.length } : null });

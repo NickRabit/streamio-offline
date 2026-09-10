@@ -550,12 +550,15 @@ export class DownloadQueue {
   private async resolve(job: DownloadJob) {
     if (!job.source) throw new SourceError("The job has neither a source nor a rule for finding one.");
     if (!this.resolver) throw new SourceError("Source selection is unavailable.");
+    const startedAt = this.now();
     const resolved = await this.resolver(job.source);
+    const selectionMs = this.now() - startedAt;
     if (!resolved?.stream.url) {
       const selection = job.source.selection;
       const requested = selection
         ? `No source contains ${selection.audioLanguage}${selection.fallbackAudioLanguage ? ` or ${selection.fallbackAudioLanguage}` : ""} audio${selection.subtitleMode === "required" ? " and the required subtitles" : ""}.`
         : "No directly downloadable source was found.";
+      log("WARN", "No download source could be resolved", { id: job.id, title: job.title, selectionMs, previouslyTried: job.source.tried.length });
       throw new SourceError(job.source.tried.length
         ? `Every available source failed (${job.source.tried.length}).`
         : requested);
@@ -568,7 +571,12 @@ export class DownloadQueue {
     const { directory, base } = targetPath(job.media, job.title, extension, settings);
     job.target = await this.uniqueTarget(directory, base, extension);
     await this.save();
-    log("INFO", "Download source selected", { id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1 });
+    log("INFO", "Download source selected", {
+      id: job.id, title: job.title, addon: resolved.stream.addonName, target: job.target, attempt: job.source.tried.length + 1,
+      selectionMs, checkedCandidates: resolved.resolution?.checkedCandidates,
+      audioLanguage: resolved.resolution?.audioLanguage, fallbackAudio: resolved.resolution?.fallbackUsed,
+      subtitleStatus: resolved.resolution?.subtitleStatus,
+    });
   }
 
   private subtitleFiles(job: DownloadJob) {
