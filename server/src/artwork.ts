@@ -94,6 +94,9 @@ export class ArtworkQueue {
   private pending = new Set<string>();
   private chain: Promise<void> = Promise.resolve();
 
+  /** Whether a job for this key is already queued or running. */
+  has(key: string) { return this.pending.has(key); }
+
   run(key: string, task: () => Promise<void>) {
     this.pending.add(key);
     this.chain = this.chain

@@ -13,3 +13,15 @@ test("ArtworkQueue.run with the same key twice chains the second task", async ()
   await second;
   assert.deepEqual(order, [1, 2, 3]);
 });
+
+test("ArtworkQueue.has reports a key only while its job is queued or running", async () => {
+  const queue = new ArtworkQueue();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  assert.equal(queue.has("dir:Foo"), false);
+  const job = queue.run("dir:Foo", async () => { await gate; });
+  assert.equal(queue.has("dir:Foo"), true);
+  release();
+  await job;
+  assert.equal(queue.has("dir:Foo"), false);
+});
