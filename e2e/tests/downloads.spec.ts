@@ -16,6 +16,7 @@ test("queues a source and the job reaches the download list", async ({ page }) =
   await expect(page.getByText("Přidáno do fronty.")).toBeVisible();
 
   await page.getByRole("button", { name: "Stahování", exact: true }).click();
+  await page.locator(".queue-history-toggle").click();
   const row = page.locator(".download-row", { hasText: "Zkušební film" });
   await expect(row).toBeVisible();
   // The sample file is a few kilobytes, so it is finished long before the poll

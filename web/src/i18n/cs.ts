@@ -398,7 +398,7 @@ export const cs: Catalog = {
   "library.identifyEpisodePick": "Vyberte díl…",
   "library.identifyEpisodeHint": "Který díl tenhle soubor obsahuje. Pak se u něj zobrazí vlastní název a popis místo popisu seriálu.",
 
-  // Fronta stahování.
+  // Download queue.
   "downloads.eyebrow": "STAHOVÁNÍ",
   "downloads.title": "Fronta",
   "downloads.clearCompleted": "Vyčistit dokončené",
@@ -407,6 +407,13 @@ export const cs: Catalog = {
   "downloads.running": "probíhá",
   "downloads.totalSpeed": "celková rychlost",
   "downloads.queueLabel": "Fronta stahování",
+  "downloads.section.active": "Právě se stahuje",
+  "downloads.section.pending": "Čekající",
+  "downloads.section.completed": "Dokončené",
+  "downloads.pendingHint": "Pozastavené a chybné položky zůstávají zde, dokud je neobnovíte nebo nezkusíte znovu.",
+  "downloads.empty.active": "Právě neprobíhá žádné stahování.",
+  "downloads.empty.pending": "Nic nečeká. Nová stahování se objeví zde.",
+  "downloads.empty.completed": "Zde se objeví dokončená stahování.",
   "downloads.colName": "Název",
   "downloads.colStatus": "Stav",
   "downloads.colProgress": "Průběh",
