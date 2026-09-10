@@ -25,12 +25,15 @@ describe("SeriesDownloadDialog", () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     await act(async () => { root.render(<SeriesDownloadDialog type="series" label="Season 1" episodes={[{ id: "tt1:1:1" }]} audioLanguage="cs" subtitleLanguage="cs" languages={[{ code: "cs", name: "Čeština" }, { code: "en", name: "English" }]} onClose={() => undefined} onSubmit={onSubmit}/>); });
     await act(async () => { await Promise.resolve(); });
+    const sourceStrategy = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "largest"))!;
+    expect(sourceStrategy.value).toBe("largest");
+    await act(async () => { sourceStrategy.value = "priority"; sourceStrategy.dispatchEvent(new Event("change", { bubbles: true })); });
     const down = host.querySelector<HTMLButtonElement>('button[aria-label="Move First down"]')!;
     await act(async () => { down.click(); });
     const subtitleMode = [...host.querySelectorAll("select")].find((select) => [...select.options].some((option) => option.value === "required"))!;
     await act(async () => { subtitleMode.value = "required"; subtitleMode.dispatchEvent(new Event("change", { bubbles: true })); });
     const add = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Add to queue"))!;
     await act(async () => { add.click(); await Promise.resolve(); });
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], audioLanguage: "cs", fallbackAudioLanguage: "en", subtitleMode: "required", subtitleLanguage: "cs" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ addonKeys: ["second", "first"], sourceStrategy: "priority", audioLanguage: "cs", fallbackAudioLanguage: "en", subtitleMode: "required", subtitleLanguage: "cs" }));
   });
 });

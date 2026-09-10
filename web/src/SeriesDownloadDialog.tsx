@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Download, X } from "lucide-react";
 import { api, describeError } from "./api";
 import { languageName, t, useI18n } from "./i18n";
-import type { DownloadSelection, SubtitleMode } from "./types";
+import type { DownloadSelection, DownloadSourceStrategy, SubtitleMode } from "./types";
 
 interface Episode { id: string; season?: number; episode?: number; title?: string }
 
@@ -19,6 +19,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
   useI18n();
   const [sources, setSources] = useState<Array<{ key: string; name: string }>>([]);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [sourceStrategy, setSourceStrategy] = useState<DownloadSourceStrategy>("largest");
   const [audio, setAudio] = useState(audioLanguage);
   const [audioFallback, setAudioFallback] = useState(audioLanguage === "en" ? "" : "en");
   const [subtitleMode, setSubtitleMode] = useState<SubtitleMode>("optional");
@@ -62,7 +63,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
     setBusy(true); setError("");
     try {
       await onSubmit({
-        addonKeys: chosen, audioLanguage: audio,
+        addonKeys: chosen, sourceStrategy, audioLanguage: audio,
         fallbackAudioLanguage: audioFallback && audioFallback !== audio ? audioFallback : undefined,
         subtitleMode,
         subtitleLanguage: subtitleMode === "off" ? undefined : subtitle,
@@ -76,10 +77,14 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
   return <div className="identify-overlay" role="dialog" aria-modal="true" aria-label={t("bulk.title")} onClick={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <div className="panel identify-card bulk-card">
       <div className="identify-head"><div><h2>{t("bulk.title")}</h2><p className="identify-hint">{label} · {t("bulk.episodeCount", { count: episodes.length })}</p></div><button className="icon-button" aria-label={t("common.cancel")} disabled={busy} onClick={onClose}><X/></button></div>
+      <div className="bulk-strategy">
+        <label><span>{t("bulk.sourceStrategy")}</span><select value={sourceStrategy} onChange={(event) => setSourceStrategy(event.target.value as DownloadSourceStrategy)}><option value="largest">{t("bulk.strategyLargest")}</option><option value="priority">{t("bulk.strategyPriority")}</option></select></label>
+        <p className="identify-hint">{t(sourceStrategy === "largest" ? "bulk.strategyLargestHint" : "bulk.strategyPriorityHint")}</p>
+      </div>
       <fieldset className="bulk-sources"><legend>{t("bulk.sources")}</legend><p className="identify-hint">{t("bulk.sourcesHint")}</p>
         {orderedSources.map((source) => { const index = chosen.indexOf(source.key); return <div key={source.key} className={index >= 0 ? "selected" : ""}>
           <label><input type="checkbox" checked={index >= 0} onChange={() => toggle(source.key)}/><span>{source.name}</span></label>
-          {index >= 0 && <span><button className="icon-button" aria-label={t("bulk.moveSourceUp", { name: source.name })} disabled={index === 0} onClick={() => move(source.key, -1)}><ArrowUp/></button><button className="icon-button" aria-label={t("bulk.moveSourceDown", { name: source.name })} disabled={index === chosen.length - 1} onClick={() => move(source.key, 1)}><ArrowDown/></button></span>}
+          {index >= 0 && sourceStrategy === "priority" && <span><button className="icon-button" aria-label={t("bulk.moveSourceUp", { name: source.name })} disabled={index === 0} onClick={() => move(source.key, -1)}><ArrowUp/></button><button className="icon-button" aria-label={t("bulk.moveSourceDown", { name: source.name })} disabled={index === chosen.length - 1} onClick={() => move(source.key, 1)}><ArrowDown/></button></span>}
         </div>})}
         {!sources.length && !error && <p className="identify-hint">{t("common.loading")}</p>}
       </fieldset>
@@ -90,6 +95,7 @@ export function SeriesDownloadDialog({ type, label, episodes, audioLanguage, sub
         <label><span>{t("bulk.subtitleLanguage")}</span><select disabled={subtitleMode === "off"} value={subtitle} onChange={(event) => setSubtitle(event.target.value)}>{languageOptions()}</select></label>
         <label><span>{t("bulk.subtitleFallback")}</span><select disabled={subtitleMode === "off"} value={subtitleFallback} onChange={(event) => setSubtitleFallback(event.target.value)}><option value="">{t("bulk.noFallback")}</option>{languageOptions()}</select></label>
       </div>
+      {subtitleMode === "optional" && <p className="identify-hint bulk-subtitle-hint">{t("bulk.subtitlePriorityHint")}</p>}
       <p className="identify-hint">{t("bulk.queueHint")}</p>
       {error && <p className="login-error">{error}</p>}
       <button className="primary" disabled={busy || !chosen.length || !sources.length} onClick={() => void submit()}><Download/> {busy ? t("save.adding") : t("bulk.add")}</button>

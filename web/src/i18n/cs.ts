@@ -277,8 +277,13 @@ export const cs: Catalog = {
 
   "bulk.title": "Stažení seriálu",
   "bulk.episodeCount": { one: "1 epizoda", few: "{count} epizody", other: "{count} epizod" },
+  "bulk.sourceStrategy": "Výběr zdroje",
+  "bulk.strategyLargest": "Největší vyhovující soubor",
+  "bulk.strategyLargestHint": "Ignoruje pořadí doplňků a vybere největší soubor, který splní pravidla pro zvuk a titulky.",
+  "bulk.strategyPriority": "Nejdřív preferovaný doplněk",
+  "bulk.strategyPriorityHint": "Zkouší doplňky v zobrazeném pořadí a vybere nejlepší vyhovující soubor z prvního vhodného doplňku.",
   "bulk.sources": "Zdroje",
-  "bulk.sourcesHint": "Vyberte jeden nebo více doplňků. Jejich pořadí určuje prioritu zdrojů pro každou epizodu.",
+  "bulk.sourcesHint": "Vyberte doplňky, které se smějí použít. Libovolný doplněk lze vyřadit zrušením zaškrtnutí.",
   "bulk.moveSourceUp": "Posunout {name} výš",
   "bulk.moveSourceDown": "Posunout {name} níž",
   "bulk.audio": "Jazyk zvuku",
@@ -290,10 +295,11 @@ export const cs: Catalog = {
   "bulk.subtitlesRequired": "Povinné",
   "bulk.subtitleLanguage": "Jazyk titulků",
   "bulk.subtitleFallback": "Záložní titulky",
+  "bulk.subtitlePriorityHint": "Preferovaný zvuk vždy vyhraje i bez titulků. Pokud je nutný záložní zvuk, dostane odpovídající vestavěná titulková stopa přednost před verzí bez titulků.",
   "bulk.queueHint": "Každá epizoda se kontroluje až ve chvíli, kdy přijde na řadu. Jazyky se čtou ze stop uvnitř zdroje.",
   "bulk.add": "Přidat do fronty",
 
-  // Zdroje k titulu.
+  // Sources for a title.
   "sources.heading": "Zdroje",
   "sources.load": "Načíst zdroje",
   "sources.ofTotal": "{shown} z {total}",

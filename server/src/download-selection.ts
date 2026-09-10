@@ -1,5 +1,5 @@
 import type { DownloadResolution, DownloadSelection } from "./downloads.js";
-import { rankStreams } from "./ranking.js";
+import { rankStreams, streamSize } from "./ranking.js";
 import type { MediaInfo } from "./probe.js";
 import type { StreamItem, SubtitleItem } from "./types.js";
 
@@ -35,8 +35,18 @@ export async function selectDownloadSource(input: {
   const { selection } = input;
   const priority = new Map(selection.addonKeys.map((key, index) => [key, index]));
   const available = input.candidates.filter((stream) => Boolean(stream.url) && !input.tried.includes(stream.url!));
-  const candidates = selection.addonKeys.flatMap((addonKey) => rankStreams(
-    available.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority));
+  const selected = available.filter((stream) => priority.has(stream.addonKey ?? ""));
+  const candidates = selection.sourceStrategy === "largest"
+    ? [...selected].sort((left, right) => {
+      const leftSize = streamSize(left), rightSize = streamSize(right);
+      if (leftSize === undefined || rightSize === undefined) {
+        if (leftSize !== rightSize) return leftSize === undefined ? 1 : -1;
+      } else if (leftSize !== rightSize) return rightSize - leftSize;
+      return (priority.get(left.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER)
+        - (priority.get(right.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER);
+    })
+    : selection.addonKeys.flatMap((addonKey) => rankStreams(
+      selected.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority));
   let primaryChoice: RankedChoice | undefined;
   let fallbackChoice: RankedChoice | undefined;
   let checkedCandidates = 0;
@@ -68,11 +78,20 @@ export async function selectDownloadSource(input: {
         subtitleStatus: subtitle.language ? "ready" : selection.subtitleMode === "optional" ? "missing" : undefined,
       },
     };
-    if (primary && subtitle.rank === 0) return choice;
+    const choiceRank = selection.subtitleMode === "required"
+      ? subtitle.rank
+      : primary || selection.subtitleMode === "off"
+        ? 0
+        : subtitle.source === "embedded"
+          ? subtitle.rank
+          : subtitle.language
+            ? 2 + subtitle.rank
+            : 4;
+    if (primary && choiceRank === 0) return choice;
     const previous = primary ? primaryChoice : fallbackChoice;
-    if (!previous || subtitle.rank < previous.subtitleRank) {
-      if (primary) primaryChoice = { choice, subtitleRank: subtitle.rank };
-      else fallbackChoice = { choice, subtitleRank: subtitle.rank };
+    if (!previous || choiceRank < previous.subtitleRank) {
+      if (primary) primaryChoice = { choice, subtitleRank: choiceRank };
+      else fallbackChoice = { choice, subtitleRank: choiceRank };
     }
   }
   const chosen = primaryChoice ?? fallbackChoice;

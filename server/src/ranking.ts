@@ -10,12 +10,13 @@ const streamText = (stream: StreamItem) =>
 
 const UNITS: Record<string, number> = { tb: 1e12, gb: 1e9, mb: 1e6, kb: 1e3 };
 // Torrentio does not send the size in behaviorHints at all, only in the text as "💾 35.09 GB".
-const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/i;
+const SIZE = /(\d+(?:[.,]\d+)?)\s*(TB|GB|MB|KB)\b/gi;
 
 export function streamSize(stream: StreamItem): number | undefined {
   const hinted = stream.behaviorHints?.videoSize;
   if (typeof hinted === "number" && hinted > 0) return hinted;
-  const match = SIZE.exec(streamText(stream));
+  const matches = [...streamText(stream).matchAll(SIZE)];
+  const match = matches[matches.length - 1];
   if (!match) return undefined;
   const value = Number(match[1].replace(",", "."));
   const unit = UNITS[match[2].toLowerCase()];

@@ -42,6 +42,10 @@ describe("streamSize", () => {
     expect(streamSize(stream({ title: "4GB" }))).toBe(4e9);
   });
 
+  it("uses the per-file size after a torrent pack size", () => {
+    expect(streamSize(stream({ title: "Complete pack 86 GB\nEpisode 4.01 GB" }))).toBe(4.01e9);
+  });
+
   it("is case-insensitive", () => {
     expect(streamSize(stream({ title: "3 gb" }))).toBe(3e9);
   });

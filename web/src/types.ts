@@ -34,8 +34,10 @@ export interface Download {
   createdAt: string; updatedAt: string; startedAt?: string; completedAt?: string;
 }
 export type SubtitleMode = "off" | "optional" | "required";
+export type DownloadSourceStrategy = "priority" | "largest";
 export interface DownloadSelection {
   addonKeys: string[];
+  sourceStrategy: DownloadSourceStrategy;
   audioLanguage: string;
   fallbackAudioLanguage?: string;
   subtitleMode: SubtitleMode;

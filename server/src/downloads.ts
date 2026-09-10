@@ -27,8 +27,10 @@ export type { QueueHalt };
 export type DownloadStatus = "queued" | "waiting" | "checking" | "downloading" | "paused" | "completed" | "failed";
 export type PauseReason = "user" | "storage";
 export type SubtitleMode = "off" | "optional" | "required";
+export type DownloadSourceStrategy = "priority" | "largest";
 export interface DownloadSelection {
   addonKeys: string[];
+  sourceStrategy: DownloadSourceStrategy;
   audioLanguage: string;
   fallbackAudioLanguage?: string;
   subtitleMode: SubtitleMode;

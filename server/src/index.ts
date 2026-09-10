@@ -1424,6 +1424,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
     ? [...new Set(rawSelection.addonKeys.map(String))].filter((key) => store.addons().some((addon) => addon.key === key && addon.enabled && addon.role !== "catalog"))
     : [];
   if (!addonKeys.length) throw new AppError("Pick at least one stream addon.", "err.missingDownloadSources");
+  const sourceStrategy = String(rawSelection.sourceStrategy) === "largest" ? "largest" : "priority";
   const audioLanguage = normalizeLanguage(String(rawSelection.audioLanguage ?? ""));
   if (!audioLanguage) throw new AppError("Pick an audio language.", "err.missingAudioLanguage");
   const fallbackAudioLanguage = normalizeLanguage(String(rawSelection.fallbackAudioLanguage ?? ""));
@@ -1433,7 +1434,7 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
   const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
   const selection: DownloadSelection = {
-    addonKeys, audioLanguage,
+    addonKeys, sourceStrategy, audioLanguage,
     fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
     subtitleMode, subtitleLanguage,
     fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,

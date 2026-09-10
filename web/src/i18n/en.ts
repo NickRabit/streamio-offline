@@ -281,8 +281,13 @@ export const en = {
 
   "bulk.title": "Download series",
   "bulk.episodeCount": { one: "1 episode", other: "{count} episodes" },
+  "bulk.sourceStrategy": "Source selection",
+  "bulk.strategyLargest": "Largest matching file",
+  "bulk.strategyLargestHint": "Ignore addon order and choose the largest file that matches the requested audio and subtitle rules.",
+  "bulk.strategyPriority": "Preferred addon first",
+  "bulk.strategyPriorityHint": "Try addons in the displayed order and choose the best matching file from the first suitable addon.",
   "bulk.sources": "Sources",
-  "bulk.sourcesHint": "Choose one or more addons. Their order is used as the source priority for every episode.",
+  "bulk.sourcesHint": "Choose which addons may be used. You can exclude any addon by clearing its checkbox.",
   "bulk.moveSourceUp": "Move {name} up",
   "bulk.moveSourceDown": "Move {name} down",
   "bulk.audio": "Audio language",
@@ -294,6 +299,7 @@ export const en = {
   "bulk.subtitlesRequired": "Required",
   "bulk.subtitleLanguage": "Subtitle language",
   "bulk.subtitleFallback": "Fallback subtitles",
+  "bulk.subtitlePriorityHint": "Preferred audio always wins, even without subtitles. If fallback audio is needed, a matching embedded subtitle track is preferred over no subtitles.",
   "bulk.queueHint": "Each episode is checked only when it reaches the front of the queue. Languages are read from the tracks inside the source.",
   "bulk.add": "Add to queue",
 

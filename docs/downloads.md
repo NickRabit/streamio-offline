@@ -58,12 +58,16 @@ or required, with their own language and fallback.
 
 Each episode enters the queue as a small rule rather than a preselected URL.
 Only when that episode reaches the front does the queue ask the selected addons
-for current streams and inspect the real audio and text-subtitle tracks. A
+for current streams and inspect the real audio and text-subtitle tracks. The
+dialog can either respect the selected addon order or ignore that order and
+choose the largest matching file across all enabled sources. A
 primary-language match anywhere in the chosen sources wins over a fallback
 match; addon order decides between otherwise equivalent matches. Unknown or
 missing audio metadata is not treated as a match.
 
-Optional subtitles never prevent a matching video from downloading. Required
+Optional subtitles never displace a source with the preferred audio. When only
+fallback audio is available, a matching embedded subtitle track is preferred
+over a source without subtitles. Required
 subtitles make the queue try another source when neither a usable embedded
 track nor an external subtitle from an addon is available. External SRT and
 WebVTT subtitles are saved as a language-tagged `.vtt` sidecar next to the

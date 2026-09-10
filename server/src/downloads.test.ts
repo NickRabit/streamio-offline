@@ -403,7 +403,7 @@ test("a smart job stores selected addon subtitles beside the completed episode",
       settings: defaultDownloadSettings(),
     }));
     await queue.addPending("Díl", { type: "series", videoId: "tt1:1:1", selection: {
-      addonKeys: ["source"], audioLanguage: "cs", subtitleMode: "required",
+      addonKeys: ["source"], sourceStrategy: "priority", audioLanguage: "cs", subtitleMode: "required",
       subtitleLanguage: "cs", targetSettings: defaultDownloadSettings().series,
     } }, { kind: "episode", title: "Show", season: 1, episode: 1 });
     await waitFor(queue, () => queue.list()[0].status === "completed" || queue.list()[0].status === "failed");
