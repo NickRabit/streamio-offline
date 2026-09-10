@@ -564,6 +564,9 @@ async function locateArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[numb
 
 /** Fills a missing thumbnail: the poster from metadata first, otherwise a representative frame from the video. */
 function scheduleArtwork(entry: Awaited<ReturnType<typeof scanLibrary>>[number]) {
+  // Repeated polling asks for the same missing thumbnail before the first attempt
+  // finishes; without this it would queue the same expensive job over and over.
+  if (artworkQueue.has(entry.key)) return;
   artworkQueue.run(entry.key, async () => {
     if (await locateArtwork(entry)) return;
     const toMedia = store.settings().artworkLocation === "media";
@@ -713,6 +716,9 @@ async function catalogPosterIfBound(relative: string, target: string) {
 }
 
 function scheduleFileArtwork(relative: string) {
+  // Same guard as scheduleArtwork: a page reload while the frame grab is still
+  // running must not pile up another one behind it.
+  if (artworkQueue.has(`file:${relative}`)) return;
   artworkQueue.run(`file:${relative}`, async () => {
     if (await locateFileArtwork(relative)) return;
     const source = resolveInside(DOWNLOAD_DIR, relative);
@@ -739,6 +745,7 @@ async function locateFolderArtwork(relative: string) {
 }
 
 function scheduleFolderArtwork(relative: string) {
+  if (artworkQueue.has(`dir:${relative}`)) return;
   artworkQueue.run(`dir:${relative}`, async () => {
     if (await locateFolderArtwork(relative)) return;
     const toMedia = store.settings().artworkLocation === "media";
