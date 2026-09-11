@@ -20,9 +20,11 @@ const elapsed = (from: string, now: number) => {
   return `${Math.floor(minutes / 60)}:${pad(minutes % 60)}:${pad(seconds % 60)}`;
 };
 
-/** A stream with nothing arriving for this long is stalled rather than slow: the player
- * is paused, or has buffered enough and stopped asking. */
-const STALLED_SECONDS = 20;
+/** Nothing arriving is the normal state of a played file: the player pulls a chunk, then
+ * plays it for minutes without asking again -- a local file often arrives whole at once.
+ * Silence only means trouble once the player stops reporting in too; it pings every thirty
+ * seconds while it is open, so twice that is silence with nobody listening. */
+const SILENT_SECONDS = 60;
 
 /** Running playback is polled on its own; the summary behind it changes far more slowly. */
 const LIVE_MS = 5_000;
@@ -149,7 +151,7 @@ function Live({ streams, now }: { streams: ActiveStream[]; now: number }) {
     </div>
     {!streams.length ? <p className="stats-empty">{t("stats.live.none")}</p> : <ul>
       {streams.map((stream) => {
-        const stalled = stream.idleSeconds >= STALLED_SECONDS || !stream.rate;
+        const stalled = !stream.rate && stream.idleSeconds >= SILENT_SECONDS;
         return <li key={stream.id}>
           <div className="stats-live-name">
             <span className={`stats-live-dot${stalled ? " stalled" : ""}`} aria-hidden="true"/>
@@ -163,7 +165,10 @@ function Live({ streams, now }: { streams: ActiveStream[]; now: number }) {
             {(stream.addonName || stream.provider) && <span title={stream.provider}>{stream.addonName ?? stream.provider}</span>}
           </div>
           <div className="stats-live-flow">
-            <b>{stalled ? t("stats.live.stalled") : t("stats.live.rate", { rate: size(stream.rate) })}</b>
+            <b className={stream.rate ? undefined : "quiet"}>
+              {stream.rate ? t("stats.live.rate", { rate: size(stream.rate) })
+                : stalled ? t("stats.live.stalled") : t("stats.live.buffered")}
+            </b>
             <small>{t("stats.live.transferred", { bytes: size(stream.bytes) })} · {t("stats.live.elapsed", { time: elapsed(stream.startedAt, now) })}</small>
           </div>
         </li>;

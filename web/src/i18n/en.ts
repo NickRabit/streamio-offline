@@ -103,6 +103,7 @@ export const en = {
   "stats.live.transferred": "{bytes} transferred",
   "stats.live.elapsed": "playing for {time}",
   "stats.live.stalled": "waiting for data",
+  "stats.live.buffered": "playing from buffer",
   "stats.live.quality": "{quality}p",
   "stats.live.hardware": "GPU",
   "stats.mode.direct": "Direct play",

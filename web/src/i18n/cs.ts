@@ -99,6 +99,7 @@ export const cs: Catalog = {
   "stats.live.transferred": "přeneseno {bytes}",
   "stats.live.elapsed": "hraje {time}",
   "stats.live.stalled": "čeká na data",
+  "stats.live.buffered": "hraje z bufferu",
   "stats.live.quality": "{quality}p",
   "stats.live.hardware": "GPU",
   "stats.mode.direct": "Přímé přehrávání",
