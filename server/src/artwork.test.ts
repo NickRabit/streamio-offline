@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import { test } from "node:test";
-import { ArtworkQueue } from "./artwork.js";
+import { ArtworkQueue, fileMayUseFolderArtwork } from "./artwork.js";
+
+test("a movie file may reuse the folder poster, a series episode may not", () => {
+  assert.equal(fileMayUseFolderArtwork(path.join("Practical Magic", "Practical Magic.mkv"), "movie"), true);
+  assert.equal(fileMayUseFolderArtwork("Practical Magic.mkv", "movie"), false);
+  assert.equal(fileMayUseFolderArtwork(path.join("Father Ted", "01 serie", "01.mkv"), "series"), false);
+  assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4"), "movie"), true);
+  assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4")), false);
+  assert.equal(fileMayUseFolderArtwork(path.join("xxx", "one.mp4"), "series"), false);
+});
 
 test("ArtworkQueue.run with the same key twice chains the second task", async () => {
   const queue = new ArtworkQueue();

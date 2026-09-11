@@ -16,6 +16,13 @@ export const POSTER_OUTPUT = "poster.jpg";
 /** Jellyfin looks for an episode thumbnail under the file name; we write the same. */
 export const episodeArtName = (videoFile: string) => `${videoFile.replace(/\.[^.]+$/, "")}.jpg`;
 
+/** A bound movie already has a folder poster. A series episode must not inherit it. */
+export function fileMayUseFolderArtwork(relative: string, titleType?: string): boolean {
+  if (titleType !== "movie") return false;
+  const parent = path.dirname(relative);
+  return parent !== "." && parent !== "";
+}
+
 const exists = async (file: string) => { try { await access(file); return true; } catch { return false; } };
 
 /** Returns the name of an existing picture in the folder, whoever produced it. */

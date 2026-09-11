@@ -28,7 +28,7 @@ import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
 import { watchLibrary } from "./library-watch.js";
-import { ArtworkQueue, episodeArtName, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
+import { ArtworkQueue, episodeArtName, fileMayUseFolderArtwork, findArtwork, framePosition, POSTER_OUTPUT, savePosterAs, saveFrame } from "./artwork.js";
 import { createHash } from "node:crypto";
 import { clearedCookie, createSession, DECOY_HASH, LoginThrottle, pruneRevoked, envCredentials, hashPassword, INTERNAL_TOKEN, parseCookies, readSession, secretEquals, REMEMBER_DAYS, SESSION_COOKIE, sessionCookie, verifyPassword } from "./auth.js";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -653,16 +653,22 @@ app.get("/api/library", asyncRoute(async (_req, res) => {
   }));
   res.json(summaries);
 }));
+
+/** The binding may sit on the file or on any parent folder. An id-less sentinel is ignored. */
+const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMeta());
+
 /** Thumbnail of one video. Next to the video it is looked up by Jellyfin's naming convention. */
 async function locateFileArtwork(relative: string) {
   const media = path.join(DOWNLOAD_DIR, path.dirname(relative), episodeArtName(path.basename(relative)));
   if (await fileExists(media)) return media;
   const own = dataArtworkFile(relative);
-  return await fileExists(own) ? own : undefined;
+  if (await fileExists(own)) return own;
+  const parent = path.dirname(relative);
+  if (fileMayUseFolderArtwork(relative, knownTitle(relative)?.type)) {
+    return locateFolderArtwork(parent);
+  }
+  return undefined;
 }
-
-/** The binding may sit on the file or on any parent folder. An id-less sentinel is ignored. */
-const knownTitle = (relative: string) => knownTitleOf(relative, store.libraryMeta());
 
 const PLAYBACK_IDLE_SECONDS = 300;
 const playbackBusy = () => playback.diagnostics().sessions.some((session) => session.idleSeconds < PLAYBACK_IDLE_SECONDS);
