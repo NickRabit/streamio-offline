@@ -58,6 +58,11 @@ test.describe("catalog", () => {
     await detail.getByRole("button", { name: /První díl/ }).click();
     await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
     await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toBeVisible();
+
+    await detail.getByRole("button", { name: "Změnit" }).click();
+    await expect(detail.getByRole("heading", { name: "Epizody" })).toBeVisible();
+    await expect(detail.getByRole("heading", { name: "Zdroje" })).toHaveCount(0);
+    await expect(detail.getByRole("button", { name: /E2E 1080p/ })).toHaveCount(0);
   });
 
   test("orders and filters the sources of a movie", async ({ page }) => {
