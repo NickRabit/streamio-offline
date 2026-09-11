@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { browseDirectory, buildLibrary, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
+import { browseDirectory, buildLibrary, emptiedFolders, listFolders, moveDestination, libraryFingerprint, numberedEpisode, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, parseEpisode, parseSeason, remapPath, resolveInside, sortFiles, summarize } from "./library.js";
 
 const file = (relative: string, size = 100, modified = "2026-01-01T00:00:00.000Z") => ({ relative, size, modified });
 
@@ -257,4 +257,52 @@ test("the fingerprint moves with a new, a resized or a touched file", () => {
   assert.notEqual(libraryFingerprint(base), libraryFingerprint([...base, file("Baz/c.mkv")]));
   assert.notEqual(libraryFingerprint(base), libraryFingerprint([file("Foo/a.mkv", 11), base[1]!]));
   assert.notEqual(libraryFingerprint(base), libraryFingerprint([{ ...base[0]!, modified: "2026-02-02T00:00:00.000Z" }, base[1]!]));
+});
+
+test("a moved item keeps its name and lands in the chosen folder", () => {
+  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), "archiv"), { path: path.join("archiv", "Duna.mkv") });
+  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), ""), { path: "Duna.mkv" }, "the root is the empty path");
+  assert.deepEqual(moveDestination("Duna.mkv", "filmy"), { path: path.join("filmy", "Duna.mkv") });
+});
+
+test("a move that changes nothing and a folder swallowing itself are refused", () => {
+  assert.deepEqual(moveDestination(path.join("filmy", "Duna.mkv"), "filmy"), { error: "sameFolder" });
+  assert.deepEqual(moveDestination("Duna.mkv", ""), { error: "sameFolder" });
+  assert.deepEqual(moveDestination("serialy", path.join("serialy", "Přátelé")), { error: "intoItself" });
+  assert.deepEqual(moveDestination("serialy", "serialy"), { error: "intoItself" });
+});
+
+test("the folder of the last deleted video is emptied up the tree", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-empty-"));
+  try {
+    const season = path.join("Přátelé", "01 serie");
+    await mkdir(path.join(root, season), { recursive: true });
+    await writeFile(path.join(root, season, "01.mkv"), "x");
+    await writeFile(path.join(root, season, "01.srt"), "x", "utf8");
+    const episode = path.join(season, "01.mkv");
+    assert.deepEqual(await emptiedFolders(root, episode), [], "the episode is still there");
+
+    await rm(path.join(root, episode));
+    assert.deepEqual(await emptiedFolders(root, episode), [season, "Přátelé"],
+      "a leftover subtitle does not keep the folder alive");
+
+    await writeFile(path.join(root, "Přátelé", "special.mkv"), "x");
+    assert.deepEqual(await emptiedFolders(root, episode), [season], "the show folder still holds a video");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the destination picker lists folders browsing would hide", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "stremio-folders-"));
+  try {
+    await mkdir(path.join(root, "Archiv"), { recursive: true });
+    await mkdir(path.join(root, "Filmy"), { recursive: true });
+    await mkdir(path.join(root, ".skryté"), { recursive: true });
+    await writeFile(path.join(root, "Filmy", "Duna.mkv"), "x");
+    await writeFile(path.join(root, "volný.mkv"), "x");
+    assert.deepEqual(await listFolders(root, ""), [
+      { path: "Archiv", name: "Archiv" },
+      { path: "Filmy", name: "Filmy" },
+    ], "an empty folder is a destination, a dotfile and a video are not");
+    assert.deepEqual(await listFolders(root, path.join("..", "..")), [], "nothing outside the root");
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

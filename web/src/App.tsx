@@ -1,11 +1,12 @@
 import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
+import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
 import { api, ApiError, describeError, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
 import { Player } from "./Player";
 import { IdentifyDialog } from "./IdentifyDialog";
+import { MoveDialog } from "./MoveDialog";
 import { SuggestionsDialog } from "./SuggestionsDialog";
 import { SeriesDownloadDialog } from "./SeriesDownloadDialog";
 import { StatsPanel } from "./Stats";
@@ -109,6 +110,7 @@ export function App() {
   const [browseView, setBrowseView] = useState<"grid" | "list">(() => recall("view", ["grid", "list"] as const, "grid"));
   const [browseBusy, setBrowseBusy] = useState(false);
   const [identifyPath, setIdentifyPath] = useState<string | null>(null);
+  const [movePath, setMovePath] = useState<{ path: string; label: string } | null>(null);
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [suggestionCount, setSuggestionCount] = useState(0);
   const [libraryScan, setLibraryScan] = useState<ScanState | null>(null);
@@ -193,6 +195,18 @@ export function App() {
     const wanted = prompt(t("library.renamePrompt"), label);
     if (!wanted || wanted === label) return;
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
+  };
+  const openMove = (itemPath: string, label: string) => { setMenuFor(null); setMovePath({ path: itemPath, label }); };
+  /** The moved item is gone from the folder on screen, so its resume row and star are
+   *  reloaded along with the listing -- both carry the old path. */
+  const finishMove = async () => {
+    setMovePath(null);
+    notify(t("library.moved"));
+    try {
+      await loadBrowse(browsePath);
+      const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
+      setResume(nextResume); setWatchlist(nextWatchlist);
+    } catch (error) { fail(error); }
   };
   const openIdentify = (itemPath: string) => { setMenuFor(null); setIdentifyPath(itemPath); };
   const unmatchItem = async (itemPath: string) => {
@@ -1128,6 +1142,7 @@ export function App() {
                       {matchActions(item)}
                       <button onClick={() => void toggleFavorite(item.path, !item.favorite)}><Star/> {t(item.favorite ? "favorite.remove" : "favorite.add")}</button>
                       <button onClick={() => void renameItem(item.path, item.name)}><Pencil/> {t("library.rename")}</button>
+                      <button onClick={() => openMove(item.path, item.name)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.name, true)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>
@@ -1144,6 +1159,7 @@ export function App() {
                       {item.progress && <button onClick={() => void forgetWatched(item.path)}><RotateCcw/> {t("library.markUnwatched")}</button>}
                       <button onClick={() => { setMenuFor(null); void downloadLibraryFile(item.path); }}><Download/> {t("library.downloadToDevice")}</button>
                       <button onClick={() => void renameItem(item.path, item.label)}><Pencil/> {t("library.rename")}</button>
+                      <button onClick={() => openMove(item.path, item.label)}><FolderInput/> {t("library.move")}</button>
                       <button className="danger" onClick={() => void removeItem(item.path, item.label, false)}><Trash2/> {t("common.delete")}</button>
                     </span>}
                   </article>)}
@@ -1176,6 +1192,7 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
+    {movePath && <MoveDialog path={movePath.path} label={movePath.label} onClose={() => setMovePath(null)} onMoved={() => void finishMove()}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       onClose={() => setSuggestionsOpen(false)}

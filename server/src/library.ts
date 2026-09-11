@@ -101,6 +101,47 @@ export function orphanedCatalogKeys(meta: Record<string, { type: string; id: str
   return removed;
 }
 
+/** Folders on the way up from a removed item that hold no video any more.
+ * A folder whose last film is gone is litter, even when a subtitle or a poster stayed behind,
+ * so the whole folder goes rather than an empty shell of it. Ordered deepest first. */
+export async function emptiedFolders(root: string, relative: string): Promise<string[]> {
+  const gone: string[] = [];
+  let folder = path.dirname(relative);
+  while (folder && folder !== "." && folder !== path.sep) {
+    if (!resolveInside(root, folder)) break;
+    if ((await listVideos(root, folder)).length) break;
+    gone.push(folder);
+    folder = path.dirname(folder);
+  }
+  return gone;
+}
+
+/** Subfolders of one folder. The destination picker lists these: unlike browsing, a folder
+ *  holding no video is still somewhere an item can be moved to, so nothing is filtered out. */
+export async function listFolders(root: string, relative: string): Promise<{ path: string; name: string }[]> {
+  const target = resolveInside(root, relative);
+  if (!target) return [];
+  let entries;
+  try { entries = await readdir(target, { withFileTypes: true }); } catch { return []; }
+  return entries
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => ({ path: relative ? path.join(relative, entry.name) : entry.name, name: entry.name }))
+    .sort((a, b) => a.name.localeCompare(b.name, "cs"));
+}
+
+export type MoveProblem = "sameFolder" | "intoItself";
+
+/** Where an item lands once it is moved into `folder` -- the root is the empty path.
+ *  A folder cannot swallow itself, and a move that changes nothing is refused rather than
+ *  silently renaming the item onto its own path. */
+export function moveDestination(relative: string, folder: string): { path: string } | { error: MoveProblem } {
+  const from = path.dirname(relative);
+  const target = folder === "." ? "" : folder;
+  if ((from === "." ? "" : from) === target) return { error: "sameFolder" };
+  if (isPathWithin(target, relative)) return { error: "intoItself" };
+  return { path: target ? path.join(target, path.basename(relative)) : path.basename(relative) };
+}
+
 export interface FoundFile { relative: string; size: number; modified: string }
 
 /** Every video under root, same walk `scanLibrary` uses. Depth cap 8, skip dotfiles. */

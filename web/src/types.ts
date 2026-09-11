@@ -136,6 +136,9 @@ export interface ScanState {
   total: number; done: number; matched: number; skipped: number; failed: number;
   current?: string; remaining: string[]; error?: string;
 }
+/** One destination in the move dialog. Unlike a browsed folder it may hold no video at all. */
+export interface LibraryFolder { path: string; name: string }
+
 export interface BrowseResult { path: string; items: BrowseItem[]; total: number; pending: boolean }
 export type LibrarySort = "name" | "added" | "size" | "random";
 export interface ProgressEntry { key: string; position: number; duration: number; title: string; path?: string; poster?: string; updatedAt: string }
