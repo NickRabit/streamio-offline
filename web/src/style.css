@@ -835,3 +835,5 @@ img.broken{visibility:hidden}
   .queue-block-list .queue-actions button{min-height:40px;min-width:40px}.queue-block .queue-pagination{padding:12px 14px;gap:8px}.queue-block .queue-pagination>span{flex-basis:100%;text-align:left}
 }
 @media(max-height:500px) and (orientation:landscape){.queue-blocks{gap:12px}.queue-block-head{padding-top:10px;padding-bottom:10px}.downloads-page .queue-block-list .download-row{padding:12px 0}}
+
+.player-controls .airplay-toggle[aria-pressed="true"]{color:var(--accent);border-color:var(--accent)}

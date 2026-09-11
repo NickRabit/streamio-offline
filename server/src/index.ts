@@ -2,6 +2,7 @@ import express from "express";
 import { nextVideoFile } from "./next-file.js";
 import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
+import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
@@ -51,6 +52,7 @@ await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...b
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
+const airplayAccess = new AirPlayAccess(mediaResources);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
   const owned = playbackOwners.get(id);
   if (owned) {
@@ -58,6 +60,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
   playbackOwners.delete(id);
+  airplayAccess.remove(id);
   throughput.forget(id);
 });
 const stats = new StatsLog();
@@ -161,6 +164,8 @@ const internalMediaRequest = (req: express.Request) =>
   /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
   ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") &&
   req.query.token === INTERNAL_TOKEN;
+const airplayRequest = (req: express.Request) => airplayAccess.authorize(req.method, req.originalUrl.split("?")[0], req.query.airplay);
+const playbackResponse = <T extends { id: string; url: string }>(value: T): T => ({ ...value, url: airplayAccess.url(value.id, value.url) });
 const activeMedia = new Set<{ owner: ResourceOwner; res: express.Response; resourceId?: string }>();
 const trackMedia = (owner: ResourceOwner, res: express.Response, resourceId?: string) => {
   const active = { owner, res, resourceId };
@@ -230,13 +235,13 @@ const asyncRoute = (fn: express.RequestHandler) => (req: express.Request, res: e
 const OPEN_PATHS = new Set(["/status", "/auth/login", "/auth/me", "/auth/setup"]);
 app.use("/api", (req, res, next) => {
   if (OPEN_PATHS.has(req.path)) return next();
-  if (internalMediaRequest(req)) return next();
+  if (internalMediaRequest(req) || airplayRequest(req)) return next();
   if (!currentUser(req)) return res.status(401).json({ error: "Not signed in.", messageKey: "err.notSignedIn" });
   next();
 });
 app.use("/api", restrictedMiddleware({
   isOpen: (req) => OPEN_PATHS.has(req.path),
-  isInternal: internalMediaRequest,
+  isInternal: (req) => internalMediaRequest(req) || Boolean(airplayRequest(req)),
 }));
 
 setInterval(() => {
@@ -1816,15 +1821,16 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
       throw new ResourceError(401, "AUTH_REQUIRED");
     }
     playbackOwners.set(started.id, { owner, resourceId: prepared.resourceId });
+    if (req.body.capabilities?.airplay === true) airplayAccess.create(started.id, owner, prepared.resourceId);
   } catch (error) { mediaResources.remove(prepared.resourceId); throw error; }
   // Bytes are counted by the proxy or by the library; only the item itself is added here,
   // so that "how much there was" is not limited to downloads.
   void stats.complete(playbackMeta(prepared.stream));
-  res.status(201).setHeader("cache-control", "private, no-store").json({ ...started, subtitleIds });
+  res.status(201).setHeader("cache-control", "private, no-store").json({ ...playbackResponse(started), subtitleIds });
 }));
 app.use("/api/playback/:id", (req, res, next) => {
   const owned = playbackOwners.get(String(req.params.id));
-  if (!owned || owned.owner.sid !== currentSession(req)?.sid) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
+  if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
   res.setHeader("cache-control", "private, no-store");
   playback.touch(String(req.params.id));
   next();
@@ -1838,14 +1844,14 @@ app.get("/api/playback/:id/preview", asyncRoute(async (req, res) => {
   res.type("image/jpeg").setHeader("cache-control", "private, no-store").send(image);
 }));
 app.post("/api/playback/:id/ping", (_req, res) => res.status(204).end());
-app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(await playback.seek(String(req.params.id), Number(req.body.time) || 0))));
-app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(await playback.escalate(String(req.params.id), Number(req.body.time) || 0))));
-app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(await playback.track(String(req.params.id), {
+app.post("/api/playback/:id/seek", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.seek(String(req.params.id), Number(req.body.time) || 0)))));
+app.post("/api/playback/:id/escalate", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.escalate(String(req.params.id), Number(req.body.time) || 0)))));
+app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(playbackResponse(await playback.track(String(req.params.id), {
   audio: req.body.audio === undefined ? undefined : Number(req.body.audio),
   subtitle: req.body.subtitle === undefined ? undefined : (req.body.subtitle === null ? null : Number(req.body.subtitle)),
   quality: req.body.quality === undefined ? undefined : (req.body.quality === null ? null : Number(req.body.quality)),
   time: Number(req.body.time) || 0,
-}))));
+})))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
   const file = playback.sidecarFile(String(req.params.id));
@@ -1858,6 +1864,11 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   // for that, but repeated 404s on a live session mean playback has fallen apart.
   if (!directory) { log("DEBUG", "Segment from an unknown session or generation", { req: req.id, id: req.params.id, generation: req.params.generation, file: req.params.file }); return res.status(404).end(); }
   const file = String(req.params.file);
+  const grant = airplayRequest(req);
+  const receiverPlaylist = (text: string) => grant ? rewritePlaylist(text, (uri) => {
+    if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(uri)) throw new Error("Unsupported AirPlay playlist resource.");
+    return airplayAccess.url(grant.playbackId, uri);
+  }) : text;
   // With no slashes and no dots the name cannot escape the session directory.
   if (!/^[A-Za-z0-9_-]{1,64}\.(m3u8|mp4|m4s|vtt)$/.test(file)) return res.status(400).end();
   if (file === "master.m3u8") {
@@ -1868,15 +1879,21 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
     const playlist = await readFile(path.join(directory, file), "utf8").catch(() => "");
     if (playlist.includes("#EXT-X-STREAM-INF")) {
       return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store")
-        .send(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, ""));
+        .send(receiverPlaylist(playlist.replace(/CODECS="[^"]*"/g, "").replace(/:,+/g, ":").replace(/,{2,}/g, ",").replace(/,\s*$/gm, "")));
     }
     const hasSubtitles = await readFile(path.join(directory, "index-0_vtt.m3u8"), "utf8").then(() => true, () => false);
     const lines = ["#EXTM3U", "#EXT-X-VERSION:7"];
     if (hasSubtitles) lines.push('#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="subs",NAME="Titulky",DEFAULT=YES,AUTOSELECT=YES,URI="index-0_vtt.m3u8"');
     lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=8000000${hasSubtitles ? ',SUBTITLES="subs"' : ""}`, "index-0.m3u8");
-    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(`${lines.join("\n")}\n`);
+    return void res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(receiverPlaylist(`${lines.join("\n")}\n`));
   }
-  if (file.endsWith(".m3u8")) res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
+  if (file.endsWith(".m3u8")) {
+    res.type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store");
+    if (grant) {
+      const playlist = await readFile(path.join(directory, file), "utf8").catch(() => undefined);
+      return void (playlist === undefined ? res.status(404).end() : res.send(receiverPlaylist(playlist)));
+    }
+  }
   else { if (file.endsWith(".vtt")) res.type("text/vtt; charset=utf-8"); res.setHeader("cache-control", "private, no-store"); }
   res.sendFile(file, { root: directory, dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
@@ -1885,8 +1902,9 @@ app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store");
   if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   const internal = internalMediaRequest(req);
-  const resource = mediaResources.get(String(req.params.resourceId), currentSession(req)?.sid, "media", internal);
-  trackMedia(resource.owner, res, resource.parent ?? resource.id);
+  const grant = airplayRequest(req);
+  const resource = mediaResources.get(String(req.params.resourceId), grant?.owner.sid ?? currentSession(req)?.sid, "media", internal);
+  trackMedia(grant ? { ...resource.owner, expiresAt: grant.expiresAt } : resource.owner, res, resource.parent ?? resource.id);
   const stream = resource.stream;
   const raw = stream.url!;
   const ownedSession = [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
@@ -1955,7 +1973,8 @@ app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
       if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
       const childHeaders = redirectedHeaders(finalHeaders, new URL(upstream.url), child);
       const id = mediaResources.add({ ...stream, url: child.toString(), behaviorHints: { proxyHeaders: { request: Object.fromEntries(childHeaders) } } }, resource.owner, "media", resource.parent ?? resource.id);
-      return `/api/media/${id}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
+      const url = `/api/media/${id}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
+      return grant ? airplayAccess.url(grant.playbackId, url) : url;
     };
     const playlist = rewritePlaylist(await readMediaText(upstream), proxied, (text) => safeSourceText(text, stream) ?? "");
     if (res.destroyed || res.writableEnded) return;

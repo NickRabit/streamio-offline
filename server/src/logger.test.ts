@@ -49,10 +49,13 @@ test("addresses lose their query string and sensitive keys are masked", async ()
       url: "https://cdn.example.com/movie/file.mkv?token=abc123&exp=99",
       reason: "ffmpeg failed on http://user:pw@cdn.example.com/a/b.m3u8?key=secret",
       accessToken: "abc123",
+      airplay: "receiver-secret",
+      playlist: 'URI="segment.m4s?airplay=receiver-secret"',
       nested: { cookie: "session=1", host: "cdn.example.com" },
     });
     const text = await contents(directory);
     assert.equal(text.includes("abc123"), false);
+    assert.equal(text.includes("receiver-secret"), false);
     assert.equal(text.includes("token="), false);
     assert.equal(text.includes("session=1"), false);
     assert.match(text, /https:\/\/cdn\.example\.com/);
