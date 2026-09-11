@@ -67,6 +67,20 @@ Details in [Troubleshooting](troubleshooting.md#when-an-addon-stops-answering).
 | `ADDON_BREAKER_COOLDOWN_MS` | `30000` | First cooldown; each further outage doubles it. |
 | `ADDON_BREAKER_MAX_COOLDOWN_MS` | `300000` | Ceiling for that doubling. |
 
+## Addon manifests
+
+A manifest is stored when the addon is added, and it decides which catalogues are
+offered and which addons are asked for streams and subtitles. The server refreshes
+the manifests of enabled addons in the background; how often is set in **Settings →
+Addons**, where *Off* leaves it to the buttons on the Addons screen -- one per addon
+and one for the whole list. A provider that does not answer keeps the manifest
+already stored. The moment of the last round is remembered, so restarting the
+container does not start a round that is not due yet.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ADDON_AUTO_REFRESH` | `1` | `0` stops the server refreshing manifests on its own, whatever the interval in Settings says. |
+
 ## Library metadata
 
 The scan is described in [Library metadata](library-metadata.md).

@@ -35,6 +35,8 @@ test.describe("restricted mode", () => {
     expect(addon.manifestUrl).toBeUndefined();
 
     await denied("post", "/api/addons", { url: "http://127.0.0.1:8098/manifest.json", role: "both" });
+    await denied("post", "/api/addons/refresh");
+    await denied("post", `/api/addons/${addon.key}/refresh`);
     await denied("get", `/api/addons/${addon.key}/export`);
     await denied("get", "/api/settings/export");
     await denied("patch", "/api/auth/password", { currentPassword: "restricted-password", newPassword: "other-password" });

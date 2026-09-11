@@ -3,6 +3,7 @@ import { normalizeDownloadSettings } from "./naming.js";
 import { defaultSettings, type Settings } from "./store.js";
 import { isUiLanguage, normalizeLanguage } from "./language.js";
 import { AppError } from "./errors.js";
+import { normalizeRefreshHours } from "./addon-refresh.js";
 
 export const BACKUP_FORMAT = "stremio-offline-settings";
 export const BACKUP_VERSION = 1;
@@ -69,6 +70,7 @@ function parseSettings(value: unknown): Settings {
     libraryAutoScan: boolean("libraryAutoScan"),
     libraryScanPauseOnDownload: boolean("libraryScanPauseOnDownload"),
     secureMode: boolean("secureMode"),
+    addonRefreshHours: normalizeRefreshHours(source.addonRefreshHours ?? fallback.addonRefreshHours),
     catalogTileSize: TILE_SIZES.has(catalogTileSize) ? catalogTileSize as Settings["catalogTileSize"] : fallback.catalogTileSize,
     libraryTileSize: TILE_SIZES.has(libraryTileSize) ? libraryTileSize as Settings["libraryTileSize"] : fallback.libraryTileSize,
     realDebridToken: typeof source.realDebridToken === "string" ? source.realDebridToken.trim() : fallback.realDebridToken,

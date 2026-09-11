@@ -42,6 +42,9 @@ const child = spawn(process.execPath, [path.join(appDir, "server", "dist", "inde
     LIBRARY_SCAN_GAP_MS: "0",
     // The tests drive the scan themselves; an automatic one would rematch titles mid-run.
     LIBRARY_AUTO_SCAN: "0",
+    // The fake addon is the only manifest here; a background refresh round would be
+    // a needless request in the middle of a run.
+    ADDON_AUTO_REFRESH: "0",
   },
 });
 
