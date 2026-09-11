@@ -90,6 +90,13 @@ test("video clicks dismiss controls and settings; double-click toggles fullscree
     (typeof element.requestFullscreen === "function" && document.fullscreenEnabled)
     || (element as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen,
   ));
+  const hasFinePointer = await page.evaluate(() => window.matchMedia("(pointer: fine)").matches);
+  if (!hasFinePointer) {
+    await video.dispatchEvent("dblclick");
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+    await expect(overlay.locator(".fullscreen-notice")).toHaveCount(0);
+    return;
+  }
   if (!supportsFullscreen) {
     await expect(overlay.locator(".fullscreen-action")).toHaveCount(0);
     await expect(video).toBeVisible();

@@ -263,6 +263,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       for (const event of events) document.removeEventListener(event, sync);
     };
   }, [open]);
+  useEffect(() => {
+    if (!fullscreenUnavailable) return;
+    const timer = window.setTimeout(() => setFullscreenUnavailable(false), 5000);
+    return () => window.clearTimeout(timer);
+  }, [fullscreenUnavailable]);
   // The resumed-at notice should inform, not get in the way; it leaves after five seconds.
   useEffect(() => {
     if (!resumedFrom) return;
@@ -846,6 +851,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     </div>
     <div className="player-host" onDoubleClick={(event) => {
       if ((event.target as HTMLElement).closest("button, input, select, a")) return;
+      if (!window.matchMedia("(pointer: fine)").matches || !supportsPlayerFullscreen(overlayRef.current)) return;
       event.preventDefault();
       void toggleFullscreen();
     }} onClick={(event) => {
