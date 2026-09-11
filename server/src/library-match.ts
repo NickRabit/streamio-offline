@@ -412,6 +412,46 @@ export function browseMeta(
   };
 }
 
+/** The ancestor key whose row covers this path, `accept` deciding what counts as cover. */
+function coveringKey<T>(records: Record<string, T>, relative: string, accept: (value: T) => boolean): string | undefined {
+  const parts = relative.split(path.sep);
+  for (let depth = parts.length; depth >= 1; depth -= 1) {
+    const key = parts.slice(0, depth).join(path.sep);
+    const found = records[key];
+    if (found !== undefined && accept(found)) return key;
+  }
+  return undefined;
+}
+
+/** A binding is inherited from the folders above, so moving an item to another folder would
+ *  hand it the destination's title and strip the one it was showing. What covered it from
+ *  above is written onto its own path first, so the identity travels with the item -- unless
+ *  the same ancestor covers the destination too, where the inheritance already holds. */
+export function pinInherited(
+  meta: Record<string, LibraryMetaRecord>,
+  suggestions: Record<string, LibrarySuggestion>,
+  relative: string,
+  nextRelative: string,
+): { meta: Record<string, LibraryMetaRecord>; suggestions: Record<string, LibrarySuggestion> } {
+  const stillCovers = (key: string | undefined) => key !== undefined && (key === relative || isPathWithin(nextRelative, key));
+
+  const nextMeta = { ...meta };
+  const bound = knownTitleEntry(relative, meta);
+  if (bound && !stillCovers(bound.key)) nextMeta[relative] = { ...bound.record };
+  // Catalogue lookup switched off on a folder is a decision about the item too.
+  const ignored = coveringKey(meta, relative, (record) => Boolean(record.skipLookup));
+  if (ignored && !stillCovers(ignored)) {
+    const own = nextMeta[relative] ?? meta[relative] ?? { type: meta[ignored]!.type, id: "", source: "user" as const };
+    nextMeta[relative] = { ...own, skipLookup: true };
+  }
+
+  const nextSuggestions = { ...suggestions };
+  const suggested = coveringKey(suggestions, relative, (suggestion) => Boolean(suggestion.id));
+  if (suggested && !stillCovers(suggested)) nextSuggestions[relative] = { ...suggestions[suggested]! };
+
+  return { meta: nextMeta, suggestions: nextSuggestions };
+}
+
 export function remapKeyed<T>(records: Record<string, T>, from: string, to: string): Record<string, T> {
   return Object.fromEntries(Object.entries(records).map(([key, value]) => [remapPath(key, from, to), value]));
 }

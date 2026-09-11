@@ -491,6 +491,18 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
 .identify-scope button{justify-content:flex-start;text-align:left;padding:8px 10px;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
 .identify-episode{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .identify-episode select{padding:8px 10px;font-size:12px}
+.move-card{width:min(480px,100%)}
+.move-crumbs{display:flex;flex-wrap:wrap;align-items:center;gap:2px;font-size:12px;color:var(--muted)}
+.move-crumbs span{display:flex;align-items:center;gap:2px}
+.move-crumbs button{padding:5px 8px;font-size:12px;border:0;background:0;color:var(--muted)}
+.move-crumbs button:hover{color:var(--text)}
+.move-crumbs svg{width:13px;height:13px;opacity:.6}
+.move-list{display:grid;gap:6px;max-height:min(45dvh,340px);overflow:auto;padding:8px;border:1px solid var(--line);border-radius:9px;background:#10151d}
+.move-list button{display:grid;grid-template-columns:16px minmax(0,1fr) 16px;align-items:center;gap:9px;text-align:left;padding:9px 10px;font-size:12px}
+.move-list button span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.move-list button svg{width:16px;height:16px}
+.move-list button:disabled{opacity:.4}
+.move-list .move-up{grid-template-columns:16px minmax(0,1fr);color:var(--muted)}
 .suggestion-list{display:grid;gap:8px;max-height:min(50dvh,420px);overflow:auto}
 .suggestion-row{display:grid;gap:8px;padding:10px;border:1px solid var(--line);border-radius:9px;background:#10151d}
 .suggestion-copy strong{display:block;font-size:12px;overflow-wrap:anywhere}

@@ -3,7 +3,7 @@ import path from "node:path";
 import { test } from "node:test";
 import {
   autoAccept, browseMeta, cacheFieldsFromMeta, clipText, dropKeyed, episodeKey, episodeNumberOf, episodesFromMeta, isExtraName,
-  knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pickSuggestion, remapKeyed, scanMiss,
+  knownTitleOf, lookupSkipped, matchKeyFor, pinInherited, matchStatus, needsBackfill, needsEpisodes, pickSuggestion, remapKeyed, scanMiss,
   scannedRecently, scanSkipReason, scoreHit, suggestionFor, titleUnits, unmatchAt, viewMeta,
 } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -306,4 +306,54 @@ test("a description is cut on a word boundary and a finished backfill holds", ()
   assert.equal(needsEpisodes({ type: "series", id: "tt1" }, { season: 1, episode: 1 }, {}), true);
   assert.equal(needsEpisodes({ type: "series", id: "tt1" }, { season: 1, episode: 1 }, episodesFromMeta(seriesMeta())), false);
   assert.equal(needsEpisodes({ type: "movie", id: "tt1" }, undefined, {}), false);
+});
+
+const join = (...parts: string[]) => parts.join(path.sep);
+
+test("a moved file takes the title it inherited from the folder it leaves", () => {
+  const meta = { "Přátelé": { type: "series", id: "tt0108778", source: "user" as const, locked: true, name: "Přátelé" } };
+  const from = join("Přátelé", "01.mkv");
+  const to = join("xxx", "01.mkv");
+  const pinned = pinInherited(meta, {}, from, to);
+  assert.deepEqual(pinned.meta[from], meta["Přátelé"], "the binding becomes the file's own before the move");
+  const moved = remapKeyed(pinned.meta, from, to);
+  assert.equal(knownTitleOf(to, moved)?.id, "tt0108778");
+});
+
+test("a move inside the matched folder does not pin anything", () => {
+  const meta = { "Přátelé": { type: "series", id: "tt0108778", source: "user" as const } };
+  const from = join("Přátelé", "01 serie", "01.mkv");
+  const to = join("Přátelé", "01.mkv");
+  assert.deepEqual(pinInherited(meta, {}, from, to).meta, meta, "the folder still covers the new path");
+});
+
+test("the destination's title does not take over a moved item", () => {
+  const meta = {
+    "Přátelé": { type: "series", id: "tt0108778", source: "user" as const },
+    "Filmy": { type: "movie", id: "tt0111161", source: "user" as const },
+  };
+  const from = join("Přátelé", "01.mkv");
+  const to = join("Filmy", "01.mkv");
+  const moved = remapKeyed(pinInherited(meta, {}, from, to).meta, from, to);
+  assert.equal(knownTitleOf(to, moved)?.id, "tt0108778", "its own row wins over the folder it lands in");
+  assert.equal(knownTitleOf(join("Filmy", "jiný.mkv"), moved)?.id, "tt0111161", "the neighbours keep the folder's title");
+});
+
+test("a suggestion and a switched-off lookup travel with the item too", () => {
+  const meta = { "Ignorované": { type: "movie", id: "", source: "user" as const, skipLookup: true } };
+  const suggestions = { "Ignorované": { type: "movie", id: "tt1", name: "Něco", score: 80, at: "2026-01-01T00:00:00.000Z" } };
+  const from = join("Ignorované", "klip.mkv");
+  const to = join("xxx", "klip.mkv");
+  const pinned = pinInherited(meta, suggestions, from, to);
+  assert.equal(pinned.meta[from]?.skipLookup, true);
+  assert.equal(lookupSkipped(to, remapKeyed(pinned.meta, from, to)), true);
+  assert.equal(suggestionFor(to, remapKeyed(pinned.suggestions, from, to))?.id, "tt1");
+});
+
+test("an unmatched item inherits nothing and stays unmatched where it lands", () => {
+  const meta = { "Filmy": { type: "movie", id: "tt0111161", source: "user" as const } };
+  const from = "volný.mkv";
+  const to = join("Filmy", "volný.mkv");
+  const pinned = pinInherited(meta, {}, from, to);
+  assert.deepEqual(pinned.meta, meta, "nothing covered it, so nothing is pinned");
 });

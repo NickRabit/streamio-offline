@@ -22,8 +22,8 @@ import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
-import { browseDirectory, describePath, entryDirectory, isPathWithin, isVideo, listVideos, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
+import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -1033,16 +1033,11 @@ app.get("/api/library/browse", asyncRoute(async (req, res) => {
   res.json({ ...result, items: marked.map(({ backfill: _backfill, ...item }) => item), pending: marked.some((item) => !item.poster || item.backfill) });
 }));
 
-// Deleting and renaming touches real files, hence the path and root checks.
-app.delete("/api/library/item", asyncRoute(async (req, res) => {
-  const relative = String(req.query.path ?? "").trim();
-  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
-  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
-  const info = await stat(target).catch(() => undefined);
-  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
-  await rm(target, { recursive: true, force: true });
-  await rm(dataArtworkFile(relative), { force: true });
-  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+// Deleting, renaming and moving touch real files, hence the path and root checks.
+
+/** Everything the store remembers about a path, dropped in one go. Returns the catalogue
+ *  titles that nothing points at any more, for the log. */
+const forgetLibraryPath = async (relative: string) => {
   // The resume list and the watchlist are keyed by catalogue title, not by path, so a
   // deleted file would leave the title hanging in both, offering to continue something
   // that is no longer on disk. libraryMeta knows the catalogue binding -- it is read
@@ -1059,8 +1054,66 @@ app.delete("/api/library/item", asyncRoute(async (req, res) => {
     }));
     state.watchlist = Object.fromEntries(Object.entries(state.watchlist ?? {}).filter(([key]) => !orphans.has(key)));
   });
+  return orphans;
+};
+
+/** Every stored binding uses the relative path, so a move has to keep them all consistent.
+ *  `pin` is for a move into another folder: the identity an item inherited from the folder
+ *  it is leaving has to become its own, or the destination's title would take over. */
+const relocateLibraryPath = (relative: string, nextRelative: string, pin = false) => store.update((state) => {
+  const pinned = pin
+    ? pinInherited(state.libraryMeta ?? {}, state.librarySuggestions ?? {}, relative, nextRelative)
+    : { meta: state.libraryMeta ?? {}, suggestions: state.librarySuggestions ?? {} };
+  state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
+  state.libraryMeta = remapKeyed(pinned.meta, relative, nextRelative);
+  state.librarySuggestions = remapKeyed(pinned.suggestions, relative, nextRelative);
+  state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
+    const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
+    const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
+    const nextPath = value.path ? remapPath(value.path, relative, nextRelative) : value.path;
+    return [nextKey, { ...value, path: nextPath }];
+  }));
+});
+
+/** Moves the hashed thumbnails of an item and of everything under it to their new keys. */
+const relocateArtwork = async (items: string[], relative: string, nextRelative: string) => {
+  for (const item of items) {
+    const next = remapPath(item, relative, nextRelative);
+    for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
+      await rename(dataArtworkFile(from!), dataArtworkFile(to!)).catch(() => undefined);
+    }
+  }
+};
+
+/** The folder the last video just left is litter, so it goes too -- up the tree for as long
+ *  as the parent holds nothing to watch either. */
+const pruneEmptiedFolders = async (relative: string) => {
+  const gone = await emptiedFolders(DOWNLOAD_DIR, relative);
+  for (const folder of gone) {
+    const target = resolveInside(DOWNLOAD_DIR, folder);
+    if (!target || target === path.resolve(DOWNLOAD_DIR)) continue;
+    await rm(target, { recursive: true, force: true });
+    await rm(dataArtworkFile(folder), { force: true });
+    await rm(dataArtworkFile(`dir:${folder}`), { force: true });
+    await forgetLibraryPath(folder);
+  }
+  if (gone.length) log("INFO", "Emptied folders removed", { folders: gone });
+  return gone;
+};
+
+app.delete("/api/library/item", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  const target = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!target || target === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(target).catch(() => undefined);
+  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+  await rm(target, { recursive: true, force: true });
+  await rm(dataArtworkFile(relative), { force: true });
+  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
+  const orphans = await forgetLibraryPath(relative);
+  const pruned = await pruneEmptiedFolders(relative);
   invalidateLibrary();
-  log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans] });
+  log("INFO", "Deleted from the library", { path: relative, directory: info.isDirectory(), forgottenTitles: [...orphans], pruned });
   res.status(204).end();
 }));
 
@@ -1079,21 +1132,54 @@ app.post("/api/library/rename", asyncRoute(async (req, res) => {
   if (target !== source && await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
   await rename(source, target);
-  // Every stored binding uses the relative path, so a move has to keep them all consistent.
-  await store.update((state) => {
-    state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
-    state.libraryMeta = remapKeyed(state.libraryMeta ?? {}, relative, nextRelative);
-    state.librarySuggestions = remapKeyed(state.librarySuggestions ?? {}, relative, nextRelative);
-    state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
-      const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
-      const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
-      const nextPath = value.path ? remapPath(value.path, relative, nextRelative) : value.path;
-      return [nextKey, { ...value, path: nextPath }];
-    }));
-  });
+  await relocateLibraryPath(relative, nextRelative);
   invalidateLibrary();
   log("INFO", "Renamed in the library", { from: relative, to: nextRelative });
   res.json({ path: nextRelative });
+}));
+
+/** The destination picker. Browsing hides folders with no video in them; moving something
+ *  into one of them is perfectly reasonable, so this lists them all. */
+app.get("/api/library/folders", asyncRoute(async (req, res) => {
+  const relative = String(req.query.path ?? "").trim();
+  if (relative && !resolveInside(DOWNLOAD_DIR, relative)) throw new AppError("Invalid path.", "err.invalidPath");
+  res.json({ path: relative, folders: await listFolders(DOWNLOAD_DIR, relative) });
+}));
+
+app.post("/api/library/move", asyncRoute(async (req, res) => {
+  const relative = String(req.body.path ?? "").trim();
+  const source = relative && resolveInside(DOWNLOAD_DIR, relative);
+  if (!source || source === path.resolve(DOWNLOAD_DIR)) throw new AppError("Invalid path.", "err.invalidPath");
+  const info = await stat(source).catch(() => undefined);
+  if (!info) throw new AppError("The file or folder does not exist.", "err.pathMissing");
+
+  const folder = String(req.body.folder ?? "").trim();
+  const folderTarget = resolveInside(DOWNLOAD_DIR, folder);
+  if (!folderTarget) throw new AppError("Invalid path.", "err.invalidPath");
+  const folderInfo = await stat(folderTarget).catch(() => undefined);
+  if (!folderInfo?.isDirectory()) throw new AppError("The destination folder does not exist.", "err.targetMissing");
+
+  const destination = moveDestination(relative, folder);
+  if ("error" in destination) {
+    throw destination.error === "sameFolder"
+      ? new AppError("The item is already in that folder.", "err.sameFolder")
+      : new AppError("A folder cannot be moved into itself.", "err.moveIntoItself");
+  }
+  const target = resolveInside(DOWNLOAD_DIR, destination.path);
+  if (!target) throw new AppError("Invalid path.", "err.invalidPath");
+  if (await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
+
+  // The thumbnails are keyed by path, so they are carried over rather than dropped:
+  // the item is the same item and would otherwise lose its poster until a rescan.
+  const carried = [relative, ...(await libraryFiles())
+    .map((file) => file.relative).filter((item) => item !== relative && isPathWithin(item, relative))];
+  await rename(source, target);
+  await relocateArtwork(carried, relative, destination.path);
+  await relocateLibraryPath(relative, destination.path, true);
+  const pruned = await pruneEmptiedFolders(relative);
+  invalidateLibrary();
+  log("INFO", "Moved in the library", { from: relative, to: destination.path, pruned });
+  res.json({ path: destination.path });
 }));
 
 app.get("/api/library/thumb", asyncRoute(async (req, res) => {
