@@ -36,6 +36,28 @@ export function bingeGroupLanguages(bingeGroup?: string): string[] {
   return [...found];
 }
 
+/** Cinemeta states the language of some titles by its English name ("Czech"), occasionally several. */
+const LANGUAGE_NAMES: Record<string, string> = {
+  czech: "cs", slovak: "sk", english: "en", german: "de", polish: "pl", hungarian: "hu",
+  french: "fr", spanish: "es", italian: "it", russian: "ru", ukrainian: "uk",
+};
+
+export function titleLanguage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  for (const part of value.split(/[,/]/)) {
+    const code = LANGUAGE_NAMES[part.trim().toLowerCase()];
+    if (code) return code;
+  }
+  return undefined;
+}
+
+/** An addon whose bingeGroup has a field it left blank -- Cineshare sends "Webshare||1080p|" when it
+ *  found no language -- looked and came up empty, so the title's own language is the best guess left.
+ *  A torrent listing names every audio track a release carries and has no such field, so its silence
+ *  is not an admission of ignorance and earns no guess. */
+export const leavesLanguageBlank = (bingeGroup?: string) =>
+  !!bingeGroup && bingeGroup.includes("|") && bingeGroup.split("|").includes("");
+
 export const LANGUAGE_LABEL: Record<string, string> = {
   cs: "CZ", sk: "SK", en: "EN", de: "DE", pl: "PL", hu: "HU", fr: "FR", es: "ES", it: "IT",
   ru: "RU", uk: "UA", ja: "JP", ko: "KR", zh: "CN", pt: "PT", nl: "NL", da: "DK", sv: "SE",

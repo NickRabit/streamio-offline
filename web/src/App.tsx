@@ -12,7 +12,7 @@ import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
-import { label } from "./languages";
+import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
@@ -738,17 +738,19 @@ export function App() {
 
   // An addon's priority is its position in the list, set by the arrows on its card.
   const addonPriority = useMemo(() => new Map(addons.map((addon, index) => [addon.manifest.name, index])), [addons]);
+  // Cinemeta names the language of a few titles; it stands in where an addon admits it found none.
+  const metaLanguage = useMemo(() => titleLanguage(selected?.language), [selected]);
   const listedStreams = useMemo(
     () => settings.realDebridConfigured ? streams : streams.filter((stream) => stream.kind !== "torrent"),
     [streams, settings.realDebridConfigured]);
   const hiddenTorrents = listedStreams.length < streams.length;
   const visibleStreams = useMemo(
-    () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true),
-    [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority]);
+    () => visibleCatalogStreams(listedStreams, { addon: streamAddon, language: streamLanguage, sort: streamSort }, settings.audioLanguage, addonPriority, true, metaLanguage),
+    [listedStreams, streamAddon, streamLanguage, streamSort, settings.audioLanguage, addonPriority, metaLanguage]);
   // The counts in each menu apply to what passes the other filter, or they would contradict each other.
   const byLanguage = useMemo(
-    () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream).includes(streamLanguage)) : listedStreams,
-    [listedStreams, streamLanguage]);
+    () => streamLanguage ? listedStreams.filter((stream) => streamLanguages(stream, metaLanguage).includes(streamLanguage)) : listedStreams,
+    [listedStreams, streamLanguage, metaLanguage]);
   const byAddon = useMemo(
     () => streamAddon ? listedStreams.filter((stream) => stream.addonName === streamAddon) : listedStreams,
     [listedStreams, streamAddon]);
@@ -763,10 +765,10 @@ export function App() {
   }, [byLanguage, streamAddon, addonPriority]);
   const streamLangs = useMemo(() => {
     const counts = new Map<string, number>();
-    for (const stream of byAddon) for (const code of streamLanguages(stream)) counts.set(code, (counts.get(code) ?? 0) + 1);
+    for (const stream of byAddon) for (const code of streamLanguages(stream, metaLanguage)) counts.set(code, (counts.get(code) ?? 0) + 1);
     if (streamLanguage && !counts.has(streamLanguage)) counts.set(streamLanguage, 0);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-  }, [byAddon, streamLanguage]);
+  }, [byAddon, streamLanguage, metaLanguage]);
   // When a filter removes the chosen source, the pick moves to the first one left.
   useEffect(() => {
     if (!visibleStreams.length) { if (selectedStream) setSelectedStream(null); return; }
@@ -1007,7 +1009,7 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {streamLanguages(stream).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {streamLanguages(stream, metaLanguage).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">{t("sources.none")}</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">{t("sources.asking")}</div>}
               {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bingeGroupLanguages, guessLanguages, label } from "./languages";
+import { bingeGroupLanguages, guessLanguages, label, leavesLanguageBlank, titleLanguage } from "./languages";
 
 describe("guessLanguages", () => {
   it("reads flags", () => {
@@ -55,6 +55,41 @@ describe("bingeGroupLanguages", () => {
 
   it("returns nothing when the addon sends no group", () => {
     expect(bingeGroupLanguages(undefined)).toEqual([]);
+  });
+});
+
+describe("titleLanguage", () => {
+  it("reads the English name Cinemeta sends", () => {
+    expect(titleLanguage("Czech")).toBe("cs");
+    expect(titleLanguage("German")).toBe("de");
+  });
+
+  it("takes the first language it knows from a list", () => {
+    expect(titleLanguage("Czech, Slovak")).toBe("cs");
+  });
+
+  it("gives up on a name it does not know and on a missing field", () => {
+    expect(titleLanguage("Klingon")).toBeUndefined();
+    expect(titleLanguage(undefined)).toBeUndefined();
+    expect(titleLanguage(42)).toBeUndefined();
+  });
+});
+
+describe("leavesLanguageBlank", () => {
+  it("spots the field Cineshare leaves empty", () => {
+    expect(leavesLanguageBlank("Webshare||1080p|")).toBe(true);
+    expect(leavesLanguageBlank("Webshare|||")).toBe(true);
+  });
+
+  it("does not read a torrent listing as an admission", () => {
+    expect(leavesLanguageBlank("torrentio|4k|BluRay|x265|10bit|HDR")).toBe(false);
+    expect(leavesLanguageBlank("com.aiostreams.viren070|realdebrid|false|2160p|BluRay|HEVC|WhiteRhino")).toBe(false);
+  });
+
+  it("an addon that sends no group at all admits nothing", () => {
+    expect(leavesLanguageBlank(undefined)).toBe(false);
+    expect(leavesLanguageBlank("")).toBe(false);
+    expect(leavesLanguageBlank("Webshare")).toBe(false);
   });
 });
 

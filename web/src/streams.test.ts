@@ -32,6 +32,19 @@ describe("streamLanguages", () => {
   it("leaves a stream without either alone", () => {
     expect(streamLanguages(stream({ name: "1080p", behaviorHints: { bingeGroup: "torrentio|1080p|x264" } }))).toEqual([]);
   });
+
+  it("falls back to the title's language when the addon left its field blank", () => {
+    expect(streamLanguages(stream({ name: "SD", behaviorHints: { bingeGroup: "Webshare||480p|" } }), "cs")).toEqual(["cs"]);
+  });
+
+  it("does not put the title's language on a torrent listing that simply says nothing", () => {
+    expect(streamLanguages(stream({ name: "4K", behaviorHints: { bingeGroup: "torrentio|4k|x265|HDR" } }), "cs")).toEqual([]);
+    expect(streamLanguages(stream({ name: "4K" }), "cs")).toEqual([]);
+  });
+
+  it("never overrides what the addon did say", () => {
+    expect(streamLanguages(stream({ name: "FullHD", behaviorHints: { bingeGroup: "Webshare|EN|1080p|" } }), "cs")).toEqual(["en"]);
+  });
 });
 
 describe("streamSize", () => {

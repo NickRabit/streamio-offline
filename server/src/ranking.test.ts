@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { rankStreams, streamLanguages } from "./ranking.js";
+import { rankStreams, streamLanguages, titleLanguage } from "./ranking.js";
 import type { StreamItem } from "./types.js";
 
 const stream = (parts: Partial<StreamItem>): StreamItem => ({ url: "https://a.test/x.mkv", ...parts });
@@ -26,4 +26,30 @@ test("a source the addon marked only in the bingeGroup still ranks as preferred"
   const czech = stream({ name: "czech", behaviorHints: { bingeGroup: "Webshare|CZ|1080p|", videoSize: 1e9 } });
   const english = stream({ name: "english", title: "English 1080p", behaviorHints: { videoSize: 20e9 } });
   assert.deepEqual(rankStreams([english, czech], "cs", new Map()).map((item) => item.name), ["czech", "english"]);
+});
+
+test("the title's language stands in where the addon left its field blank", () => {
+  assert.deepEqual(streamLanguages(stream({ name: "SD", behaviorHints: { bingeGroup: "Webshare||480p|" } }), "cs"), ["cs"]);
+});
+
+test("a torrent listing that says nothing gets no stand-in", () => {
+  assert.deepEqual(streamLanguages(stream({ name: "4K", behaviorHints: { bingeGroup: "torrentio|4k|x265|HDR" } }), "cs"), []);
+  assert.deepEqual(streamLanguages(stream({ name: "4K" }), "cs"), []);
+});
+
+test("the stand-in never overrides what the addon did say", () => {
+  assert.deepEqual(streamLanguages(stream({ name: "FullHD", behaviorHints: { bingeGroup: "Webshare|EN|1080p|" } }), "cs"), ["en"]);
+});
+
+test("a stood-in source outranks one the addon called English", () => {
+  const blank = stream({ name: "blank", behaviorHints: { bingeGroup: "Webshare||1080p|", videoSize: 1e9 } });
+  const english = stream({ name: "english", behaviorHints: { bingeGroup: "Webshare|EN|1080p|", videoSize: 20e9 } });
+  assert.deepEqual(rankStreams([english, blank], "cs", new Map(), "cs").map((item) => item.name), ["blank", "english"]);
+});
+
+test("Cinemeta's language name maps onto a code", () => {
+  assert.equal(titleLanguage("Czech"), "cs");
+  assert.equal(titleLanguage("Czech, Slovak"), "cs");
+  assert.equal(titleLanguage("Klingon"), undefined);
+  assert.equal(titleLanguage(undefined), undefined);
 });
