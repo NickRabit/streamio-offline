@@ -599,13 +599,21 @@ export function App() {
   }, [view, browse, browseBusy, browseFocus]);
 
   // Artwork is finished in the background; once it is ready the page refreshes itself.
+  // Asking once was not enough: a poster fetched from a catalogue takes longer than a
+  // second, and the answer still said "pending", which left the tile bare until the user
+  // reloaded the page. The wait doubles instead, and gives up rather than polling forever
+  // over a file that will never produce a thumbnail.
+  const artworkPolls = useRef(0);
+  useEffect(() => { artworkPolls.current = 0; }, [browsePath, browseQuery, browseSort, browseDesc, onlyFavorites, scanEpoch]);
   useEffect(() => {
     if (view !== "library" || !browse?.pending) return;
+    const attempt = artworkPolls.current;
+    if (attempt >= 8) return;
     // Only as many entries as are already loaded are refreshed, so the list does not scroll back.
     const nactenych = browse.items.length;
-    const timer = setTimeout(() => void refreshBrowse(nactenych), 1000);
+    const timer = setTimeout(() => { artworkPolls.current = attempt + 1; void refreshBrowse(nactenych); }, Math.min(8000, 1000 * 2 ** attempt));
     return () => clearTimeout(timer);
-  }, [view, browse?.pending, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
+  }, [view, browse, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
 
   /** Jumping from the download queue: opens the folder the file sits in and finds it there.
    * The filters have to be cleared, or the wanted file would stay filtered out of the listing. */
