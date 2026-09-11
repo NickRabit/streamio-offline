@@ -197,13 +197,13 @@ export function App() {
     try { await api.renameLibraryItem(itemPath, wanted); notify(t("library.renamed")); await loadBrowse(browsePath); } catch (error) { fail(error); }
   };
   const openMove = (itemPath: string, label: string) => { setMenuFor(null); setMovePath({ path: itemPath, label }); };
-  /** The moved item is gone from the folder on screen, so its resume row and star are
-   *  reloaded along with the listing -- both carry the old path. */
-  const finishMove = async () => {
+  /** Follows the item into its new folder: seeing where it landed beats staring at the
+   *  gap it left behind. The resume row and the star carry the old path, so both reload. */
+  const finishMove = async (target: string) => {
     setMovePath(null);
     notify(t("library.moved"));
+    revealInLibrary(target);
     try {
-      await loadBrowse(browsePath);
       const [nextResume, nextWatchlist] = await Promise.all([api.progressList(), api.watchlist()]);
       setResume(nextResume); setWatchlist(nextWatchlist);
     } catch (error) { fail(error); }
@@ -1134,7 +1134,7 @@ export function App() {
           : <>
             <div className={browseView === "grid" ? "browse-grid" : "browse-rows"}>
               {browse.items.map((item) => item.kind === "folder"
-                ? <article className="browse-item folder" key={item.path}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
+                ? <article className={`browse-item folder${browseFocus === item.path ? " focused" : ""}`} key={item.path} data-path={item.path} aria-current={browseFocus === item.path ? "true" : undefined}><button className="library-open" onClick={() => { setBrowseQuery(""); setFromFavorites(browsePath === ":favorites" || fromFavorites); setBrowsePath(item.path); }}>
                     <span className="browse-art">{item.poster ? <img src={item.poster} alt="" loading="lazy"/> : <FolderOpen/>}<i className="browse-badge">{item.fileCount}</i>{item.favorite && <i className="fav-mark"><Star/></i>}</span>
                     <span className="library-copy"><strong>{item.name}</strong><small>{folderMeta(item)}</small>{descriptionLine(item) && <small className="library-desc">{descriptionLine(item)}</small>}</span><span className="library-action"><FolderOpen/> {t("library.openFolder")} <ChevronRight/></span></button>
                     <button className="browse-menu" aria-label={t("library.options", { name: item.name })} aria-expanded={menuFor === item.path} onClick={(event) => { event.stopPropagation(); setMenuFor(menuFor === item.path ? null : item.path); }}><MoreVertical/></button>
@@ -1192,7 +1192,7 @@ export function App() {
       onDownload={enqueue}
       onDeviceDownload={() => localStream?.localPath ? downloadLibraryFile(localStream.localPath) : downloadStreamToDevice()}
       onClose={() => { setPlayerOpen(false); setLocalStream(null); }}/>
-    {movePath && <MoveDialog path={movePath.path} label={movePath.label} onClose={() => setMovePath(null)} onMoved={() => void finishMove()}/>}
+    {movePath && <MoveDialog path={movePath.path} label={movePath.label} onClose={() => setMovePath(null)} onMoved={(target) => void finishMove(target)}/>}
     {identifyPath && <IdentifyDialog path={identifyPath} onClose={() => setIdentifyPath(null)} onApplied={() => { setIdentifyPath(null); void loadSuggestionCount(); void loadBrowse(browsePath); }}/>}
     {suggestionsOpen && <SuggestionsDialog
       onClose={() => setSuggestionsOpen(false)}
