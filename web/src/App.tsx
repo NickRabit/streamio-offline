@@ -589,7 +589,7 @@ export function App() {
     if (view !== "library" || !browse?.pending) return;
     // Only as many entries as are already loaded are refreshed, so the list does not scroll back.
     const nactenych = browse.items.length;
-    const timer = setTimeout(() => void refreshBrowse(nactenych), 4000);
+    const timer = setTimeout(() => void refreshBrowse(nactenych), 1000);
     return () => clearTimeout(timer);
   }, [view, browse?.pending, browsePath, browseQuery, browseSort, browseDesc, onlyFavorites]);
 
