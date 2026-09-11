@@ -201,6 +201,34 @@ scroll restoration. Playwright's WebKit is not iOS Safari: it does not reproduce
 mobile browser chrome, the collapsing URL bar, or the safe-area behaviour that
 caused several of the landscape fixes. Those still need a real device.
 
+### AirPlay on physical Apple devices
+
+The custom player offers an AirPlay button when the browser exposes Apple's
+route picker. Available receivers enable it, and an active wireless route stays
+selectable so the user can change output. Native HLS is preferred on browsers
+with both native HLS and AirPlay support; the custom controls remain in use.
+
+Unit tests cover discovery, picker rejection, connection state, cleanup, and
+native-HLS selection. They do not verify an actual wireless connection. Before
+claiming device compatibility, test Safari on iPhone, iPad, and Mac with:
+
+- A HomePod or stereo pair: select audio output, check lip sync, pause, seek,
+  change episodes, and return to local output through the picker.
+- An Apple TV or AirPlay TV: test direct files and converted HLS, including
+  seeking and subtitles. HTML subtitle overlays are local UI and are not sent
+  to the receiver as video subtitles.
+- Receiver loss: turn the receiver off and check Safari's local output and
+  pause state. The app follows the wireless-state event without restarting or
+  forcing playback, so local resumption depends on the browser.
+- Unavailable receivers and rejected picker requests: the custom player must
+  remain usable, without opening native fullscreen controls.
+
+The browser owns device selection and reconnection; the app cannot save or
+silently select a named HomePod. Video receivers may fetch media themselves,
+so they need access to the media URL and compatible authorization. Verify the
+actual LAN address and deployment authentication rather than assuming that a
+working localhost video proves remote playback works.
+
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every pull request and on pushes to `main`,

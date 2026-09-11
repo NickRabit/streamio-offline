@@ -1,5 +1,7 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
+import { AirPlayButton } from "./AirPlayButton";
+import { prefersNativeAirPlay } from "./player-airplay";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
@@ -392,7 +394,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     // does — and costs the server nothing, unlike converting it would.
     if (mode === "direct" && !playlist) { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
     video.removeAttribute("src");
-    if (Hls.isSupported()) {
+    if (prefersNativeAirPlay(video)) {
+      video.src = url;
+      if (autoplay) void video.play().catch(() => undefined);
+    } else if (Hls.isSupported()) {
       // A longer buffer on both sides means the browser handles an ordinary few-second
       // skip itself, immediately, instead of restarting FFmpeg on the server.
       // maxBufferHole bridges the small gaps at segment boundaries (a video copy only cuts
@@ -860,7 +865,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (settingsOpen || controlsVisible) { clearControlsTimer(); setControlsVisible(false); }
       else revealControls();
     }}>
-      <video ref={videoRef} playsInline
+      <video ref={videoRef} playsInline x-webkit-airplay="allow"
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
@@ -911,6 +916,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         </div>
         <Volume2 />
+        <AirPlayButton videoRef={videoRef} visible={controlsVisible} />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}
