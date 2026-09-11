@@ -844,7 +844,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       </button>}
       <button className="icon-button" aria-label={t("player.close")} onClick={closePlayer}><X /></button>
     </div>
-    <div className="player-host" onClick={(event) => {
+    <div className="player-host" onDoubleClick={(event) => {
+      if ((event.target as HTMLElement).closest("button, input, select, a")) return;
+      event.preventDefault();
+      void toggleFullscreen();
+    }} onClick={(event) => {
       if ((event.target as HTMLElement).closest("button, input, select, a")) return;
       setSettingsOpen(false);
       if (settingsOpen || controlsVisible) { clearControlsTimer(); setControlsVisible(false); }
