@@ -136,9 +136,26 @@ const WEBM_VIDEO = new Set(["vp8", "vp9", "av1"]);
 const WEBM_AUDIO = new Set(["opus", "vorbis"]);
 const COPYABLE_AUDIO: Record<string, keyof ClientCapabilities> = { aac: "aac", mp3: "mp3", opus: "opus", ac3: "ac3", eac3: "eac3", flac: "flac" };
 
-/** True when hls.js can start: one media segment, or a finished short playlist. */
-export const hlsCanStart = (playlist: string) =>
-  playlist.includes("#EXT-X-ENDLIST") || (playlist.match(/#EXTINF/g) ?? []).length >= 1;
+/** True when the client can start: one media segment whose init is named, or a finished short playlist.
+ *  fMP4 lists the first segment while the decoder config is still being written. On a slow NAS that
+ *  window is long enough for Safari to fetch a truncated init.mp4 and refuse the stream (code 3),
+ *  and for Chrome to report bufferAddCodecError. EXT-X-MAP means the muxer finished the init. */
+export const hlsCanStart = (playlist: string) => {
+  if (playlist.includes("#EXT-X-ENDLIST") && !(playlist.match(/#EXTINF/g) ?? []).length) return true;
+  return (playlist.match(/#EXTINF/g) ?? []).length >= 1 && /#EXT-X-MAP:URI="[^"]+"/i.test(playlist);
+};
+
+/** Init and segment files the playlist already names. All of them must exist before we hand the URL over. */
+export const hlsPlaylistFiles = (playlist: string) => {
+  const files: string[] = [];
+  const map = playlist.match(/#EXT-X-MAP:URI="([^"]+)"/i);
+  if (map && !map[1].includes("/") && !map[1].includes("\\")) files.push(map[1]);
+  for (const line of playlist.split(/\r?\n/)) {
+    const name = line.trim();
+    if (name && !name.startsWith("#") && !name.includes("/") && !name.includes("\\")) files.push(name);
+  }
+  return files;
+};
 // AC-3 family does not expose enough codec information to the fragmented MP4 muxer
 // until the first packet arrives. After an input seek video can arrive first, making
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
@@ -301,12 +318,12 @@ export class PlaybackManager {
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
 
-    // Audio and quality decide conversion. Embedded subtitles ride as a sidecar
-    // on direct play so a Czech track does not force remux of an otherwise playable file.
+    // Audio and quality decide conversion. Embedded subtitles always ride as a sidecar:
+    // muxing WebVTT into fMP4 HLS makes the muxer die with "timescale not set".
     const avDefault = audioTrack === 0 && quality === null;
     const direct = this.directPlay(stream, info, capabilities);
+    if (subtitleTrack !== null) this.extractSidecar(session);
     if (avDefault && direct.ok) {
-      if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
       return this.describe(session, source);
     }
@@ -377,6 +394,8 @@ export class PlaybackManager {
     // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
     session.pendingKill = this.kill(session);
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
+    session.offset = target;
+    if (session.subtitleTrack !== null) this.extractSidecar(session);
     let url: string;
     try { url = await this.spawnAt(session, target); }
     catch (error) {
@@ -480,7 +499,7 @@ export class PlaybackManager {
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
-      sidecarUrl: session.mode === "direct" && session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
+      sidecarUrl: session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
@@ -506,6 +525,7 @@ export class PlaybackManager {
           // The same playlist through the same demuxer, so the same flags -- and the same
           // reason to leave them out when the source is an ordinary file.
           ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
+          ...(session.offset > 0 ? ["-ss", session.offset.toFixed(3)] : []),
           "-i", this.localUrl(this.proxyPath(session.stream)),
           "-map", `0:s:${index}`, "-c:s", "webvtt", "-y", dest,
         ], { timeout: 45_000 });
@@ -667,8 +687,16 @@ export class PlaybackManager {
     const { copyVideo } = this.plan(session);
     session.mode = copyVideo ? "remux" : "transcode";
     const attempts = !copyVideo && this.vaapiDevice ? [true, false] : [false];
+    let firstAttempt = true;
     for (const hardware of attempts) {
       this.assertActive(session);
+      if (!firstAttempt) {
+        // A failed VAAPI pass leaves a playlist the wait loop would accept, so software
+        // would return that broken init instead of writing its own.
+        await this.purge(directory);
+        await mkdir(directory, { recursive: true });
+      }
+      firstAttempt = false;
       const url = await this.run(session, offset, directory, hardware);
       if (url) return url;
       // A source that answers 404 will answer the same to the software attempt.
@@ -721,6 +749,12 @@ export class PlaybackManager {
       try {
         const playlist = await readFile(ready, "utf8");
         if (hlsCanStart(playlist)) {
+          let filesReady = true;
+          for (const name of hlsPlaylistFiles(playlist)) {
+            try { if ((await stat(path.join(directory, name))).size <= 0) filesReady = false; }
+            catch { filesReady = false; }
+          }
+          if (!filesReady) continue;
           const segments = (playlist.match(/#EXTINF/g) ?? []).length;
           log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
           return url;
@@ -751,12 +785,6 @@ export class PlaybackManager {
     const audioCount = session.info?.audioTracks.length ?? 1;
     const hasAudio = !session.info || audioCount > 0;
     const audioIndex = Math.min(session.audioTrack, Math.max(0, audioCount - 1));
-    // Bitmap subtitles are removed by probe(), so array positions no longer necessarily
-    // match FFmpeg's type-relative 0:s:N indices. Track.index always keeps the real N.
-    const subtitle = session.subtitleTrack !== null
-      && session.info?.subtitleTracks.some((track) => track.index === session.subtitleTrack)
-      ? session.subtitleTrack
-      : null;
     const crf = process.env.FFMPEG_CRF ?? "23";
     // VAAPI CQP and libx264 CRF are different modes. Compatibility with the single original
     // value stays, but new installs can tune them independently.
@@ -797,7 +825,6 @@ export class PlaybackManager {
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
     args.push("-map", "0:v:0?");
     if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
-    if (subtitle !== null) args.push("-map", `0:s:${subtitle}?`);
     args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
     // A copied video after -ss starts at the keyframe before the target, so its timestamps are negative.
     // fMP4 cannot write those and would shift each track on its own -- the audio would drift by the
@@ -839,16 +866,18 @@ export class PlaybackManager {
     // line of the master playlist. The client is then handed a master with no CODECS and no
     // variant at all, which Chrome reports as bufferAddCodecError and Safari as refusing the
     // source outright. The filter only rewrites ADTS, so AAC that is already ASC passes by.
-    const adtsToAsc = passthroughAudio && selectedAudioCodec === "aac" ? ["-bsf:a", "aac_adtstoasc"] : [];
+    // Only playlist sources carry ADTS; applying it to a file is unnecessary.
+    const adtsToAsc = passthroughAudio && selectedAudioCodec === "aac"
+      && isPlaylistSource(session.stream, session.info)
+      ? ["-bsf:a", "aac_adtstoasc"] : [];
     if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy", ...adtsToAsc] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
-    if (subtitle !== null) args.push("-c:s", "webvtt");
 
     // fMP4 segments: the only way to let HEVC or AC3 through without re-encoding.
-    // Embedded subtitles leave as their own WebVTT track from the same pass, with no second download.
+    // Embedded subtitles stay out of this mux: WebVTT in fMP4 HLS dies with "timescale not set".
     args.push("-f", "hls", "-hls_time", "2", "-hls_list_size", "0", "-hls_playlist_type", "event",
       "-hls_segment_type", "fmp4", "-hls_flags", "independent_segments+temp_file", "-hls_fmp4_init_filename", "init.mp4",
       "-master_pl_name", "master.m3u8",
-      "-var_stream_map", [hasAudio ? "v:0,a:0" : "v:0", subtitle !== null ? ",s:0,sgroup:subs" : ""].join(""),
+      "-var_stream_map", hasAudio ? "v:0,a:0" : "v:0",
       "-hls_segment_filename", path.join(directory, "seg-%v-%06d.m4s"), path.join(directory, "index-%v.m3u8"));
     return args;
   }
