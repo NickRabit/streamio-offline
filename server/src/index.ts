@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams, titleLanguage } from "./ranking.js";
-import { DownloadQueue, type DownloadSelection, type SubtitleMode } from "./downloads.js";
+import { DownloadQueue, isPlaylist, type DownloadSelection, type SubtitleMode } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
@@ -1543,6 +1543,48 @@ app.get("/api/device-download/:id", asyncRoute(async (req, res) => {
   // The client only requests the ticket URL; the server handles debrid headers and ranges from its own IP.
   const headers: Record<string, string> = { ...(stream.behaviorHints?.proxyHeaders?.request ?? {}) };
   if (req.headers.range) headers.range = req.headers.range;
+
+  // A playlist is not the media, it is a list of it. Passed on as-is the browser saves a few
+  // hundred bytes of text named like a film -- which is what an HLS addon's download did. The
+  // queue already assembles these with FFmpeg; so does this, except that the output goes
+  // straight down the response, which cannot be seeked back into. That rules out the index at
+  // the front (+faststart) and calls for a fragmented file instead.
+  if (isPlaylist(stream.url!)) {
+    const { spawn } = await import("node:child_process");
+    const { playlistArgs } = await import("./probe.js");
+    const headerLines = Object.entries(headers)
+      .filter(([name]) => name.toLowerCase() !== "range")
+      .map(([name, value]) => `${name}: ${value}\r\n`)
+      .join("");
+
+    const child = spawn("ffmpeg", [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      "-protocol_whitelist", "file,http,https,tcp,tls,crypto",
+      ...(await playlistArgs("ffmpeg")),
+      ...(headerLines ? ["-headers", headerLines] : []),
+      "-i", stream.url!,
+      "-c", "copy",
+      // ADTS frames out of a transport stream need this to be legal inside MP4.
+      "-bsf:a", "aac_adtstoasc",
+      "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+      "-f", "mp4", "pipe:1",
+    ], { stdio: ["ignore", "pipe", "pipe"] });
+
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-2000); });
+    res.on("close", () => { if (!res.writableEnded) child.kill("SIGKILL"); });
+
+    countBytes(res, statMeta({ source: "download", url: stream.url, title, addonKey: stream.addonKey, addonName: stream.addonName, kind: media?.kind }));
+    // No length is known ahead of an assembly, so the browser shows no progress bar.
+    res.status(200).attachment(ticket.filename).setHeader("content-type", "video/mp4");
+
+    child.on("error", () => { if (!res.headersSent) res.status(502).end(); else res.destroy(); });
+    child.on("close", (code) => {
+      if (code !== 0) log("WARN", "Assembling a playlist for a device failed", { filename: ticket.filename, code, stderr: stderr.slice(-400) });
+      if (!res.writableEnded) res.end();
+    });
+    return void child.stdout!.pipe(res);
+  }
   const controller = new AbortController();
   const headerTimeout = setTimeout(() => controller.abort(), 30_000);
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
