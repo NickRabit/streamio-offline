@@ -468,6 +468,7 @@ test("the playlist demuxer flags reach the conversion, ahead of the input", () =
   const flags = ["-allowed_extensions", "ALL"];
   const args = manager.args(session, 0, "/tmp/output", false, flags) as string[];
 
+
   // An option after -i applies to the output, where the HLS demuxer never sees it.
   assert.ok(args.indexOf("-allowed_extensions") > -1, "the flags are missing");
   assert.ok(args.indexOf("-allowed_extensions") < args.indexOf("-i"), "the flags land after the input");
@@ -476,4 +477,15 @@ test("the playlist demuxer flags reach the conversion, ahead of the input", () =
   // having no file ending, and an HLS source probes fine and then will not convert.
   const bare = manager.args(session, 0, "/tmp/output", false) as string[];
   assert.equal(bare.includes("-allowed_extensions"), false);
+});
+
+test("the playlist flags are left out for a source that is not a playlist", () => {
+  // They are HLS demuxer options. FFmpeg does not ignore them on an ordinary
+  // file, it refuses to start: "Option not found".
+  assert.equal(isPlaylistSource({ url: "https://example.test/movie.mkv" }, { container: "matroska,webm" } as any), false);
+  assert.equal(isPlaylistSource({ url: "https://example.test/master.m3u8" }, undefined), true);
+
+  // A proxy address carries no ending, so the probe's own reading decides.
+  assert.equal(isPlaylistSource({ url: "https://example.test/api/media/abc" }, { container: "hls,applehttp" } as any), true);
+  assert.equal(isPlaylistSource({ url: "https://example.test/api/media/abc" }, { container: "mov,mp4,m4a" } as any), false);
 });

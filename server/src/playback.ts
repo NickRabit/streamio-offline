@@ -503,8 +503,9 @@ export class PlaybackManager {
         await mkdir(path.dirname(dest), { recursive: true });
         await promisify(execFile)("ffmpeg", [
           "-hide_banner", "-loglevel", "error", "-nostdin",
-          // The same playlist through the same demuxer, so the same flags.
-          ...(await playlistArgs("ffmpeg")),
+          // The same playlist through the same demuxer, so the same flags -- and the same
+          // reason to leave them out when the source is an ordinary file.
+          ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
           "-i", this.localUrl(this.proxyPath(session.stream)),
           "-map", `0:s:${index}`, "-c:s", "webvtt", "-y", dest,
         ], { timeout: 45_000 });
@@ -687,9 +688,12 @@ export class PlaybackManager {
   }
 
   private async run(session: Session, offset: number, directory: string, hardware: boolean) {
+    // Only for a source that really is a playlist: these are HLS demuxer options, and FFmpeg
+    // rejects them outright -- "Option not found" -- when the input is an ordinary file.
     // Resolved here rather than inside args(): asking the binary what it supports is I/O, and
     // args() stays synchronous so it can be read and tested as the pure list-builder it is.
-    const args = this.args(session, offset, directory, hardware, await playlistArgs("ffmpeg"));
+    const playlist = isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : [];
+    const args = this.args(session, offset, directory, hardware, playlist);
     const startedAt = Date.now();
     log("DEBUG", "FFmpeg starting", {
       id: session.id, generation: session.generation, mode: session.mode, hardware,
