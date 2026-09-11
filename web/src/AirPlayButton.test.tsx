@@ -7,10 +7,10 @@ import { prefersNativeAirPlay, type AirPlayVideo } from "./player-airplay";
 let host: HTMLDivElement;
 let root: Root;
 let video: AirPlayVideo;
-const render = (visible = true) => {
+const render = (visible = true, extra: { onPrepareNative?: () => void; onCancelNative?: () => void } = {}) => {
   const videoRef = createRef<HTMLVideoElement>();
   videoRef.current = video;
-  act(() => root.render(<AirPlayButton videoRef={videoRef} visible={visible} />));
+  act(() => root.render(<AirPlayButton videoRef={videoRef} visible={visible} {...extra} />));
 };
 const availability = (value: string) => act(() => video.dispatchEvent(Object.assign(new Event("webkitplaybacktargetavailabilitychanged"), { availability: value })));
 const wireless = (value: boolean) => {
@@ -41,13 +41,15 @@ test("unsupported browsers do not show AirPlay", () => {
 test("device discovery enables a user-initiated picker and disconnection preserves the player", () => {
   const play = vi.spyOn(video, "play");
   const pause = vi.spyOn(video, "pause");
-  render();
+  const onPrepareNative = vi.fn();
+  render(true, { onPrepareNative });
   const button = host.querySelector("button")!;
   expect(button.disabled).toBe(true);
   availability("available");
   expect(button.disabled).toBe(false);
   expect(video.webkitShowPlaybackTargetPicker).not.toHaveBeenCalled();
   act(() => button.click());
+  expect(onPrepareNative).toHaveBeenCalledOnce();
   expect(video.webkitShowPlaybackTargetPicker).toHaveBeenCalledOnce();
   wireless(true);
   availability("not-available");
@@ -62,10 +64,12 @@ test("device discovery enables a user-initiated picker and disconnection preserv
 });
 
 test("picker rejection is recoverable without changing media", () => {
+  const onCancelNative = vi.fn();
   video.webkitShowPlaybackTargetPicker = vi.fn().mockImplementationOnce(() => { throw new Error("Unavailable"); });
-  render();
+  render(true, { onCancelNative });
   availability("available");
   act(() => host.querySelector("button")!.click());
+  expect(onCancelNative).toHaveBeenCalledOnce();
   expect(host.querySelector('[role="status"]')).not.toBeNull();
   act(() => host.querySelector("button")!.click());
   expect(host.querySelector('[role="status"]')).toBeNull();
@@ -79,12 +83,11 @@ test("listeners are removed on unmount", () => {
   expect(remove).toHaveBeenCalledWith("webkitcurrentplaybacktargetiswirelesschanged", expect.any(Function));
 });
 
-test("native HLS is preferred only when HLS and AirPlay are both supported", () => {
+test("native HLS is preferred only while a wireless target is selected", () => {
   vi.spyOn(video, "canPlayType").mockReturnValue("probably");
-  expect(prefersNativeAirPlay(video)).toBe(true);
-  delete video.webkitShowPlaybackTargetPicker;
   expect(prefersNativeAirPlay(video)).toBe(false);
-  video.webkitShowPlaybackTargetPicker = vi.fn();
+  video.webkitCurrentPlaybackTargetIsWireless = true;
+  expect(prefersNativeAirPlay(video)).toBe(true);
   vi.spyOn(video, "canPlayType").mockReturnValue("");
   expect(prefersNativeAirPlay(video)).toBe(false);
 });

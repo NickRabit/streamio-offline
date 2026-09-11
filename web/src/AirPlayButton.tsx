@@ -3,7 +3,10 @@ import { useEffect, useState, type RefObject } from "react";
 import { t } from "./i18n";
 import { supportsAirPlay, type AirPlayVideo } from "./player-airplay";
 
-export function AirPlayButton({ videoRef, visible }: { videoRef: RefObject<HTMLVideoElement | null>; visible: boolean }) {
+export function AirPlayButton({ videoRef, visible, onPrepareNative, onCancelNative }: {
+  videoRef: RefObject<HTMLVideoElement | null>; visible: boolean;
+  onPrepareNative?: () => void; onCancelNative?: () => void;
+}) {
   const [supported, setSupported] = useState(false);
   const [available, setAvailable] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -35,9 +38,14 @@ export function AirPlayButton({ videoRef, visible }: { videoRef: RefObject<HTMLV
   return <>
     <button className="airplay-toggle" aria-label={label} title={label} aria-pressed={connected} disabled={!available && !connected} onClick={() => {
       try {
+        // Safari can only send audio to a HomePod from a native src, not from hls.js.
+        onPrepareNative?.();
         (videoRef.current as AirPlayVideo | null)?.webkitShowPlaybackTargetPicker?.();
         setFailed(false);
-      } catch { setFailed(true); }
+      } catch {
+        onCancelNative?.();
+        setFailed(true);
+      }
     }}><Airplay /></button>
     {failed && <span className="fullscreen-notice" role="status">{t("player.airplayFailed")}</span>}
   </>;
