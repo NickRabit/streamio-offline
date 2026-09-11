@@ -833,7 +833,14 @@ export class PlaybackManager {
     const selectedAudioCodec = session.info?.audioTracks[audioIndex]?.codec ?? session.info?.audio?.codec ?? "";
     const passthroughAudio = copyVideo && copyAudio
       && !(offset > 0 && AUDIO_REQUIRING_PACKET_FOR_FMP4.has(selectedAudioCodec));
-    if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy"] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
+    // AAC arrives from an HLS source in ADTS frames, and fMP4 wants it in ASC. Copied through
+    // unchanged the muxer refuses every packet -- "Malformed AAC bitstream detected", then
+    // "Error submitting a packet to the muxer" -- and FFmpeg dies before it writes the stream
+    // line of the master playlist. The client is then handed a master with no CODECS and no
+    // variant at all, which Chrome reports as bufferAddCodecError and Safari as refusing the
+    // source outright. The filter only rewrites ADTS, so AAC that is already ASC passes by.
+    const adtsToAsc = passthroughAudio && selectedAudioCodec === "aac" ? ["-bsf:a", "aac_adtstoasc"] : [];
+    if (hasAudio) args.push(...(passthroughAudio ? ["-c:a", "copy", ...adtsToAsc] : ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]));
     if (subtitle !== null) args.push("-c:s", "webvtt");
 
     // fMP4 segments: the only way to let HEVC or AC3 through without re-encoding.
