@@ -29,7 +29,7 @@ test("AirPlay receivers read media without cookies but cannot access other resou
     expect((await receiver.post(`/api/playback/${playback.id}/seek${query}`, { data: { time: 1 } })).status()).toBe(401);
     await control(request, "playlist");
     const playlist = await (await receiver.get(playback.url)).text();
-    const children = [...playlist.matchAll(/\/api\/media\/[\w-]{43}\?airplay=[\w-]{43}/g)].map(([url]) => url);
+    const children = [...playlist.matchAll(/\/api\/media\/[\w-]{43}\/u\/[\w-]+\?airplay=[\w-]{43}/g)].map(([url]) => url);
     expect(children).toHaveLength(3);
     for (const url of children) expect((await receiver.get(url)).status()).toBe(200);
     await request.delete(`/api/playback/${playback.id}`);
@@ -124,8 +124,9 @@ test("HLS children are opaque, deduplicated and revoked with their playback", as
   const playlist = await response.text();
   expect(playlist).not.toMatch(/canary|token=|headers=|url=/);
   expect(await (await request.get(playback.url)).text()).toBe(playlist);
-  const children = [...playlist.matchAll(/\/api\/media\/[\w-]{43}/g)].map(([value]) => value);
+  const children = [...playlist.matchAll(/\/api\/media\/[\w-]{43}\/u\/[\w-]+/g)].map(([value]) => value);
   expect(children).toHaveLength(3);
+  expect(new Set(children.map((path) => path.split("/")[3])).size).toBe(1);
   for (const child of children) expect((await request.get(child)).status()).toBe(200);
   await request.delete(`/api/playback/${playback.id}`);
   for (const child of children) expect((await request.get(child)).status()).toBe(404);

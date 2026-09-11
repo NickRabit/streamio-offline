@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AirPlayAccess } from "./airplay-access.js";
-import { MediaResources } from "./media-resources.js";
+import { mediaChildPath, MediaResources } from "./media-resources.js";
 
 function fixture() {
   let now = 1000;
@@ -16,10 +16,10 @@ function fixture() {
 
 test("AirPlay grants read only the selected media tree and its HLS files", () => {
   const { resources, owner, root, access, token } = fixture();
-  const child = resources.add({ url: "https://example.test/segment" }, owner, "media", root);
+  const child = mediaChildPath(root, "https://example.test/segment.ts");
   const unrelated = resources.add({ url: "https://example.test/other" }, owner, "media");
   for (const method of ["GET", "HEAD"]) {
-    for (const url of [`/api/media/${root}`, `/api/media/${child}`, "/api/playback/playback-1/1/master.m3u8", "/api/playback/playback-1/1/init.mp4", "/api/playback/playback-1/1/segment_1.m4s"]) {
+    for (const url of [`/api/media/${root}`, child, "/api/playback/playback-1/1/master.m3u8", "/api/playback/playback-1/1/init.mp4", "/api/playback/playback-1/1/segment_1.m4s"]) {
       assert.equal(access.authorize(method, url, token)?.owner.sid, owner.sid);
     }
   }

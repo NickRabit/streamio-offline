@@ -1,6 +1,6 @@
 import express from "express";
 import { nextVideoFile } from "./next-file.js";
-import { mediaResources, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
+import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
@@ -16,7 +16,7 @@ import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
 import { Throughput } from "./throughput.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
-import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
+import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, validateRemoteUrl } from "./security.js";
 import { RestrictedError, logoutDenied, restrictedMiddleware, restrictedMode } from "./restricted.js";
 import { guardedFetch, outbound } from "./outbound.js";
 import { images } from "./images.js";
@@ -1940,14 +1940,22 @@ app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   res.sendFile(file, { root: directory, dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));
 
-app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
+app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRoute(async (req, res) => {
   res.setHeader("cache-control", "private, no-store");
   if ("url" in req.query || "headers" in req.query) throw new ResourceError(400, "UNSAFE_SOURCE_INPUT");
   const internal = internalMediaRequest(req);
   const grant = airplayRequest(req);
   const resource = mediaResources.get(String(req.params.resourceId), grant?.owner.sid ?? currentSession(req)?.sid, "media", internal);
   trackMedia(grant ? { ...resource.owner, expiresAt: grant.expiresAt } : resource.owner, res, resource.parent ?? resource.id);
-  const stream = resource.stream;
+  let stream = resource.stream;
+  if (typeof req.params.signed === "string") {
+    const url = openMediaUrl(resource.id, req.params.signed);
+    if (!url) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
+    const child = new URL(url);
+    if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
+    const headers = redirectedHeaders(stream.behaviorHints?.proxyHeaders?.request ?? {}, new URL(stream.url!), child);
+    stream = { ...stream, url: child.toString(), behaviorHints: { ...stream.behaviorHints, proxyHeaders: { request: Object.fromEntries(headers) } } };
+  }
   const raw = stream.url!;
   const ownedSession = [...playbackOwners].find(([, value]) => value.resourceId === (resource.parent ?? resource.id))?.[0];
   if (ownedSession) {
@@ -2007,15 +2015,11 @@ app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
     throw new Error("DASH playlists are not supported by the media proxy.");
   }
   if (req.method !== "HEAD" && (contentType.includes("mpegurl") || new URL(upstream.url).pathname.toLowerCase().endsWith(".m3u8"))) {
-    const finalHeaders = upstreamRequestHeaders(upstream);
-    finalHeaders.delete("range");
-    finalHeaders.delete("if-range");
     const proxied = (value: string) => {
       const child = new URL(value, upstream.url);
       if (!["http:", "https:"].includes(child.protocol) || child.username || child.password) throw new Error("Unsupported playlist resource.");
-      const childHeaders = redirectedHeaders(finalHeaders, new URL(upstream.url), child);
-      const id = mediaResources.add({ ...stream, url: child.toString(), behaviorHints: { proxyHeaders: { request: Object.fromEntries(childHeaders) } } }, resource.owner, "media", resource.parent ?? resource.id);
-      const url = `/api/media/${id}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
+      const path = mediaChildPath(resource.parent ?? resource.id, child.toString());
+      const url = `${path}${internal ? `?token=${INTERNAL_TOKEN}` : ""}`;
       return grant ? airplayAccess.url(grant.playbackId, url) : url;
     };
     const playlist = rewritePlaylist(await readMediaText(upstream), proxied, (text) => safeSourceText(text, stream) ?? "");
