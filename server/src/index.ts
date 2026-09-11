@@ -12,6 +12,7 @@ import { rankStreams, titleLanguage } from "./ranking.js";
 import { DownloadQueue, type DownloadSelection, type SubtitleMode } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
+import { Throughput } from "./throughput.js";
 import { build } from "./build.js";
 import { PlaybackManager, sourceTitle } from "./playback.js";
 import { essentialAddon, publicAddon, publicAddonRestricted, redirectedHeaders, safeFetch, upstreamRequestHeaders, validateRemoteUrl } from "./security.js";
@@ -57,8 +58,11 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
   playbackOwners.delete(id);
+  throughput.forget(id);
 });
 const stats = new StatsLog();
+/** How fast each running playback is transferring right now. */
+const throughput = new Throughput();
 
 /** The provider comes from the source address; an addon may use a different one per stream. */
 const providerOf = (url?: string) => { try { return url ? new URL(url).hostname : "unknown"; } catch { return "unknown"; } };
@@ -201,9 +205,12 @@ app.use("/api", (req, res, next) => {
 /** Measures how much the response actually sends and reports it to the statistics.
  * It counts at write time, so what the client asked for and then abandoned by closing
  * playback never reaches the total. */
-const countBytes = (res: express.Response, meta: TrafficMeta) => {
+const countBytes = (res: express.Response, meta: TrafficMeta, session?: string) => {
   const measure = (chunk: unknown) => {
-    if (typeof chunk === "string" || chunk instanceof Uint8Array) stats.add(meta, Buffer.byteLength(chunk));
+    if (typeof chunk !== "string" && !(chunk instanceof Uint8Array)) return;
+    const bytes = Buffer.byteLength(chunk);
+    stats.add(meta, bytes);
+    if (session) throughput.add(session, bytes);
   };
   const write = res.write.bind(res) as (...args: unknown[]) => boolean;
   const end = res.end.bind(res) as (...args: unknown[]) => express.Response;
@@ -1622,6 +1629,22 @@ app.delete("/api/downloads/:id", asyncRoute(async (req, res) => { await queue.re
 app.delete("/api/downloads", asyncRoute(async (_req, res) => { await queue.clearCompleted(); res.status(204).end(); }));
 app.get("/api/settings", (_req, res) => res.json(publicSettings(store.settings())));
 app.get("/api/stats", (req, res) => res.json(stats.summary(Number(req.query.hours) || 720)));
+/** Playback running at this moment. The statistics otherwise look backwards; this is the
+ * one view of what the line is carrying right now. */
+app.get("/api/stats/streams", (_req, res) => res.json(playback.active().map((session) => {
+  const meta = playbackMeta(session.stream);
+  const { bytes, rate } = throughput.read(session.id);
+  return {
+    id: session.id,
+    title: safeSourceText(sourceTitle(session.stream), session.stream) || meta.title,
+    source: meta.source,
+    provider: meta.source === "library" ? undefined : meta.provider,
+    addonName: safeSourceText(session.stream.addonName, session.stream),
+    mode: session.mode, hardware: session.hardware, quality: session.quality,
+    duration: session.duration, startedAt: session.startedAt, idleSeconds: session.idleSeconds,
+    bytes, rate,
+  };
+})));
 app.get("/api/logs", asyncRoute(async (req, res) => {
   const tail = Math.max(0, Math.min(5000, Number(req.query.tail) || 0));
   const hours = Math.max(0, Math.min(24 * 365, Number(req.query.hours) || 0));
@@ -1875,13 +1898,13 @@ app.get("/api/media/:resourceId", asyncRoute(async (req, res) => {
   if (raw.startsWith("file://")) {
     const relative = raw.slice(7);
     const target = await libraryTarget(relative);
-    countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" });
+    countBytes(res, { source: "library", provider: "knihovna", title: path.basename(relative), kind: "other" }, ownedSession);
     return void res.sendFile(path.basename(target), { root: path.dirname(target), acceptRanges: true, dotfiles: "deny" }, (error) => {
       if (error && !res.headersSent) res.status(404).end();
     });
   }
   await validateRemoteUrl(raw);
-  countBytes(res, playbackMeta(stream));
+  countBytes(res, playbackMeta(stream), ownedSession);
   const headers: Record<string, string> = { ...stream.behaviorHints?.proxyHeaders?.request };
   if (req.headers.range) headers.range = req.headers.range;
   const controller = new AbortController();

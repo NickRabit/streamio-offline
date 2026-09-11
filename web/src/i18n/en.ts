@@ -96,6 +96,18 @@ export const en = {
   "stats.source.download": "Downloads",
   "stats.source.catalog": "Catalog playback",
   "stats.source.library": "Library playback",
+  "stats.live.title": "Running now",
+  "stats.live.none": "Nothing is playing right now.",
+  "stats.live.count": { one: "1 stream", other: "{count} streams" },
+  "stats.live.rate": "{rate}/s",
+  "stats.live.transferred": "{bytes} transferred",
+  "stats.live.elapsed": "playing for {time}",
+  "stats.live.stalled": "waiting for data",
+  "stats.live.quality": "{quality}p",
+  "stats.live.hardware": "GPU",
+  "stats.mode.direct": "Direct play",
+  "stats.mode.remux": "Remux",
+  "stats.mode.transcode": "Transcode",
 
   // Shared across screens.
   "common.loading": "Loading…",

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "./api";
-import type { StatsSeries, StatsSummary } from "./types";
+import type { ActiveStream, StatsSeries, StatsSummary } from "./types";
 import { localeTag, serverText, t, useI18n } from "./i18n";
 
 const size = (value: number) => !value ? "0 B"
@@ -10,6 +10,22 @@ const size = (value: number) => !value ? "0 B"
   : `${Math.round(value / 1e3)} kB`;
 
 const files = (count: number) => t("stats.items", { count });
+
+/** How long the playback has been running, in the shape a player shows it. */
+const elapsed = (from: string, now: number) => {
+  const seconds = Math.max(0, Math.round((now - Date.parse(from)) / 1000));
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}:${pad(seconds % 60)}`;
+  return `${Math.floor(minutes / 60)}:${pad(minutes % 60)}:${pad(seconds % 60)}`;
+};
+
+/** A stream with nothing arriving for this long is stalled rather than slow: the player
+ * is paused, or has buffered enough and stopped asking. */
+const STALLED_SECONDS = 20;
+
+/** Running playback is polled on its own; the summary behind it changes far more slowly. */
+const LIVE_MS = 5_000;
 
 /** Providers and addons are named by the outside world, the kinds of traffic by us. */
 const seriesLabel = (kind: string, key: string, fallback: string) =>
@@ -124,12 +140,59 @@ function Breakdown({ title, kind, items, chosen, onToggle, colors }: {
   </section>;
 }
 
+function Live({ streams, now }: { streams: ActiveStream[]; now: number }) {
+  const rate = streams.reduce((sum, stream) => sum + stream.rate, 0);
+  return <section className="panel stats-live">
+    <div className="stats-live-head">
+      <h3>{t("stats.live.title")}</h3>
+      {streams.length > 0 && <span>{t("stats.live.count", { count: streams.length })} · {t("stats.live.rate", { rate: size(rate) })}</span>}
+    </div>
+    {!streams.length ? <p className="stats-empty">{t("stats.live.none")}</p> : <ul>
+      {streams.map((stream) => {
+        const stalled = stream.idleSeconds >= STALLED_SECONDS || !stream.rate;
+        return <li key={stream.id}>
+          <div className="stats-live-name">
+            <span className={`stats-live-dot${stalled ? " stalled" : ""}`} aria-hidden="true"/>
+            <b title={stream.title}>{stream.title}</b>
+          </div>
+          <div className="stats-live-tags">
+            <span>{serverText(`stats.source.${stream.source}`, stream.source)}</span>
+            <span>{t(`stats.mode.${stream.mode}`)}</span>
+            {stream.quality !== null && <span>{t("stats.live.quality", { quality: stream.quality })}</span>}
+            {stream.hardware && <span>{t("stats.live.hardware")}</span>}
+            {(stream.addonName || stream.provider) && <span title={stream.provider}>{stream.addonName ?? stream.provider}</span>}
+          </div>
+          <div className="stats-live-flow">
+            <b>{stalled ? t("stats.live.stalled") : t("stats.live.rate", { rate: size(stream.rate) })}</b>
+            <small>{t("stats.live.transferred", { bytes: size(stream.bytes) })} · {t("stats.live.elapsed", { time: elapsed(stream.startedAt, now) })}</small>
+          </div>
+        </li>;
+      })}
+    </ul>}
+  </section>;
+}
+
 export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
   const { t } = useI18n();
   const [hours, setHours] = useState(720);
   const [summary, setSummary] = useState<StatsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [streams, setStreams] = useState<ActiveStream[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+
+  // Polled rather than pushed: the page is open for a moment and a socket for this alone
+  // would outweigh a request every five seconds. A failure only empties the panel -- the
+  // statistics behind it are still worth showing.
+  useEffect(() => {
+    let alive = true;
+    const tick = () => api.activeStreams()
+      .then((data) => { if (alive) { setStreams(data); setNow(Date.now()); } })
+      .catch(() => { if (alive) setStreams([]); });
+    void tick();
+    const timer = setInterval(tick, LIVE_MS);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -176,6 +239,8 @@ export function StatsPanel({ onError }: { onError: (error: unknown) => void }) {
         {PERIODS.map((period) => <button key={period.hours} className={period.hours === hours ? "active" : ""} onClick={() => setHours(period.hours)}>{t(period.key)}</button>)}
       </div>
     </div>
+
+    <Live streams={streams} now={now}/>
 
     {!summary ? <p className="stats-empty">{loading ? t("common.loading") : t("stats.loadFailed")}</p> : <>
       <div className="stats-cards">

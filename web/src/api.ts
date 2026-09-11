@@ -1,5 +1,5 @@
 import { serverText, t } from "./i18n";
-import type { Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
+import type { ActiveStream, Diagnostics, BuildInfo, AuthStatus, StatsSummary, Addon, AddonDownloadSettings, Capabilities, Catalog, Download, DownloadSelection, DownloadSnapshot, Inspection, BrowseResult, IdentityPreview, LibraryFolder, LibraryPage, ProgressEntry, WatchlistEntry, LibrarySummary, Meta, PlaybackSession, ScanState, SearchResult, SuggestionRow, Session, Settings, SettingsBackup, SettingsPatch, Stream, Subtitle } from "./types";
 
 /** The status code has to reach the top, or a sign-out is indistinguishable from an ordinary error. */
 export class ApiError extends Error {
@@ -51,6 +51,7 @@ export const api = {
   refreshAddon: (key: string) => request<{ addon: Addon; changed: boolean; previousVersion: string; version: string }>(`/api/addons/${key}/refresh`, { method: "POST" }),
   refreshAddons: () => request<{ changed: number; failed: number; addons: Addon[] }>("/api/addons/refresh", { method: "POST", timeoutMs: 120_000 }),
   stats: (hours: number) => request<StatsSummary>(`/api/stats?hours=${hours}`),
+  activeStreams: () => request<ActiveStream[]>("/api/stats/streams"),
   updateAddon: (key: string, patch: { enabled?: boolean; url?: string; role?: string; downloadSettings?: AddonDownloadSettings }) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
   toggleAddon: (key: string, enabled: boolean) => request<Addon>(`/api/addons/${key}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   catalogs: () => request<Catalog[]>("/api/catalogs"),

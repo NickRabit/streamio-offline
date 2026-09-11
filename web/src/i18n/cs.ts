@@ -92,6 +92,18 @@ export const cs: Catalog = {
   "stats.source.download": "Stahování",
   "stats.source.catalog": "Přehrávání z katalogu",
   "stats.source.library": "Přehrávání z knihovny",
+  "stats.live.title": "Právě běží",
+  "stats.live.none": "Teď nic nehraje.",
+  "stats.live.count": { one: "1 stream", few: "{count} streamy", other: "{count} streamů" },
+  "stats.live.rate": "{rate}/s",
+  "stats.live.transferred": "přeneseno {bytes}",
+  "stats.live.elapsed": "hraje {time}",
+  "stats.live.stalled": "čeká na data",
+  "stats.live.quality": "{quality}p",
+  "stats.live.hardware": "GPU",
+  "stats.mode.direct": "Přímé přehrávání",
+  "stats.mode.remux": "Přebalení",
+  "stats.mode.transcode": "Překódování",
 
   // Sdílené napříč obrazovkami.
   "common.loading": "Načítám…",
