@@ -64,7 +64,7 @@ test("player keeps its picture stable and its overlay controls reachable", async
   await expect(overlay).toHaveCount(0);
 });
 
-test("video clicks dismiss controls and settings; fullscreen hides an idle cursor", async ({ page, request }) => {
+test("video clicks dismiss controls and settings; double-click toggles fullscreen", async ({ page, request }) => {
   await request.get(new URL("/proxy-control?mode=browser", addonManifest).href);
   await page.goto("/");
   await page.getByRole("button", { name: "Katalog", exact: true }).click();
@@ -90,6 +90,13 @@ test("video clicks dismiss controls and settings; fullscreen hides an idle curso
     (typeof element.requestFullscreen === "function" && document.fullscreenEnabled)
     || (element as HTMLElement & { webkitRequestFullscreen?: () => void }).webkitRequestFullscreen,
   ));
+  const hasFinePointer = await page.evaluate(() => window.matchMedia("(pointer: fine)").matches);
+  if (!hasFinePointer) {
+    await video.dispatchEvent("dblclick");
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+    await expect(overlay.locator(".fullscreen-notice")).toHaveCount(0);
+    return;
+  }
   if (!supportsFullscreen) {
     await expect(overlay.locator(".fullscreen-action")).toHaveCount(0);
     await expect(video).toBeVisible();
@@ -97,6 +104,11 @@ test("video clicks dismiss controls and settings; fullscreen hides an idle curso
   }
   await page.evaluate(async () => { if (document.fullscreenElement) await document.exitFullscreen(); });
   await overlay.dispatchEvent("pointermove", { pointerType: "mouse" });
+  await video.dblclick();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains("player-overlay"))).toBe(true);
+  await expect(overlay.locator(".fullscreen-action")).toHaveAttribute("aria-label", "Ukončit celou obrazovku");
+  await video.dblclick();
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
   await overlay.locator(".fullscreen-action").click();
   await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains("player-overlay"))).toBe(true);
   await page.clock.install();
