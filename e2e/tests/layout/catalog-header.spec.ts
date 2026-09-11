@@ -41,6 +41,79 @@ test("description survives source loading and remains expandable", async ({ page
   }
 });
 
+test("desktop episode and source lists use the available detail height", async ({ page }, testInfo) => {
+  test.skip(!testInfo.project.name.startsWith("desktop"), "desktop detail layout");
+  const seriesDescription = "A long series description that must stay inside its artwork panel even when the episode list is crowded. ".repeat(4);
+  await page.route("**/api/meta/**", async (route) => {
+    const response = await route.fetch();
+    const meta = await response.json();
+    if (!meta.videos?.length) return route.fulfill({ response });
+    await route.fulfill({
+      json: {
+        ...meta,
+        description: seriesDescription,
+        videos: Array.from({ length: 23 }, (_, index) => ({
+          ...meta.videos[index % meta.videos.length],
+          id: `series-episode-${index}`,
+          season: 1,
+          episode: index + 1,
+        })),
+      },
+    });
+  });
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await expect(catalog.locator("option").filter({ hasText: /Seriály/ })).toHaveCount(1);
+  const options = await catalog.locator("option").allTextContents();
+  await catalog.selectOption({ label: options.find((text) => /Seriály/.test(text))! });
+  const series = page.getByRole("button", { name: /Zkušební seriál/ });
+  await expect(series).toBeVisible();
+  await series.click();
+
+  const detail = page.locator(".detail-panel");
+  const episodes = detail.locator(".episode-list");
+  await expect(episodes.getByRole("button")).toHaveCount(23);
+  const heroBox = await detail.locator(".hero").boundingBox();
+  const descriptionBox = await detail.locator(".description-preview").boundingBox();
+  expect(descriptionBox!.y + descriptionBox!.height).toBeLessThanOrEqual(heroBox!.y + heroBox!.height);
+  const detailBox = await detail.boundingBox();
+  const episodeBox = await episodes.boundingBox();
+  expect(detailBox!.y + detailBox!.height - (episodeBox!.y + episodeBox!.height)).toBeLessThan(24);
+
+  const movieCatalog = options.find((text) => /Filmy/.test(text))!;
+  await catalog.selectOption({ label: movieCatalog });
+  const movie = page.getByRole("button", { name: /Zkušební film/ });
+  await expect(movie).toBeVisible();
+  await movie.click();
+  await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+  const sourcesBox = await detail.locator(".sources").boundingBox();
+  for (const button of await detail.locator(".source-footer .actions button").all()) {
+    const buttonBox = await button.boundingBox();
+    expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(sourcesBox!.y + sourcesBox!.height);
+  }
+});
+
+test("mobile source view returns to the episode picker", async ({ page }, testInfo) => {
+  test.skip(!["mobile", "mobile-landscape"].includes(testInfo.project.name), "phone detail navigation");
+  await page.goto("/");
+  const catalog = page.getByRole("combobox", { name: "Procházet katalog" });
+  await expect(catalog.locator("option").filter({ hasText: /Seriály/ })).toHaveCount(1);
+  const options = await catalog.locator("option").allTextContents();
+  await catalog.selectOption({ label: options.find((text) => /Seriály/.test(text))! });
+  await page.getByRole("button", { name: /Zkušební seriál/ }).click();
+
+  const detail = page.locator(".detail-panel");
+  await detail.getByRole("button", { name: /První díl/ }).click();
+  await expect(detail.getByRole("heading", { name: "Zdroje" })).toBeVisible();
+  const episodesBack = detail.locator(".mobile-detail-head").getByRole("button", { name: "Epizody" });
+  await expect(episodesBack).toBeVisible();
+  await episodesBack.click();
+
+  await expect(detail.getByRole("heading", { name: "Epizody" })).toBeVisible();
+  await expect(detail.getByRole("heading", { name: "Zdroje" })).toHaveCount(0);
+  await expect(detail.locator(".mobile-detail-head").getByRole("button", { name: "Výsledky" })).toBeVisible();
+});
+
 test("phone source scrolling hides metadata and restores it before reaching the top", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "mobile", "phone portrait has a collapsible metadata header");
   await page.route("**/api/streams/**", async (route) => {
