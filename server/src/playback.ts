@@ -10,7 +10,7 @@ import { PlayerPreviews } from "./player-previews.js";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
-import { probe, type MediaInfo, type Track } from "./probe.js";
+import { playlistArgs, probe, type MediaInfo, type Track } from "./probe.js";
 import { safeFetch } from "./security.js";
 import type { StreamItem } from "./types.js";
 
@@ -503,6 +503,9 @@ export class PlaybackManager {
         await mkdir(path.dirname(dest), { recursive: true });
         await promisify(execFile)("ffmpeg", [
           "-hide_banner", "-loglevel", "error", "-nostdin",
+          // The same playlist through the same demuxer, so the same flags -- and the same
+          // reason to leave them out when the source is an ordinary file.
+          ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
           "-i", this.localUrl(this.proxyPath(session.stream)),
           "-map", `0:s:${index}`, "-c:s", "webvtt", "-y", dest,
         ], { timeout: 45_000 });
@@ -685,7 +688,12 @@ export class PlaybackManager {
   }
 
   private async run(session: Session, offset: number, directory: string, hardware: boolean) {
-    const args = this.args(session, offset, directory, hardware);
+    // Only for a source that really is a playlist: these are HLS demuxer options, and FFmpeg
+    // rejects them outright -- "Option not found" -- when the input is an ordinary file.
+    // Resolved here rather than inside args(): asking the binary what it supports is I/O, and
+    // args() stays synchronous so it can be read and tested as the pure list-builder it is.
+    const playlist = isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : [];
+    const args = this.args(session, offset, directory, hardware, playlist);
     const startedAt = Date.now();
     log("DEBUG", "FFmpeg starting", {
       id: session.id, generation: session.generation, mode: session.mode, hardware,
@@ -733,7 +741,7 @@ export class PlaybackManager {
     return undefined;
   }
 
-  private args(session: Session, offset: number, directory: string, hardware: boolean) {
+  private args(session: Session, offset: number, directory: string, hardware: boolean, playlist: string[] = []) {
     const { copyVideo, copyAudio } = this.plan(session);
     const quality = session.quality;
     const bitrate = quality !== null ? QUALITY_BITRATE[quality] : undefined;
@@ -780,6 +788,12 @@ export class PlaybackManager {
     // The first few dozen seconds are read at full speed so the first segment is ready as soon as
     // possible; only then does the brake against downloading the whole file step in.
     if (this.initialBurst) args.push("-readrate_initial_burst", process.env.FFMPEG_BURST ?? "30");
+    // Every playlist entry comes back from our own proxy as /api/media/<id>, which has no file
+    // ending at all, and the HLS demuxer refuses a segment whose ending is not on its list. An
+    // HLS source therefore probed fine and then failed to convert, which reaches the viewer as
+    // "the conversion could not be started". ffprobe and downloads already ask for these; the
+    // conversion reads the same playlists and needs them just as much.
+    args.push(...playlist);
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
     args.push("-map", "0:v:0?");
     if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
