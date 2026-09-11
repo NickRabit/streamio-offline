@@ -208,8 +208,11 @@ route picker. Available receivers enable it, and an active wireless route stays
 selectable so the user can change output. Native HLS is preferred on browsers
 with both native HLS and AirPlay support; the custom controls remain in use.
 
-Unit tests cover discovery, picker rejection, connection state, cleanup, and
-native-HLS selection. They do not verify an actual wireless connection. Before
+Unit tests cover discovery, picker rejection, connection state, cleanup,
+native-HLS selection, and scoped receiver access. Proxy integration tests fetch
+direct media and HLS master, variant, init, and segment URLs without cookies,
+and check that the grant cannot authorize other media or playback controls.
+These tests do not verify an actual wireless connection. Before
 claiming device compatibility, test Safari on iPhone, iPad, and Mac with:
 
 - A HomePod or stereo pair: select audio output, check lip sync, pause, seek,
@@ -224,10 +227,14 @@ claiming device compatibility, test Safari on iPhone, iPad, and Mac with:
   remain usable, without opening native fullscreen controls.
 
 The browser owns device selection and reconnection; the app cannot save or
-silently select a named HomePod. Video receivers may fetch media themselves,
-so they need access to the media URL and compatible authorization. Verify the
-actual LAN address and deployment authentication rather than assuming that a
-working localhost video proves remote playback works.
+silently select a named HomePod. AirPlay-capable clients receive an opaque
+receiver grant in their media URL. It permits only GET/HEAD of that playback's
+media tree and generated HLS files, for at most 12 hours or the login lifetime,
+whichever is shorter. Stop, logout, and server restart invalidate it. HLS child
+URLs retain the grant, and log redaction masks it. Normal clients keep cookie
+authentication. Receivers still need to reach the server's LAN address; an
+external reverse proxy requiring its own login may block them. A working
+localhost video alone does not prove remote playback works.
 
 ## Continuous integration
 

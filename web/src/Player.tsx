@@ -1,7 +1,7 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
 import { AirPlayButton } from "./AirPlayButton";
-import { prefersNativeAirPlay } from "./player-airplay";
+import { prefersNativeAirPlay, supportsAirPlay } from "./player-airplay";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
@@ -156,7 +156,7 @@ const supports = (type: string) => {
   try { if (typeof MediaSource !== "undefined" && MediaSource.isTypeSupported) return MediaSource.isTypeSupported(type); } catch { /* MSE may be unavailable */ }
   try { return document.createElement("video").canPlayType(type) !== ""; } catch { return false; }
 };
-const capabilities = (): Capabilities => detectCapabilities(supports, navigator.userAgent, navigator.maxTouchPoints);
+const capabilities = (): Capabilities => ({ ...detectCapabilities(supports, navigator.userAgent, navigator.maxTouchPoints), airplay: supportsAirPlay(document.createElement("video")) });
 
 const MODE_KEY: Record<PlaybackMode, Key> = {
   direct: "player.mode.direct",

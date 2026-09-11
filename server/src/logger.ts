@@ -38,7 +38,7 @@ export async function initLogger(dataDir = process.env.DATA_DIR ?? "/data") {
 // Anything that looks like an address is reduced to scheme and host. Stream URLs carry
 // access tokens in the query string, and the log is something users hand out when asking
 // for help -- so the redaction has to happen here, not at every call site.
-const SENSITIVE_KEY = /token|password|secret|authorization|cookie|api[-_]?key/i;
+const SENSITIVE_KEY = /token|password|secret|authorization|cookie|api[-_]?key|airplay/i;
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>]+/gi;
 const MAX_STRING = 600;
 
@@ -47,7 +47,7 @@ const shortenUrl = (value: string) => {
   catch { return "<url>"; }
 };
 const redactText = (value: string) => {
-  const clean = value.replace(URL_PATTERN, shortenUrl);
+  const clean = value.replace(URL_PATTERN, shortenUrl).replace(/([?&]airplay=)[A-Za-z0-9_-]+/gi, "$1***");
   return clean.length > MAX_STRING ? `${clean.slice(0, MAX_STRING)}…` : clean;
 };
 

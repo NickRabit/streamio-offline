@@ -2,16 +2,90 @@ import { expect, test, type APIRequestContext } from "@playwright/test";
 import { addonManifest } from "../../playwright.config";
 
 const control = (request: APIRequestContext, mode: string) => request.get(new URL(`/proxy-control?mode=${mode}`, addonManifest).href);
-async function start(request: APIRequestContext) {
+async function start(request: APIRequestContext, airplay = false) {
   await control(request, "video");
   const sources = await (await request.get("/api/streams/movie/tt-e2e-proxy")).json();
-  const response = await request.post("/api/playback", { data: { sourceId: sources[0].sourceId, capabilities: { h264: true, aac: true } } });
+  const response = await request.post("/api/playback", { data: { sourceId: sources[0].sourceId, capabilities: { h264: true, aac: true, airplay } } });
   expect(response.status(), await response.text()).toBe(201);
   const playback = await response.json();
   expect(playback.mode).toBe("direct");
-  expect(playback.url).toMatch(/^\/api\/media\/[\w-]{43}$/);
+  expect(playback.url).toMatch(airplay ? /^\/api\/media\/[\w-]{43}\?airplay=[\w-]{43}$/ : /^\/api\/media\/[\w-]{43}$/);
   return { ...playback, source: sources[0] };
 }
+
+test("AirPlay receivers read media without cookies but cannot access other resources or controls", async ({ request, playwright }) => {
+  const playback = await start(request, true);
+  const other = await start(request);
+  const receiver = await playwright.request.newContext({ baseURL: test.info().project.use.baseURL, storageState: { cookies: [], origins: [] } });
+  const query = new URL(playback.url, "http://test").search;
+  try {
+    const range = await receiver.get(playback.url, { headers: { range: "bytes=0-31" } });
+    expect(range.status()).toBe(206);
+    expect((await range.body()).length).toBe(32);
+    expect((await receiver.head(playback.url)).status()).toBe(200);
+    expect((await receiver.get(playback.url.split("?")[0])).status()).toBe(401);
+    expect((await receiver.get(`${other.url}${query}`)).status()).toBe(401);
+    expect((await receiver.get(`/api/settings${query}`)).status()).toBe(401);
+    expect((await receiver.post(`/api/playback/${playback.id}/seek${query}`, { data: { time: 1 } })).status()).toBe(401);
+    await control(request, "playlist");
+    const playlist = await (await receiver.get(playback.url)).text();
+    const children = [...playlist.matchAll(/\/api\/media\/[\w-]{43}\?airplay=[\w-]{43}/g)].map(([url]) => url);
+    expect(children).toHaveLength(3);
+    for (const url of children) expect((await receiver.get(url)).status()).toBe(200);
+    await request.delete(`/api/playback/${playback.id}`);
+    for (const url of [playback.url, ...children]) expect((await receiver.get(url)).status()).toBe(401);
+  } finally {
+    await receiver.dispose();
+    await request.delete(`/api/playback/${playback.id}`);
+    await request.delete(`/api/playback/${other.id}`);
+    await control(request, "video");
+  }
+});
+
+test("AirPlay HLS carries access through master, variant, init and segments after a track change", async ({ request, playwright }) => {
+  const playback = await start(request, true);
+  const receiver = await playwright.request.newContext({ baseURL: test.info().project.use.baseURL, storageState: { cookies: [], origins: [] } });
+  try {
+    const changed = await request.post(`/api/playback/${playback.id}/track`, { data: { quality: 480, time: 0 } });
+    expect(changed.status()).toBe(200);
+    const converted = await changed.json();
+    const master = await receiver.get(converted.url);
+    expect(master.status(), await master.text()).toBe(200);
+    const variants = (await master.text()).split("\n").filter((line) => line && !line.startsWith("#"));
+    expect(variants.length).toBeGreaterThan(0);
+    const base = new URL(converted.url, test.info().project.use.baseURL);
+    const variant = await receiver.get(new URL(variants[0], base).href);
+    expect(variant.status()).toBe(200);
+    const text = await variant.text();
+    const init = /URI="([^"]+)"/.exec(text)![1];
+    const segment = text.split("\n").find((line) => line && !line.startsWith("#"))!;
+    for (const uri of [init, segment]) {
+      expect(uri).toContain("?airplay=");
+      const response = await receiver.get(new URL(uri, base).href);
+      expect(response.status()).toBe(200);
+      expect((await response.body()).length).toBeGreaterThan(0);
+    }
+  } finally {
+    await receiver.dispose();
+    await request.delete(`/api/playback/${playback.id}`);
+  }
+});
+
+test("AirPlay receiver access is revoked when its owner logs out", async ({ playwright }) => {
+  const options = { baseURL: test.info().project.use.baseURL, storageState: { cookies: [], origins: [] } };
+  const owner = await playwright.request.newContext(options);
+  const receiver = await playwright.request.newContext(options);
+  try {
+    expect((await owner.post("/api/auth/login", { data: { username: "e2e-admin", password: "e2e-password" } })).status()).toBe(200);
+    const playback = await start(owner, true);
+    expect((await receiver.get(playback.url)).status()).toBe(200);
+    expect((await owner.post("/api/auth/logout", { data: {} })).status()).toBe(204);
+    expect((await receiver.get(playback.url)).status()).toBe(401);
+  } finally {
+    await owner.dispose();
+    await receiver.dispose();
+  }
+});
 
 test("opaque proxy suppresses provider errors and sensitive response headers", async ({ request }) => {
   const playback = await start(request);
