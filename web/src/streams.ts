@@ -1,4 +1,4 @@
-import { guessLanguages } from "./languages";
+import { bingeGroupLanguages, guessLanguages, leavesLanguageBlank } from "./languages";
 import type { Stream } from "./types";
 
 /** Everything the addon wrote about the source. It sends neither language nor size as data; they tend to be in here. */
@@ -20,17 +20,22 @@ export function streamSize(stream: Stream): number | undefined {
   return Number.isFinite(value) && unit ? Math.round(value * unit) : undefined;
 }
 
-export const streamLanguages = (stream: Stream) => guessLanguages(streamText(stream));
+/** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
+export function streamLanguages(stream: Stream, titleLanguage?: string): string[] {
+  const found = [...new Set([...guessLanguages(streamText(stream)), ...bingeGroupLanguages(stream.behaviorHints?.bingeGroup)])];
+  if (found.length || !titleLanguage || !leavesLanguageBlank(stream.behaviorHints?.bingeGroup)) return found;
+  return [titleLanguage];
+}
 
 export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";
 
 export interface StreamFilters { addon: string; language: string; sort: StreamSort }
 
 /** Recommended = the preferred language first, largest first within the group. */
-export function arrangeStreams(streams: Stream[], filters: StreamFilters, preferredLanguage: string, priority: Map<string, number> = new Map()): Stream[] {
+export function arrangeStreams(streams: Stream[], filters: StreamFilters, preferredLanguage: string, priority: Map<string, number> = new Map(), titleLanguage?: string): Stream[] {
   const list = streams.filter((stream) =>
     (!filters.addon || stream.addonName === filters.addon) &&
-    (!filters.language || streamLanguages(stream).includes(filters.language)));
+    (!filters.language || streamLanguages(stream, titleLanguage).includes(filters.language)));
 
   const size = new Map(list.map((stream) => [stream, streamSize(stream)]));
   const decorated = list.map((stream, index) => ({ stream, index }));
@@ -38,7 +43,7 @@ export function arrangeStreams(streams: Stream[], filters: StreamFilters, prefer
   decorated.sort((a, b) => {
     if (filters.sort === "addon") return (rank(a.stream) - rank(b.stream)) || (a.index - b.index);
     if (filters.sort === "recommended") {
-      const preferred = (stream: Stream) => streamLanguages(stream).includes(preferredLanguage) ? 0 : 1;
+      const preferred = (stream: Stream) => streamLanguages(stream, titleLanguage).includes(preferredLanguage) ? 0 : 1;
       const byLanguage = preferred(a.stream) - preferred(b.stream);
       if (byLanguage) return byLanguage;
       const byPriority = rank(a.stream) - rank(b.stream);
@@ -62,8 +67,9 @@ export function visibleCatalogStreams(
   preferredLanguage: string,
   priority: Map<string, number>,
   showTorrents: boolean,
+  titleLanguage?: string,
 ): Stream[] {
-  const arranged = arrangeStreams(streams, filters, preferredLanguage, priority);
+  const arranged = arrangeStreams(streams, filters, preferredLanguage, priority, titleLanguage);
   return showTorrents ? arranged : arranged.filter((stream) => stream.kind !== "torrent");
 }
 

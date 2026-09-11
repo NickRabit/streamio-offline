@@ -33,6 +33,8 @@ export interface DownloadSelection {
   sourceStrategy: DownloadSourceStrategy;
   audioLanguage: string;
   fallbackAudioLanguage?: string;
+  /** The language of the title itself, where its metadata names one. */
+  titleLanguage?: string;
   subtitleMode: SubtitleMode;
   subtitleLanguage?: string;
   fallbackSubtitleLanguage?: string;

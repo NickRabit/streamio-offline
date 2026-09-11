@@ -38,20 +38,61 @@ const WORDS: Array<[RegExp, string]> = [
   [/\b(hungarian|magyar|hun)\b/i, "hu"],
 ];
 
-export function streamLanguages(stream: StreamItem): string[] {
+/** Some addons state the language as a field of the bingeGroup, e.g. "Webshare|CZ,SK|720p|" or
+ *  "com.aiostreams.viren070|realdebrid|false|2160p|BluRay|Dubbed|English|Russian". Only a whole
+ *  field counts, so a resolution, a release group or the infohash Torrentio falls back to
+ *  ("torrentio|aba496ab...411de048be3") never passes for a language. */
+const BINGE_CODES: Record<string, string> = {
+  cz: "cs", cs: "cs", cze: "cs", ces: "cs", czech: "cs",
+  sk: "sk", slk: "sk", slovak: "sk",
+  en: "en", eng: "en", english: "en",
+  de: "de", ger: "de", deu: "de", german: "de",
+  pl: "pl", pol: "pl", polish: "pl",
+  hu: "hu", hun: "hu", hungarian: "hu",
+};
+
+/** Cinemeta states the language of some titles by its English name ("Czech"), occasionally several. */
+const LANGUAGE_NAMES: Record<string, string> = {
+  czech: "cs", slovak: "sk", english: "en", german: "de", polish: "pl", hungarian: "hu",
+  french: "fr", spanish: "es", italian: "it", russian: "ru", ukrainian: "uk",
+};
+
+export function titleLanguage(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  for (const part of value.split(/[,/]/)) {
+    const code = LANGUAGE_NAMES[part.trim().toLowerCase()];
+    if (code) return code;
+  }
+  return undefined;
+}
+
+/** An addon whose bingeGroup has a field it left blank -- Cineshare sends "Webshare||1080p|" when it
+ *  found no language -- looked and came up empty, so the title's own language is the best guess left.
+ *  A torrent listing names every audio track a release carries and has no such field, so its silence
+ *  is not an admission of ignorance and earns no guess. */
+const leavesLanguageBlank = (bingeGroup?: string) =>
+  !!bingeGroup && bingeGroup.includes("|") && bingeGroup.split("|").includes("");
+
+/** `titleLanguage` stands in only for a source whose addon admitted it found no language. */
+export function streamLanguages(stream: StreamItem, titleLanguage?: string): string[] {
   const text = streamText(stream);
   const found = new Set<string>();
   for (const [flag, code] of Object.entries(FLAGS)) if (text.includes(flag)) found.add(code);
   for (const [pattern, code] of WORDS) if (pattern.test(text)) found.add(code);
+  for (const token of (stream.behaviorHints?.bingeGroup ?? "").split(/[|,/\s]+/)) {
+    const code = BINGE_CODES[token.toLowerCase()];
+    if (code) found.add(code);
+  }
+  if (!found.size && titleLanguage && leavesLanguageBlank(stream.behaviorHints?.bingeGroup)) found.add(titleLanguage);
   return [...found];
 }
 
-export function rankStreams(streams: StreamItem[], preferredLanguage: string, priority: Map<string, number>): StreamItem[] {
+export function rankStreams(streams: StreamItem[], preferredLanguage: string, priority: Map<string, number>, titleLanguage?: string): StreamItem[] {
   const size = new Map(streams.map((stream) => [stream, streamSize(stream)]));
   const rank = (stream: StreamItem) => priority.get(stream.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER;
   const decorated = streams.map((stream, index) => ({ stream, index }));
   decorated.sort((a, b) => {
-    const preferred = (stream: StreamItem) => streamLanguages(stream).includes(preferredLanguage) ? 0 : 1;
+    const preferred = (stream: StreamItem) => streamLanguages(stream, titleLanguage).includes(preferredLanguage) ? 0 : 1;
     const byLanguage = preferred(a.stream) - preferred(b.stream);
     if (byLanguage) return byLanguage;
     const byPriority = rank(a.stream) - rank(b.stream);

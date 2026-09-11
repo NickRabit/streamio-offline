@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamSize, streamText, visibleCatalogStreams, type StreamFilters } from "./streams";
+import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -15,6 +15,35 @@ describe("streamText", () => {
 
   it("skips fields the addon left out", () => {
     expect(streamText(stream({ name: "A", description: "C" }))).toBe("A C");
+  });
+});
+
+describe("streamLanguages", () => {
+  it("takes the language from the bingeGroup when the text says nothing", () => {
+    expect(streamLanguages(stream({ name: "FullHD", behaviorHints: { bingeGroup: "Webshare|CZ|1080p|" } })))
+      .toEqual(["cs"]);
+  });
+
+  it("merges what the text and the bingeGroup each say", () => {
+    expect(streamLanguages(stream({ title: "CZ dabing", behaviorHints: { bingeGroup: "Webshare|CZ,SK|720p|" } })).sort())
+      .toEqual(["cs", "sk"]);
+  });
+
+  it("leaves a stream without either alone", () => {
+    expect(streamLanguages(stream({ name: "1080p", behaviorHints: { bingeGroup: "torrentio|1080p|x264" } }))).toEqual([]);
+  });
+
+  it("falls back to the title's language when the addon left its field blank", () => {
+    expect(streamLanguages(stream({ name: "SD", behaviorHints: { bingeGroup: "Webshare||480p|" } }), "cs")).toEqual(["cs"]);
+  });
+
+  it("does not put the title's language on a torrent listing that simply says nothing", () => {
+    expect(streamLanguages(stream({ name: "4K", behaviorHints: { bingeGroup: "torrentio|4k|x265|HDR" } }), "cs")).toEqual([]);
+    expect(streamLanguages(stream({ name: "4K" }), "cs")).toEqual([]);
+  });
+
+  it("never overrides what the addon did say", () => {
+    expect(streamLanguages(stream({ name: "FullHD", behaviorHints: { bingeGroup: "Webshare|EN|1080p|" } }), "cs")).toEqual(["en"]);
   });
 });
 

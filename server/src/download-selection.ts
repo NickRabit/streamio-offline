@@ -49,7 +49,7 @@ export async function selectDownloadSource(input: {
   // A source's real audio is only known after ffprobe reads it, which is slow over the network.
   // The addon text is a hint at best, but a stream whose name or title names the wanted language
   // is far likelier to match, so it is still worth checking first -- largest strategy included.
-  const bySpokenLanguage = (stream: StreamItem) => streamLanguages(stream).includes(selection.audioLanguage) ? 0 : 1;
+  const bySpokenLanguage = (stream: StreamItem) => streamLanguages(stream, selection.titleLanguage).includes(selection.audioLanguage) ? 0 : 1;
   const candidates = selection.sourceStrategy === "largest"
     ? [...selected].sort((left, right) => {
       const byLanguage = bySpokenLanguage(left) - bySpokenLanguage(right);
@@ -62,7 +62,7 @@ export async function selectDownloadSource(input: {
         - (priority.get(right.addonKey ?? "") ?? Number.MAX_SAFE_INTEGER);
     })
     : selection.addonKeys.flatMap((addonKey) => rankStreams(
-      selected.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority));
+      selected.filter((stream) => stream.addonKey === addonKey), selection.audioLanguage, priority, selection.titleLanguage));
   let primaryChoice: RankedChoice | undefined;
   let fallbackChoice: RankedChoice | undefined;
   let checkedCandidates = 0;

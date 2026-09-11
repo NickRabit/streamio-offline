@@ -8,7 +8,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
 import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
-import { rankStreams } from "./ranking.js";
+import { rankStreams, titleLanguage } from "./ranking.js";
 import { DownloadQueue, type DownloadSelection, type SubtitleMode } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
 import { StatsLog, type TrafficEvent, type TrafficMeta } from "./stats.js";
@@ -1503,9 +1503,12 @@ app.post("/api/downloads/bulk", asyncRoute(async (req, res) => {
   if (subtitleMode !== "off" && !subtitleLanguage) throw new AppError("Pick a subtitle language.", "err.missingSubtitleLanguage");
   const fallbackSubtitleLanguage = subtitleMode === "off" ? undefined : normalizeLanguage(String(rawSelection.fallbackSubtitleLanguage ?? ""));
   const firstAddon = store.addons().find((addon) => addon.key === addonKeys[0]);
+  // A source whose addon found no language falls back to the one the title's own metadata names.
+  const metaLanguage = parentId ? titleLanguage((await cachedMeta(metaType, parentId))?.language) : undefined;
   const selection: DownloadSelection = {
     addonKeys, sourceStrategy, audioLanguage,
     fallbackAudioLanguage: fallbackAudioLanguage === audioLanguage ? undefined : fallbackAudioLanguage,
+    titleLanguage: metaLanguage,
     subtitleMode, subtitleLanguage,
     fallbackSubtitleLanguage: fallbackSubtitleLanguage === subtitleLanguage ? undefined : fallbackSubtitleLanguage,
     targetSettings: firstAddon?.downloadSettings.series ?? defaultDownloadSettings().series,
