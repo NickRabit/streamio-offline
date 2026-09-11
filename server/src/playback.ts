@@ -87,6 +87,13 @@ export const sourceTitle = (stream: StreamItem) => stream.behaviorHints?.filenam
 
 export const QUALITY_BITRATE: Record<number, string> = { 1080: "6M", 720: "3M", 480: "1500k" };
 
+/** One session as the statistics see it. The stream comes along whole, so the caller can
+ * name the source the same way it names the traffic it counts. */
+export interface ActiveSession {
+  id: string; stream: StreamItem; mode: PlaybackMode; hardware: boolean;
+  quality: number | null; duration?: number; startedAt: string; idleSeconds: number;
+}
+
 /** A simple operation queue for one session. A seek and a track change must not run
  * concurrently, because each restart creates and cleans up its own HLS generation. */
 export class SerialOperations {
@@ -105,7 +112,7 @@ interface Session {
   id: string; stream: StreamItem; capabilities: ClientCapabilities; info?: MediaInfo;
   mode: PlaybackMode; generation: number; offset: number; hardware: boolean;
   audioTrack: number; subtitleTrack: number | null; quality: number | null;
-  process?: ChildProcess; directory?: string; error?: string; lastAccess: number; pendingKill?: Promise<void>;
+  process?: ChildProcess; directory?: string; error?: string; startedAt: number; lastAccess: number; pendingKill?: Promise<void>;
   operations: SerialOperations; stopped: boolean;
   /** Until the client first loads it, a session is only a promise; an unclaimed one is closed after a while. */
   claimed: boolean;
@@ -289,7 +296,7 @@ export class PlaybackManager {
     const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
     const session: Session = {
       id, stream, capabilities, info, mode: "direct", generation: 0, offset: 0, hardware: false,
-      audioTrack, subtitleTrack, quality, lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
+      audioTrack, subtitleTrack, quality, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
     };
     this.sessions.set(id, session);
     const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
@@ -410,6 +417,21 @@ export class PlaybackManager {
     await session.operations.wait();
     await this.kill(session);
     await this.purge(path.join(this.root, id));
+  }
+
+  /** What is playing right now, for the statistics. The bytes are not here: they are counted
+   * where they flow, in the proxy, and joined to the session by its id. */
+  active(now = Date.now()): ActiveSession[] {
+    return [...this.sessions.values()].map((session) => ({
+      id: session.id,
+      stream: session.stream,
+      mode: session.mode,
+      hardware: session.hardware,
+      quality: session.quality,
+      duration: session.info?.duration,
+      startedAt: new Date(session.startedAt).toISOString(),
+      idleSeconds: Math.round((now - session.lastAccess) / 1000),
+    }));
   }
 
   /** Overview for diagnostics: what the server can do and what is running right now. */

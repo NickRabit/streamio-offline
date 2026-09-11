@@ -80,6 +80,13 @@ export interface StatsSummary {
   byProvider: StatsSeries[]; byAddon: StatsSeries[]; bySource: StatsSeries[];
   since?: string;
 }
+/** One playback running at this moment; the statistics page polls these. */
+export interface ActiveStream {
+  id: string; title: string; source: "download" | "catalog" | "library";
+  provider?: string; addonName?: string;
+  mode: "direct" | "remux" | "transcode"; hardware: boolean; quality: number | null;
+  duration?: number; startedAt: string; idleSeconds: number; bytes: number; rate: number;
+}
 export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
