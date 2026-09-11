@@ -33,7 +33,7 @@ export class AirPlayAccess {
     if (grant.expiresAt <= this.now()) { this.remove(grant.playbackId); return; }
     try {
       this.resources.get(grant.resourceId, grant.owner.sid, "media");
-      const media = /^\/api\/media\/([A-Za-z0-9_-]{43})$/.exec(pathname);
+      const media = /^\/api\/media\/([A-Za-z0-9_-]{43})(?:\/u\/[A-Za-z0-9_-]+)?$/.exec(pathname);
       if (media) {
         const resource = this.resources.get(media[1], grant.owner.sid, "media");
         if ((resource.parent ?? resource.id) === grant.resourceId) return grant;

@@ -1,4 +1,5 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { INTERNAL_TOKEN } from "./auth.js";
 import type { PublicStream, StreamItem } from "./types.js";
 
 export interface ResourceOwner { sid: string; expiresAt: number }
@@ -44,6 +45,41 @@ export function infoHashOf(stream: StreamItem): string | undefined {
   const fromMagnet = typeof stream.url === "string" ? MAGNET_HASH.exec(stream.url)?.[1] : undefined;
   return fromMagnet && INFO_HASH.test(fromMagnet) ? fromMagnet.toLowerCase() : undefined;
 }
+
+/** Playlist entries are sealed onto the parent instead of stored: a 2-hour HLS
+ *  VOD would otherwise create thousands of media records, hit the cap (429),
+ *  and 404 after a seek once the previous generation's ids were gone. AES-GCM
+ *  keeps the origin URL off the client; a deterministic IV makes a rewrite stable. */
+const mediaSealKey = () => Buffer.from(INTERNAL_TOKEN, "hex");
+
+export function sealedMediaUrl(parentId: string, url: string): string {
+  const iv = createHash("sha256").update(`${parentId}\0${url}`).digest().subarray(0, 12);
+  const cipher = createCipheriv("aes-256-gcm", mediaSealKey(), iv);
+  cipher.setAAD(Buffer.from(parentId));
+  const enc = Buffer.concat([cipher.update(url, "utf8"), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), enc]).toString("base64url");
+}
+
+export function openMediaUrl(parentId: string, token: string): string | undefined {
+  try {
+    const buf = Buffer.from(token, "base64url");
+    if (buf.length < 29) return;
+    const iv = buf.subarray(0, 12);
+    const tag = buf.subarray(12, 28);
+    const decipher = createDecipheriv("aes-256-gcm", mediaSealKey(), iv);
+    decipher.setAAD(Buffer.from(parentId));
+    decipher.setAuthTag(tag);
+    const url = Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString("utf8");
+    return /^https?:\/\//i.test(url) ? url : undefined;
+  } catch { return; }
+}
+
+export const mediaChildPath = (parentId: string, url: string) => `/api/media/${parentId}/u/${sealedMediaUrl(parentId, url)}`;
+
+/** Loopback FFmpeg/ffprobe carry ?token=, not a cookie. The path must accept playlist
+ *  children (`/u/...`) too, or HLS probe gets 401 and anime will not start. */
+export const isInternalMediaPath = (path: string) =>
+  /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}(?:\/u\/[A-Za-z0-9_-]+)?$/.test(path);
 
 export function streamKind(stream: StreamItem): PublicStream["kind"] {
   if (stream.url?.startsWith("file://")) return "library";
