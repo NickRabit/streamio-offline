@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl } from "./media-resources.js";
+import { isInternalMediaPath, mediaChildPath, MediaResources, openMediaUrl, ResourceError, sealedMediaUrl } from "./media-resources.js";
 
 const owner = { sid: "owner-a", expiresAt: 10_000_000 };
 const source = { url: "https://provider-canary.test/private-canary?token=query-canary", title: "Movie query-canary", behaviorHints: { proxyHeaders: { request: { Authorization: "Bearer header-canary" } } }, subtitles: [{ url: "https://subtitle-canary.test/sub?secret=sub-canary", lang: "cs" }] };
@@ -93,6 +93,9 @@ test("playlist children are sealed onto the parent instead of stored", () => {
   assert.equal(openMediaUrl("other-parent", token), undefined);
   assert.equal(openMediaUrl(parent.resourceId, "forged"), undefined);
   assert.match(mediaChildPath(parent.resourceId, url), new RegExp(`^/api/media/${parent.resourceId}/u/[A-Za-z0-9_-]+$`));
+  assert.equal(isInternalMediaPath(`/media/${parent.resourceId}`), true);
+  assert.equal(isInternalMediaPath(`/media/${parent.resourceId}/u/${token}`), true);
+  assert.equal(isInternalMediaPath(`/media/${parent.resourceId}/other`), false);
   // Sealing must not spend a registry slot — a long VOD would otherwise 429.
   assert.ok(registry.add({ url: "https://other.test" }, owner, "source"));
 });

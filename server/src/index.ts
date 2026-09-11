@@ -1,6 +1,6 @@
 import express from "express";
 import { nextVideoFile } from "./next-file.js";
-import { mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
+import { isInternalMediaPath, mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
 import path from "node:path";
@@ -161,7 +161,7 @@ const httpSourceOf = async (req: express.Request): Promise<StreamItem> => {
   throw new AppError("A torrent cannot be played directly. Add it with To library.", "err.torrentNotPlayable", 409);
 };
 const internalMediaRequest = (req: express.Request) =>
-  /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}$/.test(req.path) &&
+  isInternalMediaPath(req.path) &&
   ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress ?? "") &&
   req.query.token === INTERNAL_TOKEN;
 const airplayRequest = (req: express.Request) => airplayAccess.authorize(req.method, req.originalUrl.split("?")[0], req.query.airplay);

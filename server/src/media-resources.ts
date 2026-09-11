@@ -76,6 +76,11 @@ export function openMediaUrl(parentId: string, token: string): string | undefine
 
 export const mediaChildPath = (parentId: string, url: string) => `/api/media/${parentId}/u/${sealedMediaUrl(parentId, url)}`;
 
+/** Loopback FFmpeg/ffprobe carry ?token=, not a cookie. The path must accept playlist
+ *  children (`/u/...`) too, or HLS probe gets 401 and anime will not start. */
+export const isInternalMediaPath = (path: string) =>
+  /^(?:\/api)?\/media\/[A-Za-z0-9_-]{43}(?:\/u\/[A-Za-z0-9_-]+)?$/.test(path);
+
 export function streamKind(stream: StreamItem): PublicStream["kind"] {
   if (stream.url?.startsWith("file://")) return "library";
   if (/^https?:\/\//i.test(stream.url ?? "")) return "remote";
