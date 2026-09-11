@@ -63,6 +63,7 @@ export interface StreamItem {
     notWebReady?: boolean;
     filename?: string;
     videoSize?: number;
+    bingeGroup?: string;
     proxyHeaders?: { request?: Record<string, string>; response?: Record<string, string> };
   };
   addonKey?: string;
@@ -85,6 +86,6 @@ export interface PublicStream {
   playable: boolean;
   name?: string; title?: string; description?: string;
   addonKey?: string; addonName?: string;
-  behaviorHints: { filename?: string; videoSize?: number };
+  behaviorHints: { filename?: string; videoSize?: number; bingeGroup?: string };
   subtitles: PublicSubtitle[];
 }

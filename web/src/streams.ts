@@ -1,4 +1,4 @@
-import { guessLanguages } from "./languages";
+import { bingeGroupLanguages, guessLanguages } from "./languages";
 import type { Stream } from "./types";
 
 /** Everything the addon wrote about the source. It sends neither language nor size as data; they tend to be in here. */
@@ -20,7 +20,8 @@ export function streamSize(stream: Stream): number | undefined {
   return Number.isFinite(value) && unit ? Math.round(value * unit) : undefined;
 }
 
-export const streamLanguages = (stream: Stream) => guessLanguages(streamText(stream));
+export const streamLanguages = (stream: Stream) =>
+  [...new Set([...guessLanguages(streamText(stream)), ...bingeGroupLanguages(stream.behaviorHints?.bingeGroup)])];
 
 export type StreamSort = "recommended" | "size-desc" | "size-asc" | "addon";
 

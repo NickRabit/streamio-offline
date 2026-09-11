@@ -20,7 +20,7 @@ export interface Subtitle { subtitleId: string; lang?: string; addonName?: strin
 export interface Stream {
   sourceId: string; kind: "remote" | "library" | "torrent" | "unsupported"; playable: boolean; localPath?: string; name?: string; title?: string; description?: string;
   subtitles?: Subtitle[]; addonKey?: string; addonName?: string;
-  behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number };
+  behaviorHints?: { notWebReady?: boolean; filename?: string; videoSize?: number; bingeGroup?: string };
 }
 export interface QueueHalt { reason: "storage"; at: string; message: string; messageKey?: string }
 export interface Download {

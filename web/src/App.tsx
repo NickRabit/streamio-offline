@@ -12,7 +12,7 @@ import { StatsPanel } from "./Stats";
 import { copyText } from "./clipboard";
 import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
-import { guessLanguages, label } from "./languages";
+import { label } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
 import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
@@ -1007,7 +1007,7 @@ export function App() {
                   <option value="size-asc">{t("sources.sortSmallest")}</option>
                   <option value="addon">{t("sources.sortAddon")}</option>
                 </select></label>
-              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {guessLanguages([stream.name, stream.title, stream.description, stream.behaviorHints?.filename].filter(Boolean).join(" ")).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
+              </div>}<div className="stream-list" onScroll={(event) => compactOnScroll(event, detailCompact, setDetailCompact)}>{visibleStreams.map((stream, index) => <button key={index} className={selectedStream === stream ? "selected" : ""} onClick={() => { pickedRef.current = true; setSelectedStream(stream); }}><i className={stream.kind === "torrent" ? "rd" : stream.playable ? undefined : "ext"}>{streamBadge(stream)}</i><span><strong>{streamLabel(stream)}</strong><small>{stream.addonName} {streamSize(stream) ? `· ${bytes(streamSize(stream))}` : ""} {streamLanguages(stream).map((code) => <em className="lang-badge" key={code} title={t("sources.languageGuess")}>{label(code)}</em>)}</small></span>{selectedStream === stream && <Check/>}</button>)}</div>
               {!streams.length && pendingSources === 0 && <div className="no-sources">{t("sources.none")}</div>}
               {!streams.length && pendingSources > 0 && <div className="no-sources">{t("sources.asking")}</div>}
               {Boolean(streams.length) && !visibleStreams.length && hiddenTorrents && !streamAddon && !streamLanguage && <div className="no-sources">{t("sources.onlyTorrentsBefore")} <button className="link-button" onClick={() => openView("settings")}>{t("nav.settings")}</button> {t("sources.onlyTorrentsAfter")}</div>}

@@ -64,6 +64,7 @@ function normalizedStream(input: StreamItem): StreamItem {
     description: safeSourceText(input.description, input), addonKey: input.addonKey,
     addonName: safeSourceText(input.addonName, input),
     behaviorHints: { filename: safeSourceText(input.behaviorHints?.filename, input),
+      bingeGroup: safeSourceText(input.behaviorHints?.bingeGroup, input),
       notWebReady: input.behaviorHints?.notWebReady === true,
       videoSize: Number.isFinite(input.behaviorHints?.videoSize) ? input.behaviorHints?.videoSize : undefined,
       proxyHeaders: { request: Object.fromEntries(headers) } },
@@ -199,7 +200,8 @@ export class MediaResources {
       sourceId, kind, playable: kind === "remote" || kind === "library",
       name: record.name, title: record.title, description: record.description,
       addonKey: record.addonKey, addonName: record.addonName,
-      behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize },
+      behaviorHints: { filename: record.behaviorHints?.filename, videoSize: record.behaviorHints?.videoSize,
+        bingeGroup: record.behaviorHints?.bingeGroup },
       subtitles: (stream.subtitles ?? []).filter((item) => /^https?:\/\//i.test(item.url) || (kind === "library" && item.url.startsWith("file://"))).map((item) => ({
         subtitleId: this.add({ url: item.url }, owner, "subtitle"),
         lang: safeSourceText(item.lang, stream), addonName: safeSourceText(item.addonName, stream),

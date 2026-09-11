@@ -13,6 +13,29 @@ const WORDS: Array<[RegExp, string]> = [
   [/\b(hungarian|magyar|hun)\b/i, "hu"],
 ];
 
+/** Some addons state the language as a field of the bingeGroup, e.g. "Webshare|CZ,SK|720p|" or
+ *  "com.aiostreams.viren070|realdebrid|false|2160p|BluRay|Dubbed|English|Russian". Only a whole
+ *  field counts, so a resolution, a release group or the infohash Torrentio falls back to
+ *  ("torrentio|aba496ab...411de048be3") never passes for a language. */
+const BINGE_CODES: Record<string, string> = {
+  cz: "cs", cs: "cs", cze: "cs", ces: "cs", czech: "cs",
+  sk: "sk", slk: "sk", slovak: "sk",
+  en: "en", eng: "en", english: "en",
+  de: "de", ger: "de", deu: "de", german: "de",
+  pl: "pl", pol: "pl", polish: "pl",
+  hu: "hu", hun: "hu", hungarian: "hu",
+};
+
+export function bingeGroupLanguages(bingeGroup?: string): string[] {
+  if (!bingeGroup) return [];
+  const found = new Set<string>();
+  for (const token of bingeGroup.split(/[|,/\s]+/)) {
+    const code = BINGE_CODES[token.toLowerCase()];
+    if (code) found.add(code);
+  }
+  return [...found];
+}
+
 export const LANGUAGE_LABEL: Record<string, string> = {
   cs: "CZ", sk: "SK", en: "EN", de: "DE", pl: "PL", hu: "HU", fr: "FR", es: "ES", it: "IT",
   ru: "RU", uk: "UA", ja: "JP", ko: "KR", zh: "CN", pt: "PT", nl: "NL", da: "DK", sv: "SE",
