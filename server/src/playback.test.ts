@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, isPlaylistSource, sourceReachable } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -107,6 +107,28 @@ test("copied AAC is rewritten out of ADTS, which fMP4 will not take", () => {
   assert.equal(args[args.indexOf("-bsf:a") + 1], "aac_adtstoasc");
 });
 
+test("copied AAC from a file is left alone, ADTS only comes from a playlist", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      container: "matroska,webm",
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:a") + 1], "copy");
+  assert.equal(args.includes("-bsf:a"), false);
+});
+
 test("audio that is not AAC is copied without the AAC filter", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
@@ -169,9 +191,10 @@ test("text subtitles behind a filtered-out PGS track use the real index", () => 
 
   assert.equal(manager.preferredSubtitle(session.info.subtitleTracks, "cs"), 1);
   const args = manager.args(session, 0, "/tmp/output", false) as string[];
-  assert.deepEqual(args.slice(args.indexOf("-map", args.indexOf("-map") + 1), args.indexOf("-map", args.indexOf("-map") + 1) + 4), [
-    "-map", "0:a:0?", "-map", "0:s:1?",
-  ]);
+  // WebVTT in the fMP4 mux dies with "timescale not set"; the track is extracted as a sidecar.
+  assert.equal(args.includes("0:s:1?"), false);
+  assert.equal(args.includes("webvtt"), false);
+  assert.equal(args[args.indexOf("-var_stream_map") + 1], "v:0,a:0");
 });
 
 test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment", () => {
@@ -296,9 +319,16 @@ const playCaps = {
 
 test("hlsCanStart accepts one segment or a finished playlist", () => {
   assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-VERSION:7\n"), false);
-  assert.equal(hlsCanStart("#EXTM3U\n#EXTINF:2.000,\nseg-0-000000.m4s\n"), true);
-  assert.equal(hlsCanStart("#EXTM3U\n#EXTINF:2.000,\na.m4s\n#EXTINF:2.000,\nb.m4s\n"), true);
+  // A segment without EXT-X-MAP is the race that hands Safari a truncated init.mp4.
+  assert.equal(hlsCanStart("#EXTM3U\n#EXTINF:2.000,\nseg-0-000000.m4s\n"), false);
+  assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2.000,\nseg-0-000000.m4s\n"), true);
+  assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2.000,\na.m4s\n#EXTINF:2.000,\nb.m4s\n"), true);
   assert.equal(hlsCanStart("#EXTM3U\n#EXT-X-ENDLIST\n"), true);
+  assert.deepEqual(
+    hlsPlaylistFiles("#EXTM3U\n#EXT-X-MAP:URI=\"init.mp4\"\n#EXTINF:2.000,\nseg-0-000000.m4s\n"),
+    ["init.mp4", "seg-0-000000.m4s"],
+  );
+  assert.deepEqual(hlsPlaylistFiles("#EXTM3U\n#EXT-X-MAP:URI=\"../escape.mp4\"\nseg-0-000000.m4s\n"), ["seg-0-000000.m4s"]);
 });
 
 test("direct play follows the probed container, not a misleading filename", () => {
@@ -373,10 +403,13 @@ test("mkv with subtitles still remuxes", async () => {
     session.offset = time;
     return "/hls";
   };
+  let extracted = 0;
+  manager.extractSidecar = () => { extracted += 1; };
   const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, true);
   assert.equal(started.mode, "remux");
-  assert.equal(started.sidecarUrl, undefined);
+  assert.equal(extracted, 1);
+  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt$/);
 });
 
 const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => {

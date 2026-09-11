@@ -60,8 +60,8 @@ Controls stay visible while settings are open or a control has keyboard focus.
 The player lists audio tracks and subtitles, including off. Subtitles come from
 two places:
 
-- **embedded in the file** — extracted as a WebVTT track from the same FFmpeg
-  pass, so the file is not downloaded twice,
+- **embedded in the file** — extracted as a WebVTT sidecar (muxing them into
+  fMP4 HLS makes FFmpeg die with "timescale not set"),
 - **subtitle addons** (for example OpenSubtitles) — attached in the browser.
 
 Downloaded language-tagged `.srt` and `.vtt` sidecars are discovered beside
