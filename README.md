@@ -82,7 +82,9 @@ PGID=100
 In **Addons**, paste a full `manifest.json` URL. A catalog manifest supplies
 titles and metadata, a source manifest supplies streams or subtitles, and one
 manifest can do both. Cinemeta and OpenSubtitles v3 are installed on first
-start. See **[Addons and downloads](docs/downloads.md)**.
+start. Manifests refresh themselves on an interval you set, and
+on demand, so a catalogue the provider adds later still shows up. See
+**[Addons and downloads](docs/downloads.md)**.
 
 ## Documentation
 

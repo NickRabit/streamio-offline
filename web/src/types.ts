@@ -84,6 +84,7 @@ export interface Settings {
   concurrentDownloads: number; parallelPerProvider: number; downloadSegments: number; uiLanguage: Locale; audioLanguage: string; subtitleLanguage: string;
   mergeByName: boolean; streamSort: string; artworkLocation: "data" | "media"; trackProgress: boolean; showResumeRow: boolean; libraryAutoScan: boolean; libraryScanPauseOnDownload: boolean;
   secureMode: boolean;
+  addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize; realDebridConfigured: boolean;
 }
 export type SettingsPatch = Partial<Omit<Settings, "realDebridConfigured">> & { realDebridToken?: string };

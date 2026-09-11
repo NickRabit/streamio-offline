@@ -96,7 +96,7 @@ export function App() {
   const [season, setSeason] = useState<number | null>(null);
   const [bulkDownload, setBulkDownload] = useState<{ label: string; title: string; type: string; episodes: Array<{ id: string; season?: number; episode?: number; title?: string }>; media: { id?: string; metaType?: string; poster?: string } } | null>(null);
   const [downloads, setDownloads] = useState<DownloadJob[]>([]); const [queueHalt, setQueueHalt] = useState<QueueHalt | null>(null); const [busy, setBusy] = useState(false); const [message, setMessage] = useState(""); const [error, setError] = useState(""); const [playerOpen, setPlayerOpen] = useState(false);
-  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
+  const [settings, setSettings] = useState<AppSettings>({ concurrentDownloads: 1, parallelPerProvider: 1, downloadSegments: 2, uiLanguage: locale(), audioLanguage: "en", subtitleLanguage: "en", mergeByName: true, streamSort: "recommended", artworkLocation: "data", trackProgress: true, showResumeRow: true, libraryAutoScan: true, libraryScanPauseOnDownload: false, secureMode: true, addonRefreshHours: 24, catalogTileSize: "medium", libraryTileSize: "medium", realDebridConfigured: false });
   const [languages, setLanguages] = useState<Array<{ code: string; name: string }>>([]);
   const [inspection, setInspection] = useState<Inspection | null>(null);
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -1245,6 +1245,12 @@ function RealDebridSettings({ configured, onSave, onError, restricted = false }:
   </section>;
 }
 
+const REFRESH_HOURS = [0, 6, 12, 24, 48, 168] as const;
+const refreshIntervalLabel = (hours: number) =>
+  hours === 0 ? t("settings.addonRefreshOff")
+  : hours === 168 ? t("settings.addonRefreshWeekly")
+  : t("settings.addonRefreshHoursOption", { count: hours });
+
 function SettingsPage({ build, restricted = false, settings, languages, session, onSession, onSave, onImported, onNotify, onError }: { build: BuildInfo | null; restricted?: boolean; settings: AppSettings; languages: Array<{ code: string; name: string }>; session: Session; onSession: (session: Session) => void; onSave: (patch: SettingsPatch) => Promise<void>; onImported: (backup: unknown) => Promise<void>; onNotify: (message: string) => void; onError: (error: unknown) => void }) {
   const { t, locale, setLocale } = useI18n();
   // The names come from the browser in the active language, so they need sorting there too.
@@ -1310,6 +1316,12 @@ function SettingsPage({ build, restricted = false, settings, languages, session,
         <SettingControl title={t("settings.scanDuringDownload")} text={t("settings.scanDuringDownloadHint")}>
           <select aria-label={t("settings.scanDuringDownloadLabel")} disabled={restricted} value={settings.libraryScanPauseOnDownload ? "0" : "1"} onChange={(event) => void onSave({ libraryScanPauseOnDownload: event.target.value === "0" })}>
             <option value="1">{t("settings.scanDuringDownloadOn")}</option><option value="0">{t("settings.scanDuringDownloadOff")}</option>
+          </select></SettingControl>
+      </section>
+      <section className="panel settings-section"><SettingsSectionHead icon={<PackagePlus/>} title={t("settings.addonsTitle")} text={t("settings.addonsText")}/>
+        <SettingControl title={t("settings.addonRefresh")} text={t("settings.addonRefreshHint")}>
+          <select aria-label={t("settings.addonRefreshLabel")} disabled={restricted} value={settings.addonRefreshHours ?? 24} onChange={(event) => void onSave({ addonRefreshHours: Number(event.target.value) })}>
+            {REFRESH_HOURS.map((hours) => <option key={hours} value={hours}>{refreshIntervalLabel(hours)}</option>)}
           </select></SettingControl>
       </section>
       <section className="panel settings-section playback-section"><SettingsSectionHead icon={<CirclePlay/>} title={t("settings.playbackTitle")} text={t("settings.playbackText")}/><div className="playback-settings"><SettingControl title={t("settings.audioLanguage")} text={t("settings.audioLanguageHint")}><select aria-label={t("settings.audioLanguageLabel")} disabled={restricted} value={settings.audioLanguage} onChange={(event) => void onSave({ audioLanguage: event.target.value })}>{languageOptions}</select></SettingControl><SettingControl title={t("settings.subtitleLanguage")} text={t("settings.subtitleLanguageHint")}><select aria-label={t("settings.subtitleLanguageLabel")} disabled={restricted} value={settings.subtitleLanguage} onChange={(event) => void onSave({ subtitleLanguage: event.target.value })}>{languageOptions}</select></SettingControl></div><SettingControl title={t("settings.streamSort")} text={t("settings.streamSortHint")}><select aria-label={t("settings.streamSort")} disabled={restricted} value={settings.streamSort} onChange={(event) => void onSave({ streamSort: event.target.value })}><option value="recommended">{t("sources.sortRecommended")}</option><option value="size-desc">{t("sources.sortLargest")}</option><option value="size-asc">{t("sources.sortSmallest")}</option><option value="addon">{t("sources.sortAddon")}</option></select></SettingControl><SettingControl title={t("settings.trackProgress")} text={t("settings.trackProgressHint")}>
@@ -1501,10 +1513,24 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 
 function Addons({ addons, restricted = false, onChanged, onNotify, onError }: { addons: Addon[]; restricted?: boolean; onChanged: () => Promise<void>; onNotify: (s:string)=>void; onError:(e:unknown)=>void }) {
   const [url, setUrl] = useState(""); const [role, setRole] = useState("both"); const [busy, setBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  // A manifest is only read when the addon is added, so nothing here notices when the
+  // provider adds a catalogue or stops serving a resource. This asks them all again.
+  const refreshAll = async () => {
+    setRefreshing(true);
+    try {
+      const { changed, failed } = await api.refreshAddons();
+      await onChanged();
+      const done = changed ? t("addons.refreshAllDone", { count: changed }) : t("addons.refreshAllNone");
+      onNotify(failed ? `${done} ${t("addons.refreshAllFailed", { count: failed })}` : done);
+    } catch (err) { onError(err); }
+    finally { setRefreshing(false); }
+  };
   const submit = async (e: FormEvent) => { e.preventDefault(); setBusy(true); try { await api.addAddon(url, role); setUrl(""); await onChanged(); onNotify(t("addons.added")); } catch (err) { onError(err); } finally { setBusy(false); } };
   return <section><Heading eyebrow={t("addons.eyebrow")} title={t("addons.title")}/><p className="lead">{t("addons.leadBefore")} <code>manifest.json</code>. {t("addons.leadAfter")}</p>
     {restricted && <p className="notice">{t("restricted.notice")}</p>}
     {!restricted && <form className="panel addon-form" onSubmit={submit}><label><span>{t("addons.manifestUrl")}</span><input value={url} onChange={(e)=>setUrl(e.target.value)} placeholder="https://…/manifest.json" required/></label><label><span>{t("addons.role")}</span><select value={role} onChange={(e)=>setRole(e.target.value)}><option value="both">{t("addons.roleBoth")}</option><option value="catalog">{t("addons.roleCatalog")}</option><option value="source">{t("addons.roleSource")}</option></select></label><button className="primary" disabled={busy}><Plus/> {t("common.add")}</button></form>}
+    {!restricted && addons.length > 0 && <div className="addon-tools"><button disabled={refreshing} onClick={() => void refreshAll()}><RefreshCw/> {t(refreshing ? "common.loading" : "addons.refreshAll")}</button></div>}
     {[
       { key: "sources", title: t("addons.streamSources"), text: t("addons.streamSourcesText"), ordered: true, list: addons.filter((addon) => addon.role !== "catalog") },
       { key: "catalogs", title: t("addons.catalogsTitle"), text: t("addons.catalogsText"), ordered: false, list: addons.filter((addon) => addon.role === "catalog") },
@@ -1536,6 +1562,16 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
   const [manifestUrl, setManifestUrl] = useState("");
   const [manifestRole, setManifestRole] = useState(addon.role);
   const [manifestBusy, setManifestBusy] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const result = await api.refreshAddon(addon.key);
+      await onChanged();
+      onNotify(result.changed ? t("addons.refreshedTo", { addon: result.addon.manifest.name, version: result.version }) : t("addons.refreshUpToDate", { addon: addon.manifest.name }));
+    } catch (error) { onError(error); }
+    finally { setRefreshing(false); }
+  };
 
   // The interface normally hides the real address because of the token; it is fetched on opening.
   const openManifest = async () => {
@@ -1575,7 +1611,7 @@ function AddonCard({ addon, index, total, onChanged, onNotify, onError }: { addo
     <div className="addon-actions">{index >= 0 && <div className="addon-order">
       <button title={t("addons.higherPriority")} disabled={index === 0} onClick={async()=>{try { await api.moveAddon(addon.key, -1); await onChanged(); } catch (error) { onError(error); }}}><ArrowUp/></button>
       <button title={t("addons.lowerPriority")} disabled={index === total - 1} onClick={async()=>{try { await api.moveAddon(addon.key, 1); await onChanged(); } catch (error) { onError(error); }}}><ArrowDown/></button>
-    </div>}<label className="switch" title={addon.essential ? t("addons.essential") : undefined}><input type="checkbox" checked={addon.enabled} disabled={addon.essential} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label>{addon.essential
+    </div>}<button className="icon-button" title={t("addons.refresh")} disabled={refreshing} onClick={() => void refresh()}><RefreshCw/></button><label className="switch" title={addon.essential ? t("addons.essential") : undefined}><input type="checkbox" checked={addon.enabled} disabled={addon.essential} onChange={async (event)=>{try { await api.toggleAddon(addon.key,event.target.checked); await onChanged(); } catch (error) { onError(error); }}}/><span/></label>{addon.essential
       ? <span className="addon-essential" title={t("addons.essential")}><ShieldCheck/></span>
       : <button className="danger icon-button" title={t("common.remove")} onClick={async()=>{try { await api.deleteAddon(addon.key); await onChanged(); } catch (error) { onError(error); }}}><Trash2/></button>}</div>
     <button className={`storage-toggle ${manifestOpen ? "open" : ""}`} onClick={() => void openManifest()} aria-expanded={manifestOpen}><Link2/> <span>{t("addons.manifestAndExport")}</span><ChevronDown/></button>

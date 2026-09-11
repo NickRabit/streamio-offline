@@ -202,6 +202,8 @@ test("index.ts route catalogue: implicit deny passes, orphan allow/deny regexes 
 
   assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/addons" && route.method === "POST"));
   assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/settings" && route.method === "PATCH"));
+  assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/addons/refresh" && route.method === "POST"));
+  assert.ok((byKind.get("IMPLICIT_DENY") ?? []).some((route) => route.path === "/api/addons/:key/refresh" && route.method === "POST"));
   assert.ok((byKind.get("DENIED_GETS") ?? []).some((route) => route.path === "/api/addons/:key/export"));
   assert.ok((byKind.get("ALLOWED_MUTATIONS") ?? []).some((route) => route.path === "/api/downloads" && route.method === "POST"));
   assert.ok((byKind.get("IGNORE") ?? []).some((route) => route.path === "/api/proxy"));

@@ -7,6 +7,7 @@ import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } 
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { loadAddon, catalog, metadata, searchAll, searchableCatalogs, streamCandidates, streams, subtitles } from "./addons.js";
+import { autoRefreshEnabled, manifestChanged, normalizeRefreshHours, refreshDue, refreshManifests, type RefreshOutcome } from "./addon-refresh.js";
 import { rankStreams } from "./ranking.js";
 import { DownloadQueue, type DownloadSelection, type SubtitleMode } from "./downloads.js";
 import { selectDownloadSource } from "./download-selection.js";
@@ -394,6 +395,62 @@ app.get("/api/addons/:key/export", asyncRoute(async (req, res) => {
   if (!addon) throw new AppError("The addon was not found.", "err.addonNotFound");
   res.json({ manifestUrl: addon.manifestUrl, role: addon.role, enabled: addon.enabled, addedAt: addon.addedAt, downloadSettings: addon.downloadSettings, manifest: addon.manifest });
 }));
+// A manifest is a snapshot from the moment the addon was added: its catalogues,
+// resources and id prefixes decide what the addon is asked for, so a stale copy
+// quietly hides catalogues and skips sources. Refreshing rewrites the manifest and
+// nothing else -- the key, the order, the role and the save rules are ours.
+const storeRefreshed = async (outcomes: RefreshOutcome[]) => {
+  const updated = outcomes.filter((outcome) => outcome.changed && outcome.manifest);
+  if (!updated.length) return;
+  await store.update((state) => {
+    for (const outcome of updated) {
+      const addon = state.addons.find((a) => a.key === outcome.key);
+      if (addon && outcome.manifest) addon.manifest = outcome.manifest;
+    }
+  });
+  for (const outcome of updated) log("INFO", "Addon manifest updated", { name: outcome.name, from: outcome.previousVersion, to: outcome.version });
+};
+app.post("/api/addons/refresh", asyncRoute(async (_req, res) => {
+  const outcomes = await refreshManifests(store.addons(), loadAddon);
+  await storeRefreshed(outcomes);
+  res.json({
+    changed: outcomes.filter((outcome) => outcome.changed).length,
+    failed: outcomes.filter((outcome) => outcome.error).length,
+    addons: store.addons().map(publicAddonView),
+  });
+}));
+app.post("/api/addons/:key/refresh", asyncRoute(async (req, res) => {
+  const existing = store.addons().find((a) => a.key === req.params.key);
+  if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
+  // The error travels to the interface as it is: a single refresh was asked for by
+  // hand, so whoever pressed the button wants to know why the addon did not answer.
+  const loaded = await loadAddon(existing.manifestUrl, existing.role);
+  // Read before the write: the store hands out the live record, so applying the
+  // refresh replaces the manifest this variable points at.
+  const previousVersion = existing.manifest.version;
+  const changed = manifestChanged(existing.manifest, loaded.manifest);
+  await storeRefreshed([{ key: existing.key, name: loaded.manifest.name, previousVersion, version: loaded.manifest.version, changed, manifest: loaded.manifest }]);
+  res.json({ addon: publicAddonView(store.addons().find((a) => a.key === existing.key)!), changed, previousVersion, version: loaded.manifest.version });
+}));
+// The automatic round is a background chore: it never blocks the boot, it asks only
+// the addons actually in use, and a provider that is down costs a log line. The
+// interval lives in Settings, so the tick only asks whether a round is due -- a
+// changed interval takes effect without rescheduling anything.
+const AUTO_REFRESH_FIRST_MS = 30_000;
+const AUTO_REFRESH_CHECK_MS = 15 * 60_000;
+const autoRefresh = async () => {
+  if (!autoRefreshEnabled() || !refreshDue(store.addonsRefreshedAt(), store.settings().addonRefreshHours)) return;
+  const targets = store.addons().filter((addon) => addon.enabled);
+  const outcomes = await refreshManifests(targets, loadAddon);
+  await storeRefreshed(outcomes);
+  await store.update((state) => { state.addonsRefreshedAt = new Date().toISOString(); });
+};
+if (autoRefreshEnabled()) {
+  setTimeout(() => {
+    void autoRefresh();
+    setInterval(() => void autoRefresh(), AUTO_REFRESH_CHECK_MS).unref();
+  }, AUTO_REFRESH_FIRST_MS).unref();
+}
 app.patch("/api/addons/:key", asyncRoute(async (req, res) => {
   const existing = store.addons().find((a) => a.key === req.params.key);
   if (!existing) throw new AppError("The addon was not found.", "err.addonNotFound");
@@ -1591,6 +1648,7 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
     if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
+    if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
     if (req.body.artworkLocation !== undefined) {
       state.settings.artworkLocation = req.body.artworkLocation === "media" ? "media" : "data";
     }
