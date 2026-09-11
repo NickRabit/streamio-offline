@@ -23,7 +23,7 @@ import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
 import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
-import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
+import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
 import { LibraryScan } from "./library-scan.js";
 import { LibraryAutoScan } from "./library-autoscan.js";
@@ -1057,11 +1057,16 @@ const forgetLibraryPath = async (relative: string) => {
   return orphans;
 };
 
-/** Every stored binding uses the relative path, so a move has to keep them all consistent. */
-const relocateLibraryPath = (relative: string, nextRelative: string) => store.update((state) => {
+/** Every stored binding uses the relative path, so a move has to keep them all consistent.
+ *  `pin` is for a move into another folder: the identity an item inherited from the folder
+ *  it is leaving has to become its own, or the destination's title would take over. */
+const relocateLibraryPath = (relative: string, nextRelative: string, pin = false) => store.update((state) => {
+  const pinned = pin
+    ? pinInherited(state.libraryMeta ?? {}, state.librarySuggestions ?? {}, relative, nextRelative)
+    : { meta: state.libraryMeta ?? {}, suggestions: state.librarySuggestions ?? {} };
   state.favorites = (state.favorites ?? []).map((item) => remapPath(item, relative, nextRelative));
-  state.libraryMeta = remapKeyed(state.libraryMeta ?? {}, relative, nextRelative);
-  state.librarySuggestions = remapKeyed(state.librarySuggestions ?? {}, relative, nextRelative);
+  state.libraryMeta = remapKeyed(pinned.meta, relative, nextRelative);
+  state.librarySuggestions = remapKeyed(pinned.suggestions, relative, nextRelative);
   state.progress = Object.fromEntries(Object.entries(state.progress ?? {}).map(([key, value]) => {
     const filePath = key.startsWith("file:") ? key.slice(5) : undefined;
     const nextKey = filePath ? `file:${remapPath(filePath, relative, nextRelative)}` : key;
@@ -1069,6 +1074,16 @@ const relocateLibraryPath = (relative: string, nextRelative: string) => store.up
     return [nextKey, { ...value, path: nextPath }];
   }));
 });
+
+/** Moves the hashed thumbnails of an item and of everything under it to their new keys. */
+const relocateArtwork = async (items: string[], relative: string, nextRelative: string) => {
+  for (const item of items) {
+    const next = remapPath(item, relative, nextRelative);
+    for (const [from, to] of [[item, next], [`dir:${item}`, `dir:${next}`]]) {
+      await rename(dataArtworkFile(from!), dataArtworkFile(to!)).catch(() => undefined);
+    }
+  }
+};
 
 /** The folder the last video just left is litter, so it goes too -- up the tree for as long
  *  as the parent holds nothing to watch either. */
@@ -1154,10 +1169,13 @@ app.post("/api/library/move", asyncRoute(async (req, res) => {
   if (!target) throw new AppError("Invalid path.", "err.invalidPath");
   if (await fileExists(target)) throw new AppError("A file with that name already exists.", "err.nameTaken");
 
+  // The thumbnails are keyed by path, so they are carried over rather than dropped:
+  // the item is the same item and would otherwise lose its poster until a rescan.
+  const carried = [relative, ...(await libraryFiles())
+    .map((file) => file.relative).filter((item) => item !== relative && isPathWithin(item, relative))];
   await rename(source, target);
-  await rm(dataArtworkFile(relative), { force: true });
-  await rm(dataArtworkFile(`dir:${relative}`), { force: true });
-  await relocateLibraryPath(relative, destination.path);
+  await relocateArtwork(carried, relative, destination.path);
+  await relocateLibraryPath(relative, destination.path, true);
   const pruned = await pruneEmptiedFolders(relative);
   invalidateLibrary();
   log("INFO", "Moved in the library", { from: relative, to: destination.path, pruned });
