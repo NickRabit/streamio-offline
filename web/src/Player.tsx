@@ -414,6 +414,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           ...context(), type: data.type, fatal: data.fatal,
           httpStatus: data.response?.code, responseText: typeof data.response?.text === "string" ? data.response.text.slice(0, 120) : undefined,
           fragment: hostOf(data.frag?.url), url: hostOf(data.url),
+          // What MSE was actually asked for, and what it said. Without these a
+          // bufferAddCodecError names the symptom and nothing that caused it.
+          mimeType: (data as { mimeType?: string }).mimeType,
+          reason: (data as { reason?: string }).reason,
+          cause: ((data as { error?: Error }).error?.message ?? (data as { err?: Error }).err?.message)?.slice(0, 160),
         });
         if (!data.fatal) return;
         if (recoveries < 2) {
@@ -880,6 +885,11 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
             ...context(), code: media?.code, detail: media?.message,
             networkState: videoRef.current?.networkState, readyState: videoRef.current?.readyState,
+            // Safari reports code 4 with an empty message, so the only way to tell
+            // a source it would not load from one it could not decode is to say
+            // what it was handed and whether hls.js was driving.
+            src: hostOf(videoRef.current?.currentSrc) || undefined,
+            viaHls: Boolean(hlsRef.current),
           });
           if (media?.code === 3) { recoverFromDecodeRef.current("element"); return; }
           abandon(t("player.browserRefused"));

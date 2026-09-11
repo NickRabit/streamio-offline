@@ -83,6 +83,73 @@ test("a remux still copies compatible video and audio", () => {
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
 });
 
+test("copied AAC is rewritten out of ADTS, which fMP4 will not take", () => {
+  // Without it the muxer refuses every packet and FFmpeg dies before writing the
+  // master playlist's stream line, leaving the client a master with no CODECS.
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/master.m3u8" },
+    capabilities: { h264: true, aac: true },
+    info: {
+      container: "hls,applehttp",
+      video: { codec: "h264" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:a") + 1], "copy");
+  assert.equal(args[args.indexOf("-bsf:a") + 1], "aac_adtstoasc");
+});
+
+test("audio that is not AAC is copied without the AAC filter", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { h264: true, eac3: true },
+    info: {
+      video: { codec: "h264" },
+      audio: { codec: "eac3" },
+      audioTracks: [{ codec: "eac3" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:a") + 1], "copy");
+  assert.equal(args.includes("-bsf:a"), false);
+});
+
+test("a transcoded track is re-encoded to AAC, so it needs no filter", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/master.m3u8" },
+    capabilities: { h264: false, aac: true },
+    info: {
+      container: "hls,applehttp",
+      video: { codec: "hevc" },
+      audio: { codec: "aac" },
+      audioTracks: [{ codec: "aac" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 0, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:a") + 1], "aac");
+  assert.equal(args.includes("-bsf:a"), false);
+});
+
 test("text subtitles behind a filtered-out PGS track use the real index", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
