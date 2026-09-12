@@ -147,39 +147,6 @@ export const hlsCanStart = (playlist: string) => {
 };
 
 /** Init and segment files the playlist already names. All of them must exist before we hand the URL over. */
-/** One copied keyframe beside the segments, only so the real start of the generation can be read. */
-export const START_FRAME = "start.mp4";
-
-/** A landing only ever sits a keyframe back; anything further is not this seek. */
-export function correctedOffset(asked: number, started?: number) {
-  return started !== undefined && started <= asked && asked - started < 30 ? started : asked;
-}
-
-const probeNumber = async (args: string[]) => {
-  try {
-    const { stdout } = await promisify(execFile)("ffprobe", ["-hide_banner", "-v", "error", ...args], { timeout: 15_000 });
-    const value = Number(stdout.split("\n")[0]?.trim());
-    return Number.isFinite(value) ? value : undefined;
-  } catch { return undefined; }
-};
-
-/** Where the generation really begins in the film. The copied keyframe says where the picture
- *  starts, but make_zero puts the generation's zero on whichever track comes first -- usually
- *  the audio, a fraction of a second earlier. That fraction is what the picture sits at inside
- *  the generation, so taking it off the keyframe gives the second the player is really showing. */
-export async function generationStart(startFrame: string, playlist: string): Promise<number | undefined> {
-  const [keyframe, pictureAt] = await Promise.all([
-    probeNumber(["-show_entries", "format=start_time", "-of", "csv=p=0", startFrame]),
-    probeNumber(["-select_streams", "v", "-read_intervals", "%+1", "-show_entries", "packet=pts_time", "-of", "csv=p=0", playlist]),
-  ]);
-  return generationZero(keyframe, pictureAt);
-}
-
-export function generationZero(keyframe?: number, pictureAt?: number) {
-  if (keyframe === undefined || keyframe < 0) return undefined;
-  return pictureAt !== undefined && pictureAt >= 0 ? keyframe - pictureAt : keyframe;
-}
-
 export const hlsPlaylistFiles = (playlist: string) => {
   const files: string[] = [];
   const map = playlist.match(/#EXT-X-MAP:URI="([^"]+)"/i);
@@ -337,9 +304,6 @@ export class PlaybackManager {
       this.inspecting.delete(this.inspectionKey(stream));
     }
   }
-
-  /** Overridden in tests, which have no FFmpeg to ask. */
-  protected startOfGeneration(startFrame: string, playlist: string) { return generationStart(startFrame, playlist); }
 
   private async probeSource(stream: StreamItem) {
     if (!(await sourceReachable(stream))) {
@@ -822,11 +786,6 @@ export class PlaybackManager {
       return undefined;
     }
     if (output !== undefined) {
-      const started = correctedOffset(offset, await this.startOfGeneration(path.join(directory, START_FRAME), path.join(directory, "index-0.m3u8")));
-      if (started !== offset && session.offset === offset) {
-        session.offset = started;
-        log("DEBUG", "The picture starts at the keyframe before the seek", { id: session.id, asked: Math.round(offset), starts: started.toFixed(3) });
-      }
       const segments = (output.match(/#EXTINF/g) ?? []).length;
       log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
       return url;
@@ -864,9 +823,6 @@ export class PlaybackManager {
     if (offset > 0) {
       if (copyVideo) args.push("-noaccurate_seek");
       args.push("-ss", offset.toFixed(3));
-      // Source timestamps, so the keyframe written below says where the picture really starts.
-      // The HLS output is unaffected: -avoid_negative_ts make_zero rebases it as before.
-      if (session.info?.video) args.push("-copyts");
     }
     // Where VAAPI video processing works, decoding, scaling and encoding can all stay on the
     // GPU. The weaker Intel GPUs in a Synology often manage the encoder only. In that case
@@ -894,14 +850,6 @@ export class PlaybackManager {
     // conversion reads the same playlists and needs them just as much.
     args.push(...playlist);
     args.push("-i", this.localUrl(this.proxyPath(session.stream)));
-    // A copied video cannot start between keyframes, so FFmpeg begins at the one before the
-    // requested second -- up to a couple of seconds earlier. Everything that reads the position
-    // afterwards, the subtitles most of all, needs to know where the picture really starts, and
-    // one copied keyframe written with source timestamps says it without touching the source again.
-    // -copyts leaves the HLS output untouched; make_zero below already rebases it.
-    if (offset > 0 && session.info?.video) {
-      args.push("-map", "0:v:0", "-c:v", "copy", "-frames:v", "1", "-f", "mp4", "-y", path.join(directory, START_FRAME));
-    }
     args.push("-map", "0:v:0?");
     if (hasAudio) args.push("-map", `0:a:${audioIndex}?`);
     args.push("-map_metadata", "-1", "-map_chapters", "-1", "-dn");
