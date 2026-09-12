@@ -444,8 +444,9 @@ export class PlaybackManager {
     // go of it before the conversion asks for its own.
     await this.sidecars.release(id);
     this.assertActive(session);
-    // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
-    session.pendingKill = this.kill(session);
+    // What is playing is worth more than the seek: the film keeps running while the new position
+    // is opened, so a source that refuses the connection costs the viewer a jump, not the film.
+    const playing = { process: session.process, generation: session.generation, directory: session.directory, offset: session.offset, mode: session.mode, retired: session.retired };
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     session.offset = target;
     let url: string;
@@ -455,8 +456,19 @@ export class PlaybackManager {
       log("WARN", "Conversion restart failed, trying once more", { id, offset: Math.round(target), reason: error instanceof Error ? error.message : String(error) });
       await sleep(1000);
       this.assertActive(session);
-      url = await this.spawnAt(session, target);
+      try { url = await this.spawnAt(session, target); }
+      catch (again) {
+        // Put the session back on what it was playing, which is still running and still has the
+        // one connection the source did give us.
+        if (playing.process && playing.process.exitCode === null && playing.process.signalCode === null) {
+          Object.assign(session, playing);
+          log("WARN", "The new position could not be opened, the film carries on where it was", { id, wanted: Math.round(target), playing: Math.round(playing.offset) });
+        }
+        throw again;
+      }
     }
+    // Only now is there something to play instead of it.
+    session.pendingKill = this.killChild(playing.process);
     if (session.subtitleTrack !== null) this.extractSidecar(session);
     // Whether the restart ended up on the GPU is worth knowing: a transcode that says
     // nothing looks the same in the log as one that quietly fell back to the processor.
@@ -800,7 +812,9 @@ export class PlaybackManager {
       void (session.pendingKill ?? Promise.resolve()).then(async () => {
         await sleep(Math.max(0, retired.until - Date.now()));
         if (session.retired === retired) session.retired = undefined;
-        await this.purge(previous);
+        // Unless the film went back to it: a position that could not be opened leaves the
+        // old generation playing, and it is the one thing that must not be deleted.
+        if (session.directory !== previous) await this.purge(previous);
       });
     }
 
@@ -856,10 +870,13 @@ export class PlaybackManager {
     // Only 'close' guarantees stderr has been read; 'exit' routinely misses the last message.
     child.once("close", (code, signal) => {
       finished = true; exitCode = code;
-      if (code !== 0 && signal === null) session.error = describeFailure(stderr, code);
+      // Our own SIGTERM comes back as a plain exit, and taking it for a failure would leave the
+      // session carrying an error that never happened -- and the log claiming one.
+      const asked = this.stopping.has(child);
+      if (code !== 0 && signal === null && !asked) session.error = describeFailure(stderr, code);
       // A conversion that died after the client attached would otherwise stay silent until
       // the player reports a stall, with no clue whether the source or FFmpeg was at fault.
-      if (handedToClient && code !== 0 && signal === null && !session.stopped) {
+      if (handedToClient && code !== 0 && signal === null && !asked && !session.stopped) {
         log("WARN", "FFmpeg stopped after playback had started", { id: session.id, generation, code, reason: session.error, stderr: redact(stderr).slice(-500) });
       }
     });
@@ -1010,10 +1027,19 @@ export class PlaybackManager {
   }
 
   /** Waits for the process to really end: while FFmpeg lives it writes segments and the directory cannot be deleted. */
+  /** FFmpeg answers SIGTERM by exiting 255 without a word, which is indistinguishable from a
+   *  conversion that died on its own unless we remember that we asked. */
+  private stopping = new WeakSet<ChildProcess>();
+
   private kill(session: Session): Promise<void> {
     const child = session.process;
     session.process = undefined;
+    return this.killChild(child);
+  }
+
+  private killChild(child?: ChildProcess): Promise<void> {
     if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+    this.stopping.add(child);
     return new Promise((resolve) => {
       const force = setTimeout(() => child.kill("SIGKILL"), 3000);
       const giveUp = setTimeout(() => resolve(), 6000);
