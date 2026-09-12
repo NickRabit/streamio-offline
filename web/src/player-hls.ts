@@ -15,6 +15,16 @@ export const HLS_PLAYER_CONFIG = {
   testBandwidth: false,
 };
 
+/** Letting go of a stream means letting go of the element too. What hls.js leaves behind is a
+ *  MediaSource in its ended state, and the next stream appends into that one and gets nowhere:
+ *  "SourceBuffer error. MediaSource readyState: ended", over and over, with no picture. */
+export function releaseMediaElement(video: { pause(): void; removeAttribute(name: string): void; load(): void } | null) {
+  if (!video) return;
+  try { video.pause(); } catch { /* an element that never started */ }
+  video.removeAttribute("src");
+  try { video.load(); } catch { /* clearing a failed source */ }
+}
+
 /** 404s on a generation being replaced are expected. Do not fail the session. */
 export const ignoreHlsErrorDuringRestart = (restarting: boolean) => restarting;
 

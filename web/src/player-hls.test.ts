@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { releaseMediaElement, HLS_PLAYER_CONFIG, canRecoverDecode, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 
 describe("HLS_PLAYER_CONFIG", () => {
   it("keeps the forward buffer short enough that an 8x remux burst should not fill MSE", () => {
@@ -80,5 +80,33 @@ describe("planDecodeRecovery", () => {
     const spent = recordDecodeRecover(recordDecodeRecover([], t), t + 1000);
     expect(planDecodeRecovery("remux", spent, t + 2000)).toBe("give-up");
     expect(planDecodeRecovery("transcode", spent, t + 2000)).toBe("give-up");
+  });
+});
+
+describe("releaseMediaElement", () => {
+  const element = () => {
+    const calls: string[] = [];
+    return { calls, video: {
+      pause: () => { calls.push("pause"); },
+      removeAttribute: (name: string) => { calls.push(`remove:${name}`); },
+      load: () => { calls.push("load"); },
+    } };
+  };
+
+  it("clears the element, so the next stream does not append into a MediaSource that has ended", () => {
+    const { calls, video } = element();
+    releaseMediaElement(video);
+    expect(calls).toEqual(["pause", "remove:src", "load"]);
+  });
+
+  it("survives an element that will not do any of it", () => {
+    const calls: string[] = [];
+    expect(() => releaseMediaElement({
+      pause: () => { throw new Error("never started"); },
+      removeAttribute: (name: string) => { calls.push(name); },
+      load: () => { throw new Error("nothing to load"); },
+    })).not.toThrow();
+    expect(calls).toEqual(["src"]);
+    expect(() => releaseMediaElement(null)).not.toThrow();
   });
 });

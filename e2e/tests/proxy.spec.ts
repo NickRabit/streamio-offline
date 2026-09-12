@@ -259,16 +259,17 @@ test("a source that drops the connection is asked again instead of failing the p
 test("a source that has gone quiet is given up on quickly, not after a minute of retries", async ({ request }) => {
   // The first attempt waits out the full header timeout on purpose; that is the point of the test.
   test.setTimeout(120_000);
+  // Ranges nothing has read, so the request really reaches the source rather than the cache.
   const playback = await start(request);
   try {
     // The host takes the request and never answers, which is what these do once they are upset.
     await control(request, "hang");
     const first = Date.now();
-    expect((await request.get(playback.url, { headers: { range: "bytes=0-31" } })).status()).toBe(400);
+    expect((await request.get(playback.url, { headers: { range: "bytes=2048-2079" } })).status()).toBe(400);
     const waited = Date.now() - first;
     // The next viewer's click must not wait for the whole ordeal again.
     const second = Date.now();
-    expect((await request.get(playback.url, { headers: { range: "bytes=32-63" } })).status()).toBe(400);
+    expect((await request.get(playback.url, { headers: { range: "bytes=2080-2111" } })).status()).toBe(400);
     const again = Date.now() - second;
     expect(again, `first ${waited} ms, second ${again} ms`).toBeLessThan(Math.max(12_000, waited / 2));
   } finally {
@@ -292,6 +293,29 @@ test("a transfer the source cuts is picked up where it stopped", async ({ reques
     expect(received.equals(expected)).toBe(true);
   } finally {
     await control(request, "video");
+    await request.delete(`/api/playback/${playback.id}`);
+  }
+});
+
+test("a read the source already answered is not asked for twice", async ({ request }) => {
+  const playback = await start(request);
+  try {
+    await request.get(new URL("/proxy-control?mode=video&reset=1", addonManifest).href);
+    const asked = async () => (await (await request.get(new URL("/proxy-requests", addonManifest).href)).json()).requests as number;
+
+    // A stretch nothing has read yet, so the first one has to go to the source.
+    const first = await request.get(playback.url, { headers: { range: "bytes=1024-1279" } });
+    expect(first.status()).toBe(206);
+    const once = await asked();
+    expect(once).toBeGreaterThan(0);
+
+    // What every FFmpeg reads first -- the header, and the index at the far end -- comes back
+    // without the source hearing about it, which is the whole point on a host that counts.
+    const again = await request.get(playback.url, { headers: { range: "bytes=1024-1279" } });
+    expect(again.status()).toBe(206);
+    expect((await again.body()).equals(await first.body())).toBe(true);
+    expect(await asked(), "the source was asked once, not twice").toBe(once);
+  } finally {
     await request.delete(`/api/playback/${playback.id}`);
   }
 });

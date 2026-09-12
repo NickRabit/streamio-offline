@@ -113,6 +113,10 @@ export const api = {
   setWatchlist: (payload: { type: string; id: string; name?: string; poster?: string; favorite: boolean }) =>
     request<{ key: string; favorite: boolean }>("/api/watchlist", { method: "POST", body: JSON.stringify(payload) }),
   progressList: () => request<ProgressEntry[]>("/api/progress"),
+  /** The page itself is going away -- a closed tab, a reload, the browser being quit. A
+   *  keepalive request outlives the page that sent it, so the server hears that the film is
+   *  over instead of converting and reading the source until it works out nobody is there. */
+  stopPlaybackOnUnload: (id: string) => void fetch(`/api/playback/${id}`, { method: "DELETE", keepalive: true }).catch(() => undefined),
   progressOf: (key: string) => request<ProgressEntry | null>(`/api/progress/${encodeURIComponent(key)}`),
   saveProgress: (payload: { key: string; position: number; duration: number; title?: string; path?: string; poster?: string }) =>
     request<void>("/api/progress", { method: "POST", body: JSON.stringify(payload) }),

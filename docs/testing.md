@@ -327,6 +327,15 @@ still writing to, says so, and names what asked -- a generation that was replace
 conversion attempt that failed, or a session that ended. A directory whose process has
 already died is still fair game, which the retry after a failed hardware attempt needs.
 
+Every FFmpeg that opens a film reads the same two places before anything else: the header
+at the start and the index at the far end. With a conversion and a subtitle reader, both
+starting over at every seek, the log has the same byte offset fetched four times inside a
+minute -- and these hosts count connections, not bytes. Those reads are kept now, keyed by
+the exact range that was asked for, since an answer to "bytes=0-" is not an answer to
+"bytes=0-31" and handing one over for the other truncates or overruns the reply. The
+fixture counts what actually reached it, which is how the test knows the second read never
+left the server.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
@@ -391,3 +400,15 @@ need FFmpeg on PATH. The fake addon generates a small VP9/Opus WebM from the
 existing MP4 fixture for browser playback on Chromium builds without H.264.
 The proxy tests also use the original MP4 for actual probing, direct descriptors,
 range requests, HLS resource rewriting, subtitle and download ownership checks.
+
+During a seek, releasing the subtitle reader is a persistent hold: polling already
+extracted cues cannot reopen its source until the conversion explicitly calls
+`ensure` again. A regression exercises four release/poll/resume cycles and checks
+that the same subtitle revision and timing correction survive. A browser test
+closes the player during its fourth seek and delivers a late session-gone error;
+that error must not start another film or report against a newer session.
+
+The transfer meter is held to the reading, not to how it stores it: one regression drives
+forty thousand writes past repeated compaction and an idle gap, comparing every reading
+against a plain model of the same history, and another sends a burst inside a single
+millisecond and expects the reading of the one write it stands for.

@@ -96,15 +96,19 @@ async function serveVideo(req, res, file = videoFile) {
 }
 
 let proxyMode = "video";
+// How many times the source was actually asked for the film, which is what the cache is about.
+let mediaRequests = 0;
 const server = createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
 
   if (pathname === "/browser-video.webm") return void serveVideo(req, res, browserVideo);
-  if (pathname === "/proxy-control") { proxyMode = searchParams.get("mode") ?? "video"; return json(res, { ok: true }); }
+  if (pathname === "/proxy-control") { proxyMode = searchParams.get("mode") ?? "video"; if (searchParams.get("reset")) mediaRequests = 0; return json(res, { ok: true, requests: mediaRequests }); }
+  if (pathname === "/proxy-requests") return json(res, { requests: mediaRequests });
   if (pathname === "/proxy-subtitle") { res.writeHead(200, { "content-type": "text/vtt" }); return res.end("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"); }
   if (pathname === "/proxy-fixture.mp4") {
     if (req.headers.authorization !== "Bearer header-canary") return res.writeHead(403).end("header-canary");
+    mediaRequests += 1;
     // A host that drops the connection once, the way the real ones do on a big file.
     if (proxyMode === "drop-once") { proxyMode = "video"; return void req.socket.destroy(); }
     // Takes the request and never answers, the way a host that has had enough behaves.

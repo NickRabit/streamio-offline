@@ -79,12 +79,14 @@ interface Job {
 
 export class PlayerSidecars {
   private jobs = new Map<string, Job>();
+  private released = new Set<string>();
   constructor(private run: Extract = extract, private failed: (id: string, error: unknown) => void = () => {}) {}
 
   /** One reader per track: a seek usually lands inside what this one has already written,
    *  and only a position it cannot serve -- another track, a jump back before its start, or
    *  one so far ahead that it would have to read the film to get there -- needs another. */
   ensure(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
+    this.released.delete(id);
     const current = this.jobs.get(id);
     // A reader started at this very position is the right one even before it has written a cue:
     // without this, every repeated call replaced a reader that was only just getting going, and
@@ -119,7 +121,7 @@ export class PlayerSidecars {
     const { signal } = job.controller;
     // A read that was already on its way must not start a reader for a session that has since
     // been closed: its FFmpeg would outlive the media it reads and hammer a revoked source.
-    if (signal.aborted || this.jobs.get(id) !== job) return;
+    if (signal.aborted || this.jobs.get(id) !== job || this.released.has(id)) return;
     job.running = true;
     log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), why });
     const startedAt = Date.now();
@@ -153,7 +155,7 @@ export class PlayerSidecars {
   /** The reader runs in bursts: it fills the cues a quarter of an hour ahead and then
    *  releases the source, so a seek or a track switch has a connection to open. */
   private keepAhead(job: Job, id: string, offset: number) {
-    if (job.complete || Date.now() < job.waitUntil) return;
+    if (this.released.has(id) || job.complete || Date.now() < job.waitUntil) return;
     if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
     if (!job.running && job.coverage < offset + SIDECAR_RESUME_LEAD_S) {
       const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;
@@ -201,11 +203,13 @@ export class PlayerSidecars {
 
   /** Lets go of the source without losing the cues, for a conversion that needs to open it. */
   async release(id: string) {
+    this.released.add(id);
     const job = this.jobs.get(id);
     if (job?.running) await this.pause(job);
   }
 
   async stop(id: string) {
+    this.released.delete(id);
     const job = this.jobs.get(id);
     if (!job) return;
     this.jobs.delete(id);

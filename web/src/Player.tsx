@@ -6,7 +6,7 @@ import { ApiError, api, describeError, subtitleUrl } from "./api";
 import { watchSidecar } from "./player-sidecar";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
-import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
+import { releaseMediaElement, AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
 import { detectCapabilities } from "./capabilities";
 import { t, useI18n, type Key } from "./i18n";
 import type { Capabilities, PlaybackMode, PlaybackSession, Stream, Subtitle, Track } from "./types";
@@ -375,7 +375,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     applySubtitleVisibilityRef.current?.();
   }, [subtitlesHidden]);
 
-  const detach = () => { hlsRef.current?.destroy(); hlsRef.current = null; };
+  const detach = () => {
+    hlsRef.current?.destroy(); hlsRef.current = null;
+    releaseMediaElement(videoRef.current);
+  };
 
   /** Stop for good: with hls.js attached the element keeps refusing new segments and
    * every failure is reported again, so the session has to be torn down, not just labelled.
@@ -565,6 +568,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     // seconds, so destroying it here only produced a black screen and bufferStalledError.
     seekInFlightRef.current = true; seekingRef.current = true; setBuffering(true); setError("");
     video.pause();
+    // A session started to recover from one the server had forgotten. If the viewer closes the
+    // film or moves on before it is taken up, nothing else knows about it, and it would convert
+    // and pull at the source on its own.
+    let started: string | undefined;
     try {
       while (pendingSeekRef.current !== null && epoch === seekEpochRef.current) {
         const requested = pendingSeekRef.current; pendingSeekRef.current = null;
@@ -573,11 +580,12 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         const escalating = escalateRef.current; escalateRef.current = false;
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
+          if (epoch !== seekEpochRef.current) return;
           if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
           next = await api.startPlayback(stream!, capabilities(), requested, addonSubtitles.map((item) => item.subtitleId));
-          id = next.id;
+          id = next.id; started = next.id;
           if (next.mode === "direct") recoveredDirectAt = requested;
         }
         if (epoch !== seekEpochRef.current) return;
@@ -592,11 +600,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }
     }
     catch (value) {
+      if (epoch !== seekEpochRef.current) return;
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Seek failed: ${message}`, { ...context(), phase: "seek", target: Math.round(bounded) });
       if (epoch === seekEpochRef.current) setError(describeError(value));
     }
     finally {
+      if (started && started !== sessionRef.current) void api.stopPlayback(started).catch(() => undefined);
       if (epoch === seekEpochRef.current) { pendingSeekRef.current = null; seekInFlightRef.current = false; seekingRef.current = false; setBuffering(false); }
     }
   };
@@ -736,6 +746,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (id) void api.pingPlayback(id).catch(() => undefined);
     }, 30_000);
     return () => clearInterval(timer);
+  }, [open]);
+
+  // Closing the tab is not closing the player: nothing unmounts, so without this the server
+  // keeps the conversion and its read of the source until it notices nobody is watching.
+  useEffect(() => {
+    if (!open) return;
+    const leaving = () => { const id = sessionRef.current; if (id) api.stopPlaybackOnUnload(id); };
+    window.addEventListener("pagehide", leaving);
+    return () => window.removeEventListener("pagehide", leaving);
   }, [open]);
 
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
