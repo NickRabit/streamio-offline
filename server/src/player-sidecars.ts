@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { log } from "./logger.js";
 import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
 type Extract = (args: string[], signal: AbortSignal) => Promise<unknown>;
@@ -24,6 +25,7 @@ interface Job {
   controller: AbortController; done: Promise<void>; complete: boolean;
   /** How far the cues written so far reach, refreshed whenever the player asks for them. */
   coverage: number;
+  served: boolean;
 }
 
 export class PlayerSidecars {
@@ -34,6 +36,7 @@ export class PlayerSidecars {
    *  and only a position it cannot serve -- another track, a jump back before its start, or
    *  one so far ahead that it would have to read the film to get there -- needs another FFmpeg. */
   ensure(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
+    const startedAt = Date.now();
     const current = this.jobs.get(id);
     if (current && current.track === track && offset >= current.start && offset <= current.coverage) return;
     const previous = current;
@@ -42,9 +45,10 @@ export class PlayerSidecars {
     const start = Math.max(0, offset);
     const job: Job = {
       revision, track, start, file: path.join(directory, `sidecar-${revision}.vtt`),
-      controller: new AbortController(), done: Promise.resolve(), complete: false, coverage: -Infinity,
+      controller: new AbortController(), done: Promise.resolve(), complete: false, coverage: -Infinity, served: false,
     };
     this.jobs.set(id, job);
+    log("INFO", "Reading embedded subtitles", { id, track, from: Math.round(start) });
     job.done = (async () => {
       try {
         if (previous) { await previous.done; await rm(previous.file, { force: true }).catch(() => undefined); }
@@ -54,7 +58,7 @@ export class PlayerSidecars {
         if (job.controller.signal.aborted) return;
         await this.run([...input, "-y", job.file], job.controller.signal);
         job.complete = !job.controller.signal.aborted;
-        if (job.complete) job.coverage = Infinity;
+        if (job.complete) { job.coverage = Infinity; log("INFO", "Embedded subtitles read to the end", { id, track, seconds: Math.round((Date.now() - startedAt) / 1000) }); }
       } catch (error) {
         if (!job.controller.signal.aborted) this.failed(id, error);
       } finally {
@@ -75,8 +79,13 @@ export class PlayerSidecars {
     const text = job.complete ? raw : completeVttBlocks(raw);
     if (!job.complete) {
       job.coverage = vttCoverage(text);
-      if (job.coverage < offset + SIDECAR_LEAD_S) return undefined;
+      if (job.coverage < offset + SIDECAR_LEAD_S) {
+        // The one line that says why a film is playing without subtitles.
+        log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });
+        return undefined;
+      }
     }
+    if (!job.served) { job.served = true; log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete }); }
     const shifted = offset > 0 ? shiftVtt(text, offset) : text;
     return { text: shifted, complete: job.complete };
   }
