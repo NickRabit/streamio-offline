@@ -18,6 +18,9 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
   const video = page.locator("video");
+  await expect(video).toHaveAttribute("disableRemotePlayback", "");
+  await expect(video).toHaveAttribute("x-webkit-airplay", "deny");
+  await expect(page.locator(".airplay-toggle")).toHaveCount(0);
   await expect(video.locator("track")).toHaveAttribute("src", /\/api\/playback\/[^/]+\/sidecar\.vtt\?revision=test$/);
   await expect(page.locator(".player-subtitles")).toHaveText("Embedded subtitle");
   await video.locator("track").dispatchEvent("error", { bubbles: false });
