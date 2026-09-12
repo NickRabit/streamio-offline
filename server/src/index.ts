@@ -568,6 +568,18 @@ const subtitleDelay = (value: unknown) => {
 /** How many times a dropped source request is repeated, and how long between the tries. */
 const SOURCE_ATTEMPTS = 3;
 const SOURCE_RETRY_MS = 400;
+/** A source that has just gone quiet gets one short chance instead of three long ones. Somebody
+ *  is waiting on a seek, and a minute of retries against a host that is not answering reads as a
+ *  player that has stopped taking clicks. */
+const SOURCE_QUIET_MS = 20_000;
+const SOURCE_QUIET_HEADER_MS = 6_000;
+const SOURCE_HEADER_MS = 30_000;
+const quietSources = new Map<string, number>();
+const sourceIsQuiet = (key: string) => (quietSources.get(key) ?? 0) > Date.now() - SOURCE_QUIET_MS;
+const noteSourceQuiet = (key: string) => {
+  quietSources.set(key, Date.now());
+  while (quietSources.size > 200) quietSources.delete(quietSources.keys().next().value!);
+};
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
@@ -2047,7 +2059,8 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   if (req.headers.range) headers.range = req.headers.range;
   const controller = new AbortController();
   let headerTimedOut = false;
-  const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, 30_000);
+  const quiet = sourceIsQuiet(resource.parent ?? resource.id);
+  const headerTimeout = setTimeout(() => { headerTimedOut = true; controller.abort(); }, quiet ? SOURCE_QUIET_HEADER_MS : SOURCE_HEADER_MS);
   // Seek and stop close the previous Range. Without aborting here the old
   // upstream keeps downloading from the debrid host and starves the new one.
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
@@ -2065,9 +2078,10 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
       }
       const reason = headerTimedOut ? "no response within 30 s" : (error instanceof Error ? error.message : String(error));
       // A timeout or a viewer who left is not worth repeating; a dropped connection is.
-      if (attempt >= SOURCE_ATTEMPTS || headerTimedOut || controller.signal.aborted) {
+      if (attempt >= (quiet ? 1 : SOURCE_ATTEMPTS) || headerTimedOut || controller.signal.aborted) {
         clearTimeout(headerTimeout);
-        log("WARN", "The source did not respond", { req: req.id, url: raw, range: req.headers.range, reason, attempts: attempt });
+        noteSourceQuiet(resource.parent ?? resource.id);
+        log("WARN", "The source did not respond", { req: req.id, url: raw, range: req.headers.range, reason, attempts: attempt, quiet });
         throw error;
       }
       log("WARN", "The source dropped the request, asking again", { req: req.id, url: raw, range: req.headers.range, reason, attempt });
@@ -2075,6 +2089,8 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
     }
   }
   clearTimeout(headerTimeout);
+  // It answered, so it is not the host that has stopped talking to us.
+  quietSources.delete(resource.parent ?? resource.id);
   if (res.destroyed || res.writableEnded) {
     await upstream.body?.cancel().catch(() => undefined);
     return;

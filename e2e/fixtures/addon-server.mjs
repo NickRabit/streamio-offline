@@ -107,6 +107,8 @@ const server = createServer((req, res) => {
     if (req.headers.authorization !== "Bearer header-canary") return res.writeHead(403).end("header-canary");
     // A host that drops the connection once, the way the real ones do on a big file.
     if (proxyMode === "drop-once") { proxyMode = "video"; return void req.socket.destroy(); }
+    // Takes the request and never answers, the way a host that has had enough behaves.
+    if (proxyMode === "hang") return;
     if (proxyMode === "video") return void serveVideo(req, res);
     if (proxyMode === "head") { res.writeHead(req.method === "HEAD" ? 200 : 405); return res.end(); }
     if (proxyMode === "playlist") {
