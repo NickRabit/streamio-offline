@@ -857,3 +857,21 @@ test("a position the source will not open costs the seek, not the film", async (
   assert.equal(moved.offset, 4000);
   assert.notEqual(moved.url, playing.url);
 });
+
+test("cleanup never deletes the generation a conversion is writing into", async () => {
+  const manager = new PlaybackManager("/tmp/test-purge-guard") as any;
+  const deleted: string[] = [];
+  manager.purgeNow = async (directory: string) => { deleted.push(directory); };
+  const session = remuxSession(manager);
+  session.directory = "/tmp/test-purge-guard/session/2";
+  session.process = { exitCode: null, signalCode: null };
+
+  await manager.purge(session.directory, "a generation that was replaced");
+  assert.deepEqual(deleted, [], "the film is playing out of it, whoever asked");
+
+  // The same directory is fair game once nothing is writing there, which is what the retry
+  // after a failed hardware attempt relies on.
+  session.process = { exitCode: 1, signalCode: null };
+  await manager.purge(session.directory, "a conversion attempt that failed");
+  assert.deepEqual(deleted, [session.directory]);
+});
