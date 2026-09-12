@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -19,6 +19,10 @@ test.beforeAll(async () => {
     "-y", path.join(folder, "epizoda.mkv"),
   ]);
 });
+
+// The layout baselines are taken against the library this suite leaves behind, so the film
+// built here goes away again.
+test.afterAll(async () => { await rm(folder, { recursive: true, force: true }); });
 
 test("switching on an embedded track serves its cues, and a seek shifts them", async ({ request }) => {
   const source = await (await request.post("/api/library/source", { data: { path: relative } })).json();
