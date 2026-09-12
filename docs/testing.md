@@ -279,6 +279,17 @@ conversion, and the viewer's seek with it, so the proxy asks again -- three trie
 short wait between them -- and only a timeout or a viewer who has left is given up on at
 once. The addon fixture can hang up once on demand, which is how the retry is tested.
 
+Closing a film no longer tears the conversion down at once. It keeps running for
+three quarters of a minute, so a viewer who closes and opens the same film again takes
+that session back instead of building a second conversion and asking the source for
+another connection -- the hosts behind these films answer a handful and then stop
+answering at all. From outside the server the film is over the moment the player lets
+go: the receiver grant is gone, transfers in flight are cut, and every route for that
+session answers as it does for one that has ended. Only FFmpeg on loopback still reads.
+A film taken back has to be the same film with the same tracks, the same quality and
+the same client capabilities, or it starts fresh; another film starting closes the one
+left running; and anything nobody came back for is swept.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

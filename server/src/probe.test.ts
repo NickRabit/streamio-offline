@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { looksUnreachable, playlistArgsFrom } from "./probe.js";
+import { hasDolbyVisionEnhancementLayer, looksUnreachable, playlistArgsFrom } from "./probe.js";
 
 test("the picky segment options are passed only to a build that has them", () => {
   assert.deepEqual(
@@ -23,4 +23,20 @@ test("a dead connection or a server error is recognised as unreachable", () => {
 test("a stream the source just failed to decode is not treated as unreachable", () => {
   assert.equal(looksUnreachable("Invalid data found when processing input"), false);
   assert.equal(looksUnreachable(""), false);
+});
+
+test("Dolby Vision enhancement layer is recognised from ffprobe side data", () => {
+  assert.equal(hasDolbyVisionEnhancementLayer({
+    side_data_list: [{ side_data_type: "DOVI configuration record", el_present_flag: 1 }],
+  }), true);
+  assert.equal(hasDolbyVisionEnhancementLayer({
+    side_data_list: [{ name: "Dolby Vision enhancement-layer HEVC configuration" }],
+  }), true);
+  assert.equal(hasDolbyVisionEnhancementLayer({
+    tags: { title: "Dolby Vision enhancement-layer HEVC configuration" },
+  }), true);
+  assert.equal(hasDolbyVisionEnhancementLayer({
+    side_data_list: [{ side_data_type: "DOVI configuration record", el_present_flag: 0 }],
+  }), false);
+  assert.equal(hasDolbyVisionEnhancementLayer({ side_data_list: [] }), false);
 });

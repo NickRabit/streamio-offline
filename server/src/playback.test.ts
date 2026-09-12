@@ -84,6 +84,52 @@ test("a remux still copies compatible video and audio", () => {
   assert.equal(args[args.indexOf("-c:a") + 1], "copy");
 });
 
+test("Dolby Vision enhancement layer still copies and asks FFmpeg for non-strict input", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { hevc: true, hevc10: true, eac3: true },
+    info: {
+      container: "matroska,webm",
+      video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le", dolbyVisionEnhancementLayer: true },
+      audio: { codec: "eac3" },
+      audioTracks: [{ index: 0, codec: "eac3" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  assert.equal(manager.plan(session).copyVideo, true);
+  const args = manager.args(session, 797, "/tmp/output", false) as string[];
+  assert.equal(args[args.indexOf("-c:v") + 1], "copy");
+  assert.equal(args[args.indexOf("-tag:v") + 1], "hvc1");
+  const input = args.indexOf("-i");
+  assert.ok(args.indexOf("-strict") < input, "input demuxer accepts the unknown hvcE block addition");
+  assert.ok(args.lastIndexOf("-strict") > input, "output muxer still allows Dolby Vision config boxes");
+});
+
+test("ordinary HEVC Main 10 still copies when the client supports it", () => {
+  const manager = new PlaybackManager("/tmp/test-playback") as any;
+  const session = {
+    stream: { url: "https://example.test/movie.mkv" },
+    capabilities: { hevc: true, hevc10: true, eac3: true },
+    info: {
+      container: "matroska,webm",
+      video: { codec: "hevc", profile: "Main 10", pixelFormat: "yuv420p10le" },
+      audio: { codec: "eac3" },
+      audioTracks: [{ index: 0, codec: "eac3" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  assert.equal(manager.plan(session).copyVideo, true);
+});
+
 test("copied AAC is rewritten out of ADTS, which fMP4 will not take", () => {
   // Without it the muxer refuses every packet and FFmpeg dies before writing the
   // master playlist's stream line, leaving the client a master with no CODECS.
@@ -219,6 +265,35 @@ test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment"
   const seeked = manager.args(session, 2369, "/tmp/output", false) as string[];
   const audio = seeked.indexOf("-c:a");
   assert.deepEqual(seeked.slice(audio, audio + 6), ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]);
+});
+
+test("a conversion reconnects when a remote source drops the stream", () => {
+  const manager = new PlaybackManager("/tmp/test-playback-reconnect") as any;
+  const session = {
+    stream: { url: "https://example.test/large.mkv" },
+    capabilities: { hevc: true, ac3: true },
+    info: {
+      video: { codec: "hevc" },
+      audio: { codec: "ac3" },
+      audioTracks: [{ index: 0, codec: "ac3" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 3949, "/tmp/output", false) as string[];
+  const input = args.indexOf("-i");
+  assert.ok(input > 0, "the input position is present");
+  assert.deepEqual(args.slice(args.indexOf("-reconnect"), args.indexOf("-reconnect") + 8), [
+    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10",
+  ]);
+  assert.ok(args.indexOf("-reconnect") < input, "reconnect options apply to the input, not the output");
+  assert.ok(args.indexOf("-strict") < input, "HEVC copies ask the input demuxer for non-strict handling");
+  const tag = args.indexOf("-tag:v");
+  assert.equal(args[tag + 1], "hvc1");
+  assert.deepEqual(args.slice(tag + 2, tag + 4), ["-strict", "unofficial"], "Dolby Vision HEVC needs the unofficial fMP4 config boxes");
 });
 
 test("a trailing request for the previous generation still gets its directory for a while", () => {
@@ -609,9 +684,11 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   });
   const events: string[] = [];
   const readers: number[] = [];
+  const sidecarArgs: string[][] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
   manager.sidecars.run = async (args: string[], file: string, _append: boolean, signal: AbortSignal) => {
     readers.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
+    sidecarArgs.push(args);
     // What FFmpeg would have written by then: cues with the source's own timestamps.
     await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -628,6 +705,14 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   while (readers.length < 2) await pause(5);
   // Only the jump behind the reader needed another FFmpeg; the seek it already covers did not.
   assert.deepEqual(readers, [5245, 900]);
+  for (const args of sidecarArgs) {
+    const input = args.indexOf("-i");
+    assert.ok(input > 0, "the sidecar input position is present");
+    assert.deepEqual(args.slice(args.indexOf("-reconnect"), args.indexOf("-reconnect") + 8), [
+      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10",
+    ]);
+    assert.ok(args.indexOf("-reconnect") < input, "sidecar reconnect options apply to the input");
+  }
   assert.match(started.sidecarUrl ?? "", /\?revision=[0-9a-f-]+&offset=5245\.000$/);
   assert.match(resumed.sidecarUrl ?? "", /&offset=5400\.000$/);
   assert.equal(revisionOf(started.sidecarUrl), revisionOf(resumed.sidecarUrl));
@@ -687,3 +772,54 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   await manager.sidecars.stop(started.id);
 });
 
+test("closing a film keeps it running for a moment, and opening it again takes it back", async () => {
+  const manager = new PlaybackManager("/tmp/test-linger") as any;
+  manager.inspect = async () => ({ container: "matroska", duration: 7000,
+    video: { codec: "hevc" }, audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [],
+  });
+  const spawns: number[] = [];
+  manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; session.generation += 1; spawns.push(offset); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; };
+  manager.producedUntil = async (session: any) => session.offset + 300;
+  const film = { url: "https://cdn.example/large.mkv" };
+  const started = await manager.start(film, { hevc: true }, { startTime: 900 });
+  assert.deepEqual(spawns, [900]);
+
+  manager.release(started.id);
+  // Back within the grace period and inside what the conversion has already produced.
+  const again = await manager.reclaim(film, { hevc: true }, { startTime: 1000 });
+  assert.equal(again.id, started.id, "the same session, still converting");
+  assert.deepEqual(spawns, [900], "and no second FFmpeg on the source");
+  assert.equal(again.url, started.url);
+
+  // A film asked for with another quality is not this conversion, whatever else matches.
+  manager.release(started.id);
+  assert.equal(await manager.reclaim(film, { hevc: true }, { startTime: 1000, quality: 480 }), undefined);
+
+  // A position it has not reached moves the conversion instead of building another session.
+  manager.release(started.id);
+  const far = await manager.reclaim(film, { hevc: true }, { startTime: 4000 });
+  assert.equal(far.id, started.id);
+  assert.deepEqual(spawns, [900, 4000]);
+
+  // Another film does not get someone else's session, and closes the one left running.
+  manager.release(started.id);
+  assert.equal(await manager.reclaim({ url: "https://cdn.example/other.mkv" }, { hevc: true }, { startTime: 10 }), undefined);
+  // A client that cannot play what this conversion was planned for does not get it either.
+  assert.equal(await manager.reclaim(film, { hevc: false }, { startTime: 1000 }), undefined);
+  await manager.stop(started.id);
+});
+
+test("a film left closed is swept, a taken-over one is not", async () => {
+  const manager = new PlaybackManager("/tmp/test-linger-sweep") as any;
+  const session = remuxSession(manager);
+  session.claimed = true;
+  const stopped: string[] = [];
+  manager.stop = async (id: string) => { stopped.push(id); manager.sessions.delete(id); };
+  manager.release(session.id);
+  manager.reap();
+  assert.deepEqual(stopped, [], "still within its moment of grace");
+  session.lingerUntil = Date.now() - 1;
+  manager.reap();
+  assert.deepEqual(stopped, [session.id]);
+});

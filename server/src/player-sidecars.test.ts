@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S } from "./player-sidecars.js";
+import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RETRY_MS } from "./player-sidecars.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const cue = (from: number, to: number, text: string) => {
@@ -92,9 +92,9 @@ test("cues are held back until they reach past the playhead, then shifted to it"
     await tick();
     assert.equal(await sidecars.read("session", revision, 3000), undefined, "a cue the picture has already passed is nothing to attach");
     finish();
+    // The cues can be readable a moment before the reader has finished with the film.
     let cues;
-    while (!(cues = await sidecars.read("session", revision, 3000))) await tick();
-    assert.equal(cues.complete, true);
+    while (!(cues = await sidecars.read("session", revision, 3000)) || !cues.complete) await tick();
     assert.match(cues.text, /00:00:10\.000 --> 00:00:14\.000\nahead/);
     assert.equal(await sidecars.read("session", "someone-elses-revision", 3000), undefined);
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
@@ -271,5 +271,40 @@ test("a read that lands after the session closed does not leave a reader behind"
     await tick();
     assert.equal(started, 1, "no second FFmpeg was started for a session that is gone");
     assert.equal(sidecars.revision("session"), undefined);
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a reader that the source refused waits before asking for another connection", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-backoff-"));
+  let attempts = 0;
+  const sidecars = new PlayerSidecars(async () => { attempts += 1; throw new Error("ffmpeg exited with 8"); }, () => {});
+  try {
+    sidecars.ensure("session", directory, 0, 100, async () => []);
+    while (!attempts) await tick();
+    // The player keeps asking for its cues; the reader must not answer that with a connection a second.
+    for (let poll = 0; poll < 20; poll++) { await sidecars.read("session", sidecars.revision("session"), 100); await tick(); }
+    assert.equal(attempts, 1, "one refusal, one attempt -- the source is left alone until the wait is over");
+    assert.ok(SIDECAR_RETRY_MS >= 1000, "the wait is seconds, not milliseconds");
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("asking for the same position again keeps the reader that is already on it", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-same-"));
+  const starts: number[] = [];
+  const sidecars = new PlayerSidecars(async (args, _file, _append, signal) => {
+    starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  try {
+    const args = async (start: number) => ["-ss", start.toFixed(3)];
+    sidecars.ensure("session", directory, 1, 933, args);
+    const revision = sidecars.revision("session");
+    while (!starts.length) await tick();
+    // What a restart and the track switch behind it do: ask again while the first cue is still missing.
+    sidecars.ensure("session", directory, 1, 933, args);
+    sidecars.ensure("session", directory, 1, 933, args);
+    await tick();
+    assert.deepEqual(starts, [933], "the reader that is already reading that position is left to work");
+    assert.equal(sidecars.revision("session"), revision, "and the player keeps the address it is polling");
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
