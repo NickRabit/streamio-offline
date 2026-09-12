@@ -748,6 +748,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     return () => clearInterval(timer);
   }, [open]);
 
+  // Closing the tab is not closing the player: nothing unmounts, so without this the server
+  // keeps the conversion and its read of the source until it notices nobody is watching.
+  useEffect(() => {
+    if (!open) return;
+    const leaving = () => { const id = sessionRef.current; if (id) api.stopPlaybackOnUnload(id); };
+    window.addEventListener("pagehide", leaving);
+    return () => window.removeEventListener("pagehide", leaving);
+  }, [open]);
+
   const toggle = () => { const video = videoRef.current; if (!video) return; if (video.paused) void video.play().catch(() => undefined); else video.pause(); };
 
   const clearControlsTimer = () => {

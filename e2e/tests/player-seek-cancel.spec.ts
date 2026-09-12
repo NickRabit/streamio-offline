@@ -25,6 +25,11 @@ test("closing during the fourth seek does not start a replacement film", async (
     const name = path.basename(new URL(route.request().url()).pathname);
     await route.fulfill({ contentType: name.endsWith("m3u8") ? "application/vnd.apple.mpegurl" : "video/mp4", body: await readFile(path.join(folder, name)) });
   });
+  // The layout baselines are taken against the state the journeys leave behind, and a film
+  // watched to a position resumes there. This one seeks minutes into a fixture two seconds
+  // long, so what it would leave behind is a player that opens already at the end.
+  await page.route("**/api/progress", (route) => route.request().method() === "POST" ? route.fulfill({ status: 204 }) : route.continue());
+  await page.route("**/api/progress/*", (route) => route.request().method() === "GET" ? route.fulfill({ json: null }) : route.continue());
   await page.route("**/api/playback", (route) => { starts++; return route.fulfill({ json: descriptor }); });
   await page.route("**/api/playback/seek-test", (route) => route.fulfill({ status: 204 }));
   await page.route("**/api/playback/seek-test/seek", async (route) => {
@@ -40,12 +45,17 @@ test("closing during the fourth seek does not start a replacement film", async (
   await catalog.selectOption((await catalog.locator("option").filter({ hasText: "Filmy" }).first().getAttribute("value"))!);
   await page.getByRole("button", { name: /Zkušební film/ }).click();
   await page.getByRole("button", { name: "Přehrát", exact: true }).click();
+  const overlay = page.locator(".player-overlay");
   const timeline = page.getByRole("slider", { name: "Pozice", exact: true });
+  // A film that plays takes its controls away after a few quiet seconds, and this one has
+  // nothing to click without them.
   for (let seek = 1; seek <= 4; seek++) {
+    await overlay.dispatchEvent("pointermove");
     await timeline.click({ position: { x: 100 + seek * 100, y: 5 }, force: true });
     await expect.poll(() => seeks).toBe(seek);
     if (seek < 4) await expect(page.locator(".player-error")).toHaveCount(0);
   }
+  await overlay.dispatchEvent("pointermove");
   await page.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click({ force: true });
   const response = page.waitForResponse((r) => r.url().endsWith("/seek-test/seek") && r.status() === 400);
   finishSeek();
