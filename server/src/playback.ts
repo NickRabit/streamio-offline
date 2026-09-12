@@ -392,6 +392,15 @@ export class PlaybackManager {
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+      // Subtitles never ride in the conversion, they are read beside it. Restarting FFmpeg
+      // for them would interrupt the picture and ask the source for another connection --
+      // which is the one thing these hosts tend to refuse.
+      if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
+        if (session.subtitleTrack !== null) this.extractSidecar(session);
+        else await this.sidecars.stop(id);
+        log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
+        return this.describe(session, this.currentUrl(session));
+      }
       // Going back to the original may satisfy the conditions for direct play again.
       if (session.quality === null && session.audioTrack === 0 && !session.copyRejected
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
@@ -411,7 +420,9 @@ export class PlaybackManager {
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
-    await this.sidecars.stop(id);
+    // The source usually allows one connection at a time, so the subtitle reader lets
+    // go of it before the conversion asks for its own.
+    await this.sidecars.release(id);
     this.assertActive(session);
     // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
     session.pendingKill = this.kill(session);
@@ -520,31 +531,50 @@ export class PlaybackManager {
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
-      sidecarUrl: session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt${this.sidecars.revision(session.id) ? `?revision=${this.sidecars.revision(session.id)}` : ""}` : undefined,
+      sidecarUrl: session.subtitleTrack !== null ? this.sidecarUrl(session) : undefined,
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
 
-  sidecarFile(id: string, revision?: string) {
+  async sidecar(id: string, revision: string | undefined, offset: number, delay = 0) {
     const session = this.sessions.get(id);
-    const file = this.sidecars.file(id, revision);
-    if (!session || session.subtitleTrack === null || !file) return undefined;
+    if (!session || session.subtitleTrack === null) return undefined;
+    const cues = await this.sidecars.read(id, revision, offset, delay);
+    if (!cues) return undefined;
     session.claimed = true;
     session.lastAccess = Date.now();
-    return file;
+    return cues;
+  }
+
+  /** What the player is playing right now: the generation being written, or the file itself. */
+  private currentUrl(session: Session) {
+    return session.mode === "direct"
+      ? this.proxyPath(session.stream)
+      : `/api/playback/${session.id}/${session.generation}/master.m3u8`;
+  }
+
+  /** The offset rides in the address: a seek only re-reads the same cues, shifted. */
+  private sidecarUrl(session: Session) {
+    const revision = this.sidecars.revision(session.id);
+    if (!revision) return undefined;
+    return `/api/playback/${session.id}/sidecar.vtt?revision=${revision}&offset=${session.offset.toFixed(3)}`;
   }
 
   private extractSidecar(session: Session) {
     const index = session.subtitleTrack;
     if (index === null) return;
-    const offset = session.offset;
     const source = this.localUrl(this.proxyPath(session.stream));
-    this.sidecars.start(session.id, path.join(this.root, session.id), async () => [
+    const playlist = isPlaylistSource(session.stream, session.info);
+    this.sidecars.ensure(session.id, path.join(this.root, session.id), index, session.offset, async (start) => [
       "-hide_banner", "-loglevel", "error", "-nostdin",
       // The same playlist through the same demuxer, so the same flags -- and the same
       // reason to leave them out when the source is an ordinary file.
-      ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
-      ...(offset > 0 ? ["-ss", offset.toFixed(3)] : []),
+      ...(playlist ? await playlistArgs("ffmpeg") : []),
+      ...(start > 0 ? ["-ss", start.toFixed(3)] : []),
+      // An input seek lands on the packet before the requested time, not on it, so
+      // without -copyts the cues would be rebased to an unknown point -- minutes off.
+      // Source timestamps keep them aligned whatever the seek actually hit.
+      "-copyts", "-start_at_zero",
       "-i", source,
       "-map", `0:s:${index}`, "-c:s", "webvtt",
     ]);

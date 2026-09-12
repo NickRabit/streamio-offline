@@ -172,6 +172,13 @@ export const en = {
   "player.qualityOriginal": "Original",
   "player.audioTrack": "Audio track",
   "player.subtitles": "Subtitles",
+  "player.subtitleDelay": "Subtitle timing",
+  "player.subtitleInStep": "in step",
+  "player.subtitleEarlier": "Subtitles earlier",
+  "player.subtitleLater": "Subtitles later",
+  "player.subtitleEarlierKey": "Subtitles earlier (,)",
+  "player.subtitleLaterKey": "Subtitles later (.)",
+  "player.subtitleDelayReset": "Back in step",
   "player.subtitlesOff": "Off",
   "player.embedded": "Embedded",
   "player.fromAddon": "Addon",
@@ -190,6 +197,7 @@ export const en = {
   "player.playbackFailed": "Playback failed: {details} ({type})",
   "player.noHls": "This browser cannot play HLS.",
   "player.browserRefused": "The browser could not play this stream.",
+  "player.subtitleSwitchFailed": "The subtitles could not be switched.",
 
   // Favorites and saving, shared by the player, the catalog and the library.
   "favorite.add": "Add to favorites",

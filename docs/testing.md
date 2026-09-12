@@ -214,10 +214,47 @@ loss, and return to local playback. Browser API mocks cannot establish device
 compatibility or reliable reconnection.
 
 Server tests cover delayed HLS initialization on slow storage, subtitle process
-cancellation and exit before media revocation, and subtitle offsets after
-repeated seeks. The browser regression checks that embedded subtitle URLs load
-directly and subtitle failures leave playback running. Real Synology and iPhone
-verification remains necessary for hardware performance and codec behavior.
+cancellation and exit before media revocation, and the subtitle reader: one per
+track, kept across a seek it already covers, restarted for another track, a jump
+back before its start, or a position beyond what it has read. Reading embedded
+subtitles out of a remote film pulls the rest of the file through the proxy, so
+the cues are extracted once with source timestamps (`-copyts`) and shifted to
+the playing generation on the way out; without that an input seek rebases them
+to whatever packet it landed on, minutes away from the picture. Client tests
+cover the poll: its retries, cancellation when the session changes, the second
+attach once the reader has the whole track, and the hand-wired per-request
+timeout that keeps it working on Safari without `AbortSignal.any`. The browser
+regression checks that embedded subtitles attach, attach again when complete,
+and that a subtitle failure leaves playback running.
+
+FFmpeg keeps a file it writes itself buffered until it exits, so a sidecar written
+that way stays empty for as long as the film takes to read -- minutes on a remote
+source, which is indistinguishable from subtitles that never work. The cues come
+through its stdout instead, and a unit test reads them while the reader still runs.
+
+Switching subtitles does not touch the conversion: the cues never ride in it, and a
+restart would both interrupt the picture and ask the source for a second connection,
+which the hosts behind these films often refuse. For the same reason the reader runs
+in bursts -- it fills a quarter of an hour ahead, lets go of the source, and picks up
+where it stopped when the picture catches up -- and releases it outright before a seek.
+
+A copied video cannot start between keyframes, so a seek lands on the one before the
+second asked for, and the cues keep that much of a head start against the picture --
+measured between 0.05 s and 0.37 s on one film, a whole keyframe interval on sparser
+encodes. Where that landing is cannot be read while the conversion runs: FFmpeg holds
+a side output of its own until it exits, whatever the format and whatever the flushing
+flags, and asking the source directly costs a second connection, which is what these
+hosts refuse. What is left of the offset is for the viewer to dial out: the player's subtitle timing
+steps by a quarter of a second, with the comma and full stop keys, and rides in the
+address of both the embedded cues and the addon ones, so the element simply reloads
+them. It resets with the film.
+
+Timing is the part tests cannot settle. A slow source delays the first cues,
+and the reader competes with the conversion for the same link. Check on a real
+film from a remote source: subtitles appear within seconds of starting, survive
+several seeks without the picture stalling, and stay in step with the dialogue
+an hour in. Real Synology and iPhone verification remains necessary for
+hardware performance and codec behavior.
 
 ## Continuous integration
 

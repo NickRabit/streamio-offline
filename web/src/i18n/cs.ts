@@ -168,6 +168,13 @@ export const cs: Catalog = {
   "player.qualityOriginal": "Originál",
   "player.audioTrack": "Zvuková stopa",
   "player.subtitles": "Titulky",
+  "player.subtitleDelay": "Načasování titulků",
+  "player.subtitleInStep": "sedí",
+  "player.subtitleEarlier": "Titulky dřív",
+  "player.subtitleLater": "Titulky později",
+  "player.subtitleEarlierKey": "Titulky dřív (,)",
+  "player.subtitleLaterKey": "Titulky později (.)",
+  "player.subtitleDelayReset": "Zpět na sedící",
   "player.subtitlesOff": "Vypnuto",
   "player.embedded": "Vestavěné",
   "player.fromAddon": "Doplněk",
@@ -186,6 +193,7 @@ export const cs: Catalog = {
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",
   "player.noHls": "Tento prohlížeč neumí přehrát HLS.",
   "player.browserRefused": "Prohlížeč tenhle stream nepřehrál.",
+  "player.subtitleSwitchFailed": "Titulky se nepodařilo přepnout.",
 
   // Oblíbené a ukládání; sdílí přehrávač, katalog i knihovna.
   "favorite.add": "Přidat do oblíbených",

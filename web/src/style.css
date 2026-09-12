@@ -835,3 +835,9 @@ img.broken{visibility:hidden}
   .queue-block-list .queue-actions button{min-height:40px;min-width:40px}.queue-block .queue-pagination{padding:12px 14px;gap:8px}.queue-block .queue-pagination>span{flex-basis:100%;text-align:left}
 }
 @media(max-height:500px) and (orientation:landscape){.queue-blocks{gap:12px}.queue-block-head{padding-top:10px;padding-bottom:10px}.downloads-page .queue-block-list .download-row{padding:12px 0}}
+
+.player-settings .subtitle-delay{gap:6px}
+.player-settings .subtitle-delay .subtitle-delay-label{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.player-settings .subtitle-delay output{min-width:64px;text-align:center;font-variant-numeric:tabular-nums;opacity:.85}
+.player-settings .subtitle-delay button{min-width:34px}
+.player-settings .subtitle-delay .subtitle-delay-reset svg{width:16px;height:16px}
