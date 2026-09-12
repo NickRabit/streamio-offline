@@ -320,6 +320,13 @@ playing is therefore left running until the new position is open, and if it cann
 opened the session goes back to it: the viewer loses the jump rather than the film, and
 the old generation is kept off the cleanup that would otherwise delete what is playing.
 
+Deleting the directory a conversion is writing into takes the film down with it: the HLS
+muxer cannot rename its playlist and exits, which reads as a source that dropped the
+stream and is nothing of the sort. Cleanup therefore refuses a directory something is
+still writing to, says so, and names what asked -- a generation that was replaced, a
+conversion attempt that failed, or a session that ended. A directory whose process has
+already died is still fair game, which the retry after a failed hardware attempt needs.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

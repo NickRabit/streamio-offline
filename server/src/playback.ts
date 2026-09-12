@@ -545,7 +545,7 @@ export class PlaybackManager {
     this.onStop(id);
     await session.operations.wait();
     await this.kill(session);
-    await this.purge(path.join(this.root, id));
+    await this.purgeNow(path.join(this.root, id));
   }
 
   /** What is playing right now, for the statistics. The bytes are not here: they are counted
@@ -814,7 +814,7 @@ export class PlaybackManager {
         if (session.retired === retired) session.retired = undefined;
         // Unless the film went back to it: a position that could not be opened leaves the
         // old generation playing, and it is the one thing that must not be deleted.
-        if (session.directory !== previous) await this.purge(previous);
+        if (session.directory !== previous) await this.purge(previous, "a generation that was replaced");
       });
     }
 
@@ -827,7 +827,7 @@ export class PlaybackManager {
       if (!firstAttempt) {
         // A failed VAAPI pass leaves a playlist the wait loop would accept, so software
         // would return that broken init instead of writing its own.
-        await this.purge(directory);
+        await this.purge(directory, "a conversion attempt that failed");
         await mkdir(directory, { recursive: true });
       }
       firstAttempt = false;
@@ -1048,7 +1048,23 @@ export class PlaybackManager {
     });
   }
 
-  private async purge(directory: string) {
+  /** Deleting the directory a conversion is writing into takes the film down with it: the HLS
+   *  muxer cannot rename its playlist and exits. Whoever asks, the one that is playing stays. */
+  private async purge(directory: string, why = "cleanup") {
+    // A conversion that has already died leaves its directory to be cleaned up -- the retry after
+    // a failed hardware attempt depends on that. Only a process still writing there is protected.
+    const playing = [...this.sessions.values()].find((session) =>
+      session.directory === directory && !session.stopped
+      && session.process !== undefined && session.process.exitCode === null && session.process.signalCode === null);
+    if (playing) {
+      log("WARN", "Refused to delete the generation that is playing", { id: playing.id, generation: playing.generation, why });
+      return;
+    }
+    log("DEBUG", "Deleting a playback directory", { directory, why });
+    return this.purgeNow(directory);
+  }
+
+  private async purgeNow(directory: string) {
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try { await rm(directory, { recursive: true, force: true }); return; }
       catch { await sleep(200); }
