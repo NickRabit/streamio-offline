@@ -552,9 +552,17 @@ app.get("/api/subtitle/:subtitleId", asyncRoute(async (req, res) => {
   const response = await guardedFetch(raw, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
   if (!response.ok) { await response.body?.cancel(); throw new Error("Subtitle source unavailable."); }
   let text = await readMediaText(response); if (!text.trimStart().startsWith("WEBVTT")) text = `WEBVTT\n\n${text.replace(/^\ufeff/, "").replace(/\r/g, "").replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2").replace(/^\d+\n(?=\d{2}:\d{2}:\d{2}[.,]\d{3} -->)/gm, "")}`;
-  const offset = Number(req.query.offset) || 0; if (offset) text = shiftVtt(text, offset);
+  const shift = (Number(req.query.offset) || 0) - subtitleDelay(req.query.delay);
+  if (shift) text = shiftVtt(text, shift);
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").send(text);
 }));
+/** The viewer's own correction for subtitles that run ahead of the picture or behind it. */
+const SUBTITLE_DELAY_LIMIT_S = 30;
+const subtitleDelay = (value: unknown) => {
+  const delay = Number(value);
+  return Number.isFinite(delay) ? Math.max(-SUBTITLE_DELAY_LIMIT_S, Math.min(SUBTITLE_DELAY_LIMIT_S, delay)) : 0;
+};
+
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
 type DeviceDownloadTicket = {
@@ -1901,6 +1909,7 @@ app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
     String(req.params.id),
     typeof req.query.revision === "string" ? req.query.revision : undefined,
     Math.max(0, Number(req.query.offset) || 0),
+    subtitleDelay(req.query.delay),
   );
   if (!cues) return res.status(404).end();
   // Until the reader has the whole track the player keeps asking, so it is told which it has.

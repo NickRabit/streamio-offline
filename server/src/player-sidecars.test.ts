@@ -213,3 +213,23 @@ test("a conversion that needs the source gets it: release stops the reader but k
     assert.equal(cues!.complete, false);
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("the viewer's own correction holds the cues back, or brings them forward", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-delay-"));
+  const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
+    await writeFile(file, `WEBVTT\n\n${cue(3100, 3200, "spoken")}\n\n`);
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  });
+  try {
+    sidecars.ensure("session", directory, 0, 3000, async () => []);
+    const revision = sidecars.revision("session");
+    while (!(await sidecars.read("session", revision, 3000))) await tick();
+    const plain = await sidecars.read("session", revision, 3000);
+    assert.match(plain!.text, /00:01:40\.000 --> 00:03:20\.000/);
+    // Half a second later on the picture, and a quarter of a second earlier.
+    const later = await sidecars.read("session", revision, 3000, 0.5);
+    assert.match(later!.text, /00:01:40\.500 --> 00:03:20\.500/);
+    const earlier = await sidecars.read("session", revision, 3000, -0.25);
+    assert.match(earlier!.text, /00:01:39\.750 --> 00:03:19\.750/);
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});

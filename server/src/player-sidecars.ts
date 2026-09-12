@@ -146,7 +146,7 @@ export class PlayerSidecars {
 
   /** The cues are written with source timestamps, so they are shifted to the playing
    *  generation here rather than extracted again for every position. */
-  async read(id: string, revision: string | undefined, offset: number): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
+  async read(id: string, revision: string | undefined, offset: number, delay = 0): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
     const job = this.jobs.get(id);
     if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
     let raw: string;
@@ -161,8 +161,14 @@ export class PlayerSidecars {
         return undefined;
       }
     }
-    if (!job.served) { job.served = true; log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete }); }
-    const shifted = offset > 0 ? shiftVtt(text, offset) : text;
+    if (!job.served) {
+      job.served = true;
+      const first = text.split(/\n\n+/).find((block) => block.includes("-->"))?.split("\n")[0];
+      log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete, from: Math.round(offset), delay, first });
+    }
+    // The delay is the viewer's own correction: a positive one holds the cues back.
+    const shift = offset - delay;
+    const shifted = shift !== 0 ? shiftVtt(text, shift) : text;
     return { text: shifted, complete: job.complete, coverage: job.complete ? Infinity : job.coverage };
   }
 

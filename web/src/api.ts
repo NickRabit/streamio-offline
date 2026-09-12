@@ -154,4 +154,7 @@ export async function saveToDevice(payload: { title?: string; stream?: Stream; m
   return prepared.filename;
 }
 
-export const subtitleUrl = (subtitleId: string, offset = 0) => `/api/subtitle/${encodeURIComponent(subtitleId)}${offset ? `?offset=${offset.toFixed(3)}` : ""}`;
+export const subtitleUrl = (subtitleId: string, offset = 0, delay = 0) => {
+  const query = [offset ? `offset=${offset.toFixed(3)}` : "", delay ? `delay=${delay.toFixed(2)}` : ""].filter(Boolean).join("&");
+  return `/api/subtitle/${encodeURIComponent(subtitleId)}${query ? `?${query}` : ""}`;
+};

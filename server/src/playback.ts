@@ -536,10 +536,10 @@ export class PlaybackManager {
     };
   }
 
-  async sidecar(id: string, revision: string | undefined, offset: number) {
+  async sidecar(id: string, revision: string | undefined, offset: number, delay = 0) {
     const session = this.sessions.get(id);
     if (!session || session.subtitleTrack === null) return undefined;
-    const cues = await this.sidecars.read(id, revision, offset);
+    const cues = await this.sidecars.read(id, revision, offset, delay);
     if (!cues) return undefined;
     session.claimed = true;
     session.lastAccess = Date.now();

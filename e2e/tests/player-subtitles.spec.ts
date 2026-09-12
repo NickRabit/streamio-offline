@@ -33,6 +33,18 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   await expect(page.locator(".player-subtitles")).toHaveText("Whole subtitle");
   await video.locator("track").dispatchEvent("error", { bubbles: false });
   await expect(page.locator(".player-error")).toHaveCount(0);
+  // The viewer's own correction rides in the address, so the element reloads the cues with it.
+  await page.locator("button.player-settings-toggle").click({ force: true });
+  await page.getByRole("button", { name: "Titulky později" }).click();
+  await page.getByRole("button", { name: "Titulky později" }).click();
+  await expect(video.locator("track")).toHaveAttribute("src", /&delay=0\.50$/);
+  await expect(page.getByRole("button", { name: "Zpět na sedící" })).toBeEnabled();
+  await page.getByRole("button", { name: "Titulky dřív" }).click();
+  await expect(video.locator("track")).toHaveAttribute("src", /&delay=0\.25$/);
+  await page.getByRole("button", { name: "Zpět na sedící" }).click();
+  await expect(video.locator("track")).not.toHaveAttribute("src", /delay=/);
+  await page.getByRole("button", { name: "Zavřít nastavení" }).click();
+
   expect((await request.post(`/api/playback/${id}/ping`)).status()).toBe(204);
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0);
   await page.getByRole("button", { name: "Zavřít přehrávač", exact: true }).click();

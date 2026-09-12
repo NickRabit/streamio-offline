@@ -189,6 +189,9 @@ const trackLabel = (track: Track) => {
   return `${parts.join(" · ")} (${track.codec})`;
 };
 
+const SUBTITLE_DELAY_STEP_S = 0.25;
+const SUBTITLE_DELAY_LIMIT_S = 30;
+
 export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext, open, title, stream, subtitles, subtitleLanguage, progressKey, progressPoster, favorite, onToggleFavorite, onDownload, onDeviceDownload, onClose }: Props) {
   // Subscribes the whole overlay to the language, so a switch behind it redraws every label.
   useI18n();
@@ -219,6 +222,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   // The reader is still working through the film, so the track is attached again
   // whenever the picture is about to catch up with the cues it already has.
   const [sidecarPass, setSidecarPass] = useState(0);
+  /** What the viewer dialled in: a positive delay holds the cues back against the picture. */
+  const [subtitleDelay, setSubtitleDelay] = useState(0);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
@@ -439,6 +444,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   };
 
   const showTime = (value: number) => { timeRef.current = value; setTime(value); };
+  const nudgeSubtitlesRef = useRef((_by: number) => {});
 
   /** Shared description of the session: without it an error report is a bare "it did not play". */
   const context = () => ({
@@ -465,7 +471,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false); setSidecarPass(0);
+    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false); setSidecarPass(0); setSubtitleDelay(0);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there.
     (async () => {
@@ -681,6 +687,14 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (target !== null) setQualityHint(target);
   };
 
+  /** Steps small enough to land on the line, large enough to get there quickly. */
+  const nudgeSubtitles = (by: number) => {
+    setSubtitlesHidden(false);
+    setSubtitleDelay((value) => Math.max(-SUBTITLE_DELAY_LIMIT_S, Math.min(SUBTITLE_DELAY_LIMIT_S, Math.round((value + by) * 100) / 100)));
+  };
+
+  nudgeSubtitlesRef.current = nudgeSubtitles;
+
   const chooseSubtitle = async (value: string) => {
     // Touching the picker is an explicit instruction, so it always ends the quick hide:
     // the chosen track shows up right away and turning subtitles off clears the crossed icon.
@@ -848,6 +862,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       else if (event.key === "ArrowLeft") { event.preventDefault(); void seekTo(timeRef.current - 10); }
       else if (event.key === "ArrowRight") { event.preventDefault(); void seekTo(timeRef.current + 10); }
       else if (event.key === "c" || event.key === "t") { event.preventDefault(); setSubtitlesHidden((value) => !value); }
+      else if (event.key === ",") { event.preventDefault(); nudgeSubtitlesRef.current(-SUBTITLE_DELAY_STEP_S); }
+      else if (event.key === ".") { event.preventDefault(); nudgeSubtitlesRef.current(SUBTITLE_DELAY_STEP_S); }
       else if (event.key === "f") void toggleFullscreen();
       else if (event.key === "Escape" && !document.fullscreenElement) closePlayer();
     };
@@ -910,8 +926,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           abandon(t("player.browserRefused"));
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={`${session.sidecarUrl}:${sidecarPass}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
-          : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
+          ? <track key={`${session.sidecarUrl}:${sidecarPass}:${subtitleDelay}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarPass}${subtitleDelay ? `&delay=${subtitleDelay.toFixed(2)}` : ""}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
+          : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}:${subtitleDelay}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset, subtitleDelay)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
       {resumedFrom > 0 && <div className="player-resumed">{t("player.resumedAt", { time: fmt(resumedFrom) })}<button onClick={() => { setResumedFrom(0); void seekTo(0); }}>{t("player.playFromStart")}</button></div>}
@@ -979,6 +995,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {session?.subtitleTracks.map((track) => <option key={`e${track.index}`} value={`embedded:${track.index}`}>{t("player.embedded")} · {trackLabel(track)}</option>)}
           {addonSubtitles.map((item, index) => <option key={`a${index}`} value={`addon:${index}`}>{t("player.fromAddon")} · {label(item.lang)}{item.addonName ? ` · ${item.addonName}` : ""}</option>)}
         </select>
+      </div>}
+
+      {(subtitleValue !== "off" || session?.sidecarUrl) && <div className="track-picker subtitle-delay">
+        <Captions />
+        <span className="subtitle-delay-label">{t("player.subtitleDelay")}</span>
+        <button aria-label={t("player.subtitleEarlier")} title={t("player.subtitleEarlierKey")} onClick={() => nudgeSubtitles(-SUBTITLE_DELAY_STEP_S)}>−</button>
+        <output aria-live="off">{subtitleDelay ? `${subtitleDelay > 0 ? "+" : ""}${subtitleDelay.toFixed(2)} s` : t("player.subtitleInStep")}</output>
+        <button aria-label={t("player.subtitleLater")} title={t("player.subtitleLaterKey")} onClick={() => nudgeSubtitles(SUBTITLE_DELAY_STEP_S)}>+</button>
+        <button className="subtitle-delay-reset" disabled={!subtitleDelay} aria-label={t("player.subtitleDelayReset")} onClick={() => setSubtitleDelay(0)}><RotateCcw /></button>
       </div>}
 
       {session?.video && <span className="codec-badge"><Gauge /> {session.video}{session.audio ? ` · ${session.audio}` : ""}</span>}

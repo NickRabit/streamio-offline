@@ -244,7 +244,10 @@ measured between 0.05 s and 0.37 s on one film, a whole keyframe interval on spa
 encodes. Where that landing is cannot be read while the conversion runs: FFmpeg holds
 a side output of its own until it exits, whatever the format and whatever the flushing
 flags, and asking the source directly costs a second connection, which is what these
-hosts refuse. What is left of the offset is for the viewer to dial out.
+hosts refuse. What is left of the offset is for the viewer to dial out: the player's subtitle timing
+steps by a quarter of a second, with the comma and full stop keys, and rides in the
+address of both the embedded cues and the addon ones, so the element simply reloads
+them. It resets with the film.
 
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
