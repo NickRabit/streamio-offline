@@ -310,6 +310,16 @@ never written cannot be filtered back into view, which made the level in the log
 look unrelated to anything. The panel sets what is recorded, the filter above it decides
 what is shown, and the download carries whatever the filter is showing.
 
+FFmpeg answers SIGTERM by exiting 255 without a word, which is what a conversion stopped
+for a seek looks like from the outside -- indistinguishable from one that died on its own,
+and it was read as the latter for a while: the log warned about it and the session carried
+an error that never happened. A process we asked to stop is now remembered as such.
+
+A seek opens a new connection, and these hosts refuse those first. The conversion that is
+playing is therefore left running until the new position is open, and if it cannot be
+opened the session goes back to it: the viewer loses the jump rather than the film, and
+the old generation is kept off the cleanup that would otherwise delete what is playing.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

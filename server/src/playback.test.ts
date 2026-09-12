@@ -823,3 +823,37 @@ test("a film left closed is swept, a taken-over one is not", async () => {
   manager.reap();
   assert.deepEqual(stopped, [session.id]);
 });
+
+test("a position the source will not open costs the seek, not the film", async () => {
+  const manager = new PlaybackManager("/tmp/test-seek-keeps-playing") as any;
+  manager.inspect = async () => ({ container: "matroska", duration: 7000,
+    video: { codec: "hevc" }, audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [],
+  });
+  const alive = { exitCode: null, signalCode: null, kill: () => {}, once: () => {} };
+  let refuse = false;
+  manager.spawnAt = async (session: any, offset: number) => {
+    if (refuse) throw new Error("The source could not be opened: it did not answer, or it refused the connection.");
+    session.offset = offset; session.generation += 1; session.process = alive;
+    session.directory = `/tmp/test-seek-keeps-playing/${session.generation}`;
+    return `/api/playback/${session.id}/${session.generation}/master.m3u8`;
+  };
+  manager.killChild = async () => {};
+  const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 900 });
+  const playing = { generation: (manager.sessions.get(started.id) as any).generation, url: started.url };
+
+  refuse = true;
+  await assert.rejects(() => manager.seek(started.id, 4000), /could not be opened/);
+  const session = manager.sessions.get(started.id) as any;
+  // The film is where it was, on the generation that is still running and still has its connection.
+  assert.equal(session.offset, 900);
+  assert.equal(session.generation, playing.generation);
+  assert.equal(session.process, alive);
+  assert.equal(session.stopped, false);
+
+  // And the viewer can try again once the source is willing.
+  refuse = false;
+  const moved = await manager.seek(started.id, 4000);
+  assert.equal(moved.offset, 4000);
+  assert.notEqual(moved.url, playing.url);
+});
