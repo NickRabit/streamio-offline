@@ -86,3 +86,19 @@ export function streamBadge(stream: Stream): string {
 export function canQueue(stream: Stream, debridConfigured: boolean): boolean {
   return stream.playable || (stream.kind === "torrent" && debridConfigured);
 }
+
+/** Sources keep arriving after the first ones are shown, and a later one can rank higher
+ *  than the one already picked. Moving the pick is right while the viewer is still looking
+ *  at the list and wrong once they are watching: the player would stop the session it is
+ *  playing and start the film again on the new source. */
+export function repickStream<T>(state: {
+  playing: boolean; picked: boolean; pending: number;
+  visible: readonly T[]; selected: T | null; preferred: T | null;
+}): { move: true; to: T | null } | { move: false } {
+  if (!state.visible.length) return state.selected !== null && !state.playing ? { move: true, to: null } : { move: false };
+  if (state.playing) return { move: false };
+  if (!state.selected || !state.visible.includes(state.selected)) return { move: true, to: state.preferred };
+  // A better source may arrive while paging, but the viewer's own pick is never overridden.
+  if (!state.picked && state.pending > 0 && state.preferred && state.selected !== state.preferred) return { move: true, to: state.preferred };
+  return { move: false };
+}

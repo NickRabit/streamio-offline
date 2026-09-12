@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, type StreamFilters } from "./streams";
+import { arrangeStreams, canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, streamText, visibleCatalogStreams, repickStream, type StreamFilters } from "./streams";
 import type { Stream } from "./types";
 
 const stream = (parts: Partial<Stream>): Stream => ({ sourceId: "source", kind: "remote", playable: true, ...parts });
@@ -179,5 +179,34 @@ describe("torrent listing", () => {
   it("does not treat a torrent as playable", () => {
     expect(http.playable).toBe(true);
     expect(torrent.playable).toBe(false);
+  });
+});
+
+describe("repickStream", () => {
+  const [first, second, third] = ["a", "b", "c"];
+  const base = { playing: false, picked: false, pending: 0, visible: [first, second], selected: first, preferred: first };
+
+  it("moves the pick to the first source left when a filter removed the chosen one", () => {
+    expect(repickStream({ ...base, visible: [second, third], selected: first, preferred: second })).toEqual({ move: true, to: second });
+  });
+
+  it("follows a better source that arrives while the viewer is still looking at the list", () => {
+    expect(repickStream({ ...base, pending: 2, preferred: second })).toEqual({ move: true, to: second });
+  });
+
+  it("never overrides a source the viewer picked themselves", () => {
+    expect(repickStream({ ...base, picked: true, pending: 2, preferred: second })).toEqual({ move: false });
+  });
+
+  it("leaves the source alone once the film is playing on it", () => {
+    // Moving it would take the session out from under the player, which stops it and starts again.
+    expect(repickStream({ ...base, playing: true, pending: 2, preferred: second })).toEqual({ move: false });
+    expect(repickStream({ ...base, playing: true, visible: [second, third], selected: first, preferred: second })).toEqual({ move: false });
+    expect(repickStream({ ...base, playing: true, visible: [], selected: first, preferred: null })).toEqual({ move: false });
+  });
+
+  it("clears the pick when nothing is left to play and nobody is watching", () => {
+    expect(repickStream({ ...base, visible: [], selected: first, preferred: null })).toEqual({ move: true, to: null });
+    expect(repickStream({ ...base, visible: [], selected: null, preferred: null })).toEqual({ move: false });
   });
 });

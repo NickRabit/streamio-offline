@@ -1903,7 +1903,12 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
   quality: req.body.quality === undefined ? undefined : (req.body.quality === null ? null : Number(req.body.quality)),
   time: Number(req.body.time) || 0,
 })))));
-app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
+app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
+  // Who closed a session is the difference between a viewer leaving and the server giving up.
+  log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentSession(req)?.username });
+  await playback.stop(String(req.params.id));
+  res.status(204).end();
+}));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
   const offset = Math.max(0, Number(req.query.offset) || 0);
   const requestedPosition = Number(req.query.position);

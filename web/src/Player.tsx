@@ -445,6 +445,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   const showTime = (value: number) => { timeRef.current = value; setTime(value); };
   const nudgeSubtitlesRef = useRef((_by: number) => {});
+  // Read in the teardown below, which runs before the new render's props are visible.
+  const openRef = useRef(open);
+  openRef.current = open;
 
   /** Shared description of the session: without it an error report is a bare "it did not play". */
   const context = () => ({
@@ -506,7 +509,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (bufferTimerRef.current !== undefined) { clearTimeout(bufferTimerRef.current); bufferTimerRef.current = undefined; }
       if (seekEpochRef.current === epoch) { seekEpochRef.current += 1; pendingSeekRef.current = null; seekingRef.current = false; seekInFlightRef.current = false; }
       video.pause(); video.removeAttribute("src"); video.load();
-      const id = sessionRef.current; sessionRef.current = null; if (id) void api.stopPlayback(id).catch(() => undefined);
+      const id = sessionRef.current; sessionRef.current = null;
+      if (id) {
+        // The session is the server's only view of what is playing, so say who ended it and why.
+        // A teardown while the player is still open means something below it changed the film.
+        report("INFO", "Playback released by the player", { session: id, reason: openRef.current ? "the source or the title changed" : "the player was closed", title, stream: stream?.kind });
+        void api.stopPlayback(id).catch(() => undefined);
+      }
     };
   }, [open, stream, progressKey]);
 
