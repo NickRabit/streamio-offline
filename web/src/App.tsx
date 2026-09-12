@@ -15,7 +15,7 @@ import { report } from "./diagnostics";
 import { groupLog, parseLog, type LogGroup, type LogLine } from "./log-groups";
 import { label, titleLanguage } from "./languages";
 import { languageName, locale, localeTag, serverText, setLocale, t, useI18n, type Key, type Locale } from "./i18n";
-import { canQueue, pickDefaultStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
+import { canQueue, pickDefaultStream, repickStream, streamBadge, streamLanguages, streamSize, visibleCatalogStreams, type StreamSort } from "./streams";
 import type { Addon, BuildInfo, Diagnostics, BrowseItem, BrowseResult, LibrarySort, ProgressEntry, WatchlistEntry, AddonDownloadSettings, Catalog, Download as DownloadJob, DownloadSelection, Inspection, Meta, QueueHalt, ScanState, Session, Settings as AppSettings, SettingsPatch, Stream, Subtitle, Video } from "./types";
 
 /** Library browsing choices survive both a section switch and a browser restart.
@@ -651,6 +651,7 @@ export function App() {
       setLocalPoster(poster);
       setLocalTitle(title);
       setLocalStream({ ...source, localPath: path });
+      pickedRef.current = true;
       setPlayerOpen(true);
     } catch (error) { fail(error); }
   };
@@ -791,14 +792,15 @@ export function App() {
     if (streamLanguage && !counts.has(streamLanguage)) counts.set(streamLanguage, 0);
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [byAddon, streamLanguage, metaLanguage]);
-  // When a filter removes the chosen source, the pick moves to the first one left.
+  // When a filter removes the chosen source, the pick moves to the first one left -- unless
+  // the film is already playing on it, when moving it would restart playback on another source.
   useEffect(() => {
-    if (!visibleStreams.length) { if (selectedStream) setSelectedStream(null); return; }
-    const preferred = pickDefaultStream(visibleStreams);
-    if (!selectedStream || !visibleStreams.includes(selectedStream)) { setSelectedStream(preferred ?? null); return; }
-    // A better source may arrive while paging, but the viewer's own pick is never overridden.
-    if (!pickedRef.current && pendingSources > 0 && preferred && selectedStream !== preferred) setSelectedStream(preferred);
-  }, [visibleStreams, pendingSources]);
+    const next = repickStream({
+      playing: playerOpen, picked: pickedRef.current, pending: pendingSources,
+      visible: visibleStreams, selected: selectedStream, preferred: pickDefaultStream(visibleStreams) ?? null,
+    });
+    if (next.move) setSelectedStream(next.to);
+  }, [visibleStreams, pendingSources, playerOpen]);
 
   /** The built-in lists are computed from memory; they must not go through a full load,
    *  which would drop the selected title. */
@@ -1041,7 +1043,7 @@ export function App() {
               <div className="source-footer"><div className="source-info"><Subtitles/> {t("sources.subtitleCount", { count: subtitles.length + (selectedStream?.subtitles?.length || 0) })}
                 {inspection && <> · <b>{t("sources.audioInFile")}</b> {inspection.audioTracks.length ? inspection.audioTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}
                 · <b>{t("sources.subtitlesInFile")}</b> {inspection.subtitleTracks.length ? inspection.subtitleTracks.map((track, index) => <em className="lang-badge" key={index}>{label(track.language)}</em>) : "—"}</>}
-                {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => setPlayerOpen(true)}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div>
+                {selectedStream?.playable && !inspection && <> · {t("sources.probing")}</>}</div><div className="actions"><button className="primary" disabled={!canPlay} onClick={() => { pickedRef.current = true; setPlayerOpen(true); }}><CirclePlay/> {t("player.play")}</button><button disabled={!selectedStream || !canQueue(selectedStream, settings.realDebridConfigured)} onClick={() => void enqueue()}><HardDrive/> {t("save.toLibrary")}</button><button disabled={!canPlay} onClick={() => void downloadStreamToDevice()}><Download/> {t("save.toDevice")}</button></div></div>
             </div>}
             </div>
           </> : <Empty icon={<Film/>} title={t("catalog.pickTitle")} text={t("catalog.pickText")}/>}</section></div>

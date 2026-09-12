@@ -262,6 +262,17 @@ its edge and align it with the first buffered segment: a one-segment live reserv
 the playhead at the last few milliseconds of a newly published fragment, which immediately
 stalls after a seek on a high-bitrate file even though earlier media is already available.
 
+Sources arrive one addon at a time, and a later one can rank above the one already
+chosen. While the viewer is looking at the list, following it is right; once the film is
+playing on it, moving the pick takes the session out from under the player, which stops
+it on the server and starts the film again on another source -- a seek in flight then
+comes back as a session that no longer exists. `repickStream` holds the pick still while
+the player is open, and pressing Play counts as the viewer's own choice.
+
+Who ended a session is worth having in the log, since a stop is otherwise indistinguishable
+from a server that gave up: the player reports what it released and why, and the server
+records that the player asked, beside the lines the sweep writes when it closes one itself.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
