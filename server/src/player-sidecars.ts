@@ -5,7 +5,12 @@ import path from "node:path";
 import { promisify } from "node:util";
 
 type Extract = (args: string[], signal: AbortSignal) => Promise<unknown>;
-const extract: Extract = (args, signal) => promisify(execFile)("ffmpeg", args, { signal, timeout: 45_000, killSignal: "SIGKILL" });
+const extract: Extract = async (args, signal) => {
+  const pending = promisify(execFile)("ffmpeg", args, { signal, timeout: 45_000, killSignal: "SIGKILL" });
+  const closed = new Promise<void>((resolve) => pending.child.once("close", () => resolve()));
+  try { return await pending; }
+  finally { await closed; }
+};
 interface Job { revision: string; file: string; controller: AbortController; done: Promise<void>; ready: boolean }
 
 export class PlayerSidecars {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,7 +7,7 @@ import { PlayerSidecars } from "./player-sidecars.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 
-test("repeated seeks cancel obsolete subtitle readers and publish only the latest revision", async () => {
+test("repeated seeks cancel obsolete subtitle readers and publish only the latest revision", { timeout: 5000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-seek-"));
   const calls: { signal: AbortSignal; finish: () => void }[] = [];
   let active = 0;
@@ -41,7 +41,7 @@ test("repeated seeks cancel obsolete subtitle readers and publish only the lates
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
 
-test("closing playback waits for the subtitle reader to stop", async () => {
+test("closing playback waits for the subtitle reader to stop", { timeout: 5000 }, async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-stop-"));
   let active = false;
   const sidecars = new PlayerSidecars(async (_args, signal) => {
@@ -57,4 +57,26 @@ test("closing playback waits for the subtitle reader to stop", async () => {
     assert.equal(sidecars.file("session"), undefined);
     assert.equal(sidecars.revision("session"), undefined);
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("the default extractor waits for the actual child exit after cancellation", { timeout: 5000 }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-process-"));
+  const originalPath = process.env.PATH;
+  const sidecars = new PlayerSidecars();
+  try {
+    const executable = path.join(directory, "ffmpeg");
+    await writeFile(executable, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.argv.at(-1) + ".pid", String(process.pid));\nsetInterval(() => {}, 1000);\n');
+    await chmod(executable, 0o755);
+    process.env.PATH = `${directory}${path.delimiter}${originalPath}`;
+    sidecars.start("session", directory, async () => []);
+    const marker = path.join(directory, `sidecar-${sidecars.revision("session")}.vtt.pid`);
+    let pid = 0;
+    while (!pid) { pid = Number(await readFile(marker, "utf8").catch(() => "0")); await tick(); }
+    await sidecars.stop("session");
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+  } finally {
+    await sidecars.stop("session");
+    process.env.PATH = originalPath;
+    await rm(directory, { recursive: true, force: true });
+  }
 });
