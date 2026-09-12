@@ -290,6 +290,14 @@ A film taken back has to be the same film with the same tracks, the same quality
 the same client capabilities, or it starts fresh; another film starting closes the one
 left running; and anything nobody came back for is swept.
 
+A host that stops answering altogether is a different thing from one that drops a
+connection, and it has to be treated as one: three tries against thirty seconds of
+silence, and the restart's own second attempt behind them, left a seek pending for the
+best part of a minute, which reads as a player that has stopped taking clicks. A source
+that has just gone quiet gets one short chance instead, and the tries come back as soon
+as it answers again. The addon fixture can take a request and never answer, which is
+how the two are told apart in the suite.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

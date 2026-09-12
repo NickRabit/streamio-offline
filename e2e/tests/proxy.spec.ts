@@ -255,3 +255,24 @@ test("a source that drops the connection is asked again instead of failing the p
     await request.delete(`/api/playback/${playback.id}`);
   }
 });
+
+test("a source that has gone quiet is given up on quickly, not after a minute of retries", async ({ request }) => {
+  // The first attempt waits out the full header timeout on purpose; that is the point of the test.
+  test.setTimeout(120_000);
+  const playback = await start(request);
+  try {
+    // The host takes the request and never answers, which is what these do once they are upset.
+    await control(request, "hang");
+    const first = Date.now();
+    expect((await request.get(playback.url, { headers: { range: "bytes=0-31" } })).status()).toBe(400);
+    const waited = Date.now() - first;
+    // The next viewer's click must not wait for the whole ordeal again.
+    const second = Date.now();
+    expect((await request.get(playback.url, { headers: { range: "bytes=32-63" } })).status()).toBe(400);
+    const again = Date.now() - second;
+    expect(again, `first ${waited} ms, second ${again} ms`).toBeLessThan(Math.max(12_000, waited / 2));
+  } finally {
+    await control(request, "video");
+    await request.delete(`/api/playback/${playback.id}`);
+  }
+});
