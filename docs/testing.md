@@ -273,6 +273,12 @@ Who ended a session is worth having in the log, since a stop is otherwise indist
 from a server that gave up: the player reports what it released and why, and the server
 records that the player asked, beside the lines the sweep writes when it closes one itself.
 
+The hosts behind remote films drop a connection now and then, on a range deep into a
+large file as readily as on the first byte. Handed straight to FFmpeg that ends the
+conversion, and the viewer's seek with it, so the proxy asks again -- three tries, a
+short wait between them -- and only a timeout or a viewer who has left is given up on at
+once. The addon fixture can hang up once on demand, which is how the retry is tested.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
