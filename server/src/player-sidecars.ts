@@ -1,21 +1,37 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { log } from "./logger.js";
 import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
-type Extract = (args: string[], signal: AbortSignal) => Promise<unknown>;
-const extract: Extract = async (args, signal) => {
-  // Reading subtitles out of a remote film means pulling the rest of the file through
-  // the proxy, which takes minutes on a slow link. Only the abort ends it early; the
-  // timeout is a backstop against an FFmpeg that hung instead of finishing.
-  const pending = promisify(execFile)("ffmpeg", args, { signal, timeout: 30 * 60_000, killSignal: "SIGKILL" });
-  const closed = new Promise<void>((resolve) => pending.child.once("close", () => resolve()));
-  try { return await pending; }
-  finally { await closed; }
-};
+type Extract = (args: string[], file: string, signal: AbortSignal) => Promise<unknown>;
+
+/** Through a pipe, not "-y file": writing to a file FFmpeg keeps the cues in its own
+ *  buffer and the sidecar stays empty until the whole film has been read, which on a
+ *  remote source is minutes. A pipe is written through, so the cues land as they come. */
+const extract: Extract = (args, file, signal) => new Promise<void>((resolve, reject) => {
+  const out = createWriteStream(file);
+  out.once("error", reject);
+  out.once("open", () => {
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", out, "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-2000); });
+    const kill = () => child.kill("SIGKILL");
+    // A backstop against an FFmpeg that hung; the reader is normally ended by the abort.
+    const backstop = setTimeout(kill, 30 * 60_000);
+    signal.addEventListener("abort", kill, { once: true });
+    child.once("error", (error) => { clearTimeout(backstop); out.end(); reject(error); });
+    child.once("close", (code, killedBy) => {
+      clearTimeout(backstop);
+      signal.removeEventListener("abort", kill);
+      out.end();
+      if (signal.aborted || code === 0) resolve();
+      else reject(new Error(`ffmpeg exited with ${code ?? killedBy}: ${stderr.slice(-200)}`));
+    });
+  });
+});
 
 /** Cues have to reach this far past the playhead before the track is worth attaching. */
 export const SIDECAR_LEAD_S = 120;
@@ -56,7 +72,7 @@ export class PlayerSidecars {
         await mkdir(directory, { recursive: true });
         const input = await args(start);
         if (job.controller.signal.aborted) return;
-        await this.run([...input, "-y", job.file], job.controller.signal);
+        await this.run([...input, "-f", "webvtt", "pipe:1"], job.file, job.controller.signal);
         job.complete = !job.controller.signal.aborted;
         if (job.complete) { job.coverage = Infinity; log("INFO", "Embedded subtitles read to the end", { id, track, seconds: Math.round((Date.now() - startedAt) / 1000) }); }
       } catch (error) {
@@ -71,7 +87,7 @@ export class PlayerSidecars {
 
   /** The cues are written with source timestamps, so they are shifted to the playing
    *  generation here rather than extracted again for every position. */
-  async read(id: string, revision: string | undefined, offset: number): Promise<{ text: string; complete: boolean } | undefined> {
+  async read(id: string, revision: string | undefined, offset: number): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
     const job = this.jobs.get(id);
     if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
     let raw: string;
@@ -87,7 +103,7 @@ export class PlayerSidecars {
     }
     if (!job.served) { job.served = true; log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete }); }
     const shifted = offset > 0 ? shiftVtt(text, offset) : text;
-    return { text: shifted, complete: job.complete };
+    return { text: shifted, complete: job.complete, coverage: job.complete ? Infinity : job.coverage };
   }
 
   async stop(id: string) {

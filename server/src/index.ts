@@ -1904,8 +1904,11 @@ app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
   );
   if (!cues) return res.status(404).end();
   // Until the reader has the whole track the player keeps asking, so it is told which it has.
+  // How far the cues reach: the player re-reads before the picture catches up with them.
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store")
-    .setHeader("x-sidecar-complete", cues.complete ? "1" : "0").send(cues.text);
+    .setHeader("x-sidecar-complete", cues.complete ? "1" : "0")
+    .setHeader("x-sidecar-coverage", Number.isFinite(cues.coverage) ? String(Math.round(cues.coverage)) : "")
+    .send(cues.text);
 }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));

@@ -12,7 +12,7 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   });
   let complete = false;
   await page.route("**/sidecar.vtt?revision=test**", (route) => route.fulfill({
-    contentType: "text/vtt", headers: { "x-sidecar-complete": complete ? "1" : "0" },
+    contentType: "text/vtt", headers: { "x-sidecar-complete": complete ? "1" : "0", "x-sidecar-coverage": "600" },
     body: `WEBVTT\n\n00:00:00.000 --> 00:01:00.000\n${complete ? "Whole subtitle" : "Embedded subtitle"}\n`,
   }));
   await page.goto("/");
@@ -25,11 +25,11 @@ test("embedded subtitle URLs load directly and a subtitle error never stops the 
   await expect(video).toHaveAttribute("disableRemotePlayback", "");
   await expect(video).toHaveAttribute("x-webkit-airplay", "deny");
   await expect(page.locator(".airplay-toggle")).toHaveCount(0);
-  await expect(video.locator("track")).toHaveAttribute("src", /sidecar\.vtt\?revision=test&offset=0\.000&pass=lead$/);
+  await expect(video.locator("track")).toHaveAttribute("src", /sidecar\.vtt\?revision=test&offset=0\.000&pass=0$/);
   await expect(page.locator(".player-subtitles")).toHaveText("Embedded subtitle");
   // The reader finishes behind the playhead; the track is attached again with everything it found.
   complete = true;
-  await expect(video.locator("track")).toHaveAttribute("src", /&pass=full$/, { timeout: 15_000 });
+  await expect(video.locator("track")).toHaveAttribute("src", /&pass=1$/, { timeout: 15_000 });
   await expect(page.locator(".player-subtitles")).toHaveText("Whole subtitle");
   await video.locator("track").dispatchEvent("error", { bubbles: false });
   await expect(page.locator(".player-error")).toHaveCount(0);

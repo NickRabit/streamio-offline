@@ -1,8 +1,10 @@
 export const SIDECAR_POLL_MS = 250;
 export const SIDECAR_SETTLED_POLL_MS = 5_000;
 export const SIDECAR_REQUEST_MS = 15_000;
+/** How close the picture may get to the last cue before the track is read again. */
+export const SIDECAR_REFRESH_LEAD_S = 45;
 
-export interface SidecarState { ready: boolean; complete: boolean }
+export interface SidecarState { complete: boolean; pass: number }
 
 /** Safari gained AbortSignal.any only in 17.4, so a per-request timeout that also
  *  follows the caller's cancellation is wired by hand. */
@@ -17,17 +19,20 @@ function requestSignal(signal: AbortSignal, timeoutMs: number) {
   };
 }
 
-/** Reading subtitles out of a remote film takes as long as the source needs, so the
- *  player waits for the whole session instead of giving up on a deadline: first for
- *  cues to reach the playhead, then for the rest of the track behind them. */
+/** The server reads a film's subtitles as fast as the source allows, which is faster
+ *  than the film plays but not instant. The track is attached once the cues are ahead
+ *  of the picture, read again before the picture catches up with them, and a last time
+ *  when the reader has the rest. Each pass is a new attachment, so they stay rare. */
 export async function watchSidecar(
   url: string,
   signal: AbortSignal,
+  playhead: () => number,
   onState: (state: SidecarState) => void,
   fetcher: typeof fetch = (input, init) => fetch(input, init),
   delay: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 ): Promise<void> {
-  let ready = false;
+  let pass = -1;
+  let attached = -Infinity;
   while (!signal.aborted) {
     const request = requestSignal(signal, SIDECAR_REQUEST_MS);
     const response = await fetcher(url, { signal: request.signal }).catch(() => undefined);
@@ -37,10 +42,15 @@ export async function watchSidecar(
     if (response) void response.body?.cancel().catch(() => undefined);
     if (response?.ok) {
       const complete = response.headers.get("x-sidecar-complete") === "1";
-      if (!ready || complete) onState({ ready: true, complete });
-      ready = true;
+      const coverage = complete ? Infinity : Number(response.headers.get("x-sidecar-coverage") ?? "");
+      const caughtUp = playhead() > attached - SIDECAR_REFRESH_LEAD_S && coverage > attached;
+      if (pass < 0 || complete || caughtUp) {
+        pass += 1;
+        attached = Number.isFinite(coverage) ? coverage : Infinity;
+        onState({ complete, pass });
+      }
       if (complete) return;
     }
-    await delay(ready ? SIDECAR_SETTLED_POLL_MS : SIDECAR_POLL_MS);
+    await delay(pass < 0 ? SIDECAR_POLL_MS : SIDECAR_SETTLED_POLL_MS);
   }
 }

@@ -14,9 +14,9 @@ const cue = (from: number, to: number, text: string) => {
 test("a seek past everything the reader has written starts one at the new position", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-ahead-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args, signal) => {
+  const sidecars = new PlayerSidecars(async (args, file, signal) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(3100, 3400, "line")}\n\n`);
+    await writeFile(file, `WEBVTT\n\n${cue(3100, 3400, "line")}\n\n`);
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   });
   try {
@@ -38,9 +38,9 @@ test("a seek past everything the reader has written starts one at the new positi
 test("seeking forward keeps the reader that is already writing those cues", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-forward-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args) => {
+  const sidecars = new PlayerSidecars(async (args, file) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(3300, 5200, "line")}\n\n`);
+    await writeFile(file, `WEBVTT\n\n${cue(3300, 5200, "line")}\n\n`);
   });
   try {
     const args = async (start: number) => (start > 0 ? ["-ss", start.toFixed(3)] : []);
@@ -57,9 +57,9 @@ test("seeking forward keeps the reader that is already writing those cues", asyn
 test("a jump back before the reader's start, or another track, begins a new one", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-back-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args) => {
+  const sidecars = new PlayerSidecars(async (args, file) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(120, 125, "line")}\n\n`);
+    await writeFile(file, `WEBVTT\n\n${cue(120, 125, "line")}\n\n`);
   });
   try {
     const args = async (start: number) => (start > 0 ? ["-ss", start.toFixed(3)] : []);
@@ -80,10 +80,10 @@ test("a jump back before the reader's start, or another track, begins a new one"
 test("cues are held back until they reach past the playhead, then shifted to it", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-lead-"));
   let finish = () => {};
-  const sidecars = new PlayerSidecars(async (args, signal) => {
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n`);
+  const sidecars = new PlayerSidecars(async (args, file, signal) => {
+    await writeFile(file, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n`);
     await new Promise<void>((resolve) => { finish = resolve; signal.addEventListener("abort", () => resolve(), { once: true }); });
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n${cue(3000 + SIDECAR_LEAD_S + 5, 3000 + SIDECAR_LEAD_S + 9, "far")}\n\n`);
+    await writeFile(file, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n${cue(3000 + SIDECAR_LEAD_S + 5, 3000 + SIDECAR_LEAD_S + 9, "far")}\n\n`);
   });
   try {
     sidecars.ensure("session", directory, 0, 3000, async () => []);
@@ -101,8 +101,8 @@ test("cues are held back until they reach past the playhead, then shifted to it"
 
 test("a partly written cue is never handed to the player", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-partial-"));
-  const sidecars = new PlayerSidecars(async (args, signal) => {
-    await writeFile(args.at(-1)!, `WEBVTT\n\n${cue(3100, 3200, "complete")}\n\n00:53:30.000 --> `);
+  const sidecars = new PlayerSidecars(async (args, file, signal) => {
+    await writeFile(file, `WEBVTT\n\n${cue(3100, 3200, "complete")}\n\n00:53:30.000 --> `);
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   });
   try {
@@ -119,7 +119,7 @@ test("a partly written cue is never handed to the player", async () => {
 test("closing playback waits for the subtitle reader to stop", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-stop-"));
   let active = false;
-  const sidecars = new PlayerSidecars(async (_args, signal) => {
+  const sidecars = new PlayerSidecars(async (_args, _file, signal) => {
     active = true;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 20), { once: true }));
     active = false;
@@ -140,18 +140,26 @@ test("the default extractor waits for the actual child exit after cancellation",
   const sidecars = new PlayerSidecars();
   try {
     const executable = path.join(directory, "ffmpeg");
-    await writeFile(executable, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.argv.at(-1) + ".pid", String(process.pid));\nsetInterval(() => {}, 1000);\n');
+    await writeFile(executable, '#!/usr/bin/env node\nrequire("node:fs").writeFileSync(process.env.PID_MARKER, String(process.pid));\nprocess.stdout.write("WEBVTT\\n\\n");\nsetInterval(() => {}, 1000);\n');
     await chmod(executable, 0o755);
     process.env.PATH = `${directory}${path.delimiter}${originalPath}`;
+    const marker = path.join(directory, "reader.pid");
+    process.env.PID_MARKER = marker;
     sidecars.ensure("session", directory, 0, 0, async () => []);
-    const marker = path.join(directory, `sidecar-${sidecars.revision("session")}.vtt.pid`);
     let pid = 0;
     while (!pid) { pid = Number(await readFile(marker, "utf8").catch(() => "0")); await tick(); }
+    // FFmpeg keeps a file it writes itself buffered until it exits, so the cues come
+    // through its stdout: whatever it has written must be readable while it still runs.
+    const file = path.join(directory, `sidecar-${sidecars.revision("session")}.vtt`);
+    let written = "";
+    while (!written) { written = await readFile(file, "utf8").catch(() => ""); await tick(); }
+    assert.match(written, /WEBVTT/);
     await sidecars.stop("session");
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
   } finally {
     await sidecars.stop("session");
     process.env.PATH = originalPath;
+    delete process.env.PID_MARKER;
     await rm(directory, { recursive: true, force: true });
   }
 });

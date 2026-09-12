@@ -381,7 +381,7 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
   let spawned = false;
   manager.spawnAt = async () => { spawned = true; return "/nope"; };
   let extracted = 0;
-  manager.sidecars.run = async (_args: string[], signal: AbortSignal) => {
+  manager.sidecars.run = async (_args: string[], _file: string, signal: AbortSignal) => {
     extracted += 1;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   };
@@ -410,7 +410,7 @@ test("mkv with subtitles still remuxes", async () => {
     return "/hls";
   };
   let extracted = 0;
-  manager.sidecars.run = async (_args: string[], signal: AbortSignal) => {
+  manager.sidecars.run = async (_args: string[], _file: string, signal: AbortSignal) => {
     extracted += 1;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   };
@@ -610,10 +610,10 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   const events: string[] = [];
   const readers: number[] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
-  manager.sidecars.run = async (args: string[], signal: AbortSignal) => {
+  manager.sidecars.run = async (args: string[], file: string, signal: AbortSignal) => {
     readers.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     // What FFmpeg would have written by then: cues with the source's own timestamps.
-    await writeFile(args.at(-1)!, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
+    await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 5245, subtitleLanguage: "cs" });

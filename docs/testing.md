@@ -227,6 +227,11 @@ timeout that keeps it working on Safari without `AbortSignal.any`. The browser
 regression checks that embedded subtitles attach, attach again when complete,
 and that a subtitle failure leaves playback running.
 
+FFmpeg keeps a file it writes itself buffered until it exits, so a sidecar written
+that way stays empty for as long as the film takes to read -- minutes on a remote
+source, which is indistinguishable from subtitles that never work. The cues come
+through its stdout instead, and a unit test reads them while the reader still runs.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
