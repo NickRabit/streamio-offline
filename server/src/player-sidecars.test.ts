@@ -92,9 +92,9 @@ test("cues are held back until they reach past the playhead, then shifted to it"
     await tick();
     assert.equal(await sidecars.read("session", revision, 3000), undefined, "a cue the picture has already passed is nothing to attach");
     finish();
+    // The cues can be readable a moment before the reader has finished with the film.
     let cues;
-    while (!(cues = await sidecars.read("session", revision, 3000))) await tick();
-    assert.equal(cues.complete, true);
+    while (!(cues = await sidecars.read("session", revision, 3000)) || !cues.complete) await tick();
     assert.match(cues.text, /00:00:10\.000 --> 00:00:14\.000\nahead/);
     assert.equal(await sidecars.read("session", "someone-elses-revision", 3000), undefined);
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
