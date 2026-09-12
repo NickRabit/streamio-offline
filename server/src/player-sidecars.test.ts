@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PlayerSidecars, SIDECAR_LEAD_S } from "./player-sidecars.js";
+import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S } from "./player-sidecars.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const cue = (from: number, to: number, text: string) => {
@@ -14,7 +14,7 @@ const cue = (from: number, to: number, text: string) => {
 test("a seek past everything the reader has written starts one at the new position", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-ahead-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args, file, signal) => {
+  const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     await writeFile(file, `WEBVTT\n\n${cue(3100, 3400, "line")}\n\n`);
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -38,7 +38,7 @@ test("a seek past everything the reader has written starts one at the new positi
 test("seeking forward keeps the reader that is already writing those cues", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-forward-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args, file) => {
+  const sidecars = new PlayerSidecars(async (args, file, _append) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     await writeFile(file, `WEBVTT\n\n${cue(3300, 5200, "line")}\n\n`);
   });
@@ -57,7 +57,7 @@ test("seeking forward keeps the reader that is already writing those cues", asyn
 test("a jump back before the reader's start, or another track, begins a new one", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-back-"));
   const starts: number[] = [];
-  const sidecars = new PlayerSidecars(async (args, file) => {
+  const sidecars = new PlayerSidecars(async (args, file, _append) => {
     starts.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     await writeFile(file, `WEBVTT\n\n${cue(120, 125, "line")}\n\n`);
   });
@@ -80,7 +80,7 @@ test("a jump back before the reader's start, or another track, begins a new one"
 test("cues are held back until they reach past the playhead, then shifted to it", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-lead-"));
   let finish = () => {};
-  const sidecars = new PlayerSidecars(async (args, file, signal) => {
+  const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
     await writeFile(file, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n`);
     await new Promise<void>((resolve) => { finish = resolve; signal.addEventListener("abort", () => resolve(), { once: true }); });
     await writeFile(file, `WEBVTT\n\n${cue(3005, 3010, "near")}\n\n${cue(3000 + SIDECAR_LEAD_S + 5, 3000 + SIDECAR_LEAD_S + 9, "far")}\n\n`);
@@ -101,7 +101,7 @@ test("cues are held back until they reach past the playhead, then shifted to it"
 
 test("a partly written cue is never handed to the player", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-partial-"));
-  const sidecars = new PlayerSidecars(async (args, file, signal) => {
+  const sidecars = new PlayerSidecars(async (args, file, _append, signal) => {
     await writeFile(file, `WEBVTT\n\n${cue(3100, 3200, "complete")}\n\n00:53:30.000 --> `);
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   });
@@ -119,7 +119,7 @@ test("a partly written cue is never handed to the player", async () => {
 test("closing playback waits for the subtitle reader to stop", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-stop-"));
   let active = false;
-  const sidecars = new PlayerSidecars(async (_args, _file, signal) => {
+  const sidecars = new PlayerSidecars(async (_args, _file, _append, signal) => {
     active = true;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 20), { once: true }));
     active = false;
@@ -162,4 +162,54 @@ test("the default extractor waits for the actual child exit after cancellation",
     delete process.env.PID_MARKER;
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+test("the reader lets go of the source once it is far enough ahead, and picks it up again", { timeout: 5000 }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-bursts-"));
+  const runs: { from: number; append: boolean }[] = [];
+  let running = false;
+  const sidecars = new PlayerSidecars(async (args, file, append, signal) => {
+    runs.push({ from: Number(args[args.indexOf("-ss") + 1] ?? 0), append });
+    running = true;
+    const reach = 100 + SIDECAR_AHEAD_S + runs.length * 50;
+    await writeFile(file, `WEBVTT\n\n${cue(reach - 5, reach, `line ${runs.length}`)}\n\n`, append ? { flag: "a" } : {});
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    running = false;
+  });
+  try {
+    sidecars.ensure("session", directory, 0, 100, async (start) => ["-ss", start.toFixed(3)]);
+    const revision = sidecars.revision("session");
+    // Reading past the playhead by more than the lead, so the reader is released.
+    while (!(await sidecars.read("session", revision, 100))) await tick();
+    while (running) await tick();
+    assert.equal(runs.length, 1, "one burst was enough to get ahead of the picture");
+
+    // The picture catches up with the cues, so the reader is asked for more, from where it stopped.
+    const later = 100 + SIDECAR_AHEAD_S;
+    await sidecars.read("session", revision, later);
+    while (!running) await tick();
+    assert.equal(runs.length, 2);
+    assert.equal(runs[1].append, true, "the cues found so far are kept");
+    assert.ok(runs[1].from > 100, "reading picks up where it stopped, not at the start");
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});
+
+test("a conversion that needs the source gets it: release stops the reader but keeps the cues", { timeout: 5000 }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-release-"));
+  let running = false;
+  const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
+    running = true;
+    await writeFile(file, `WEBVTT\n\n${cue(300, 400, "spoken")}\n\n`);
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => setTimeout(resolve, 15), { once: true }));
+    running = false;
+  });
+  try {
+    sidecars.ensure("session", directory, 0, 0, async () => []);
+    while (!running) await tick();
+    await sidecars.release("session");
+    assert.equal(running, false, "FFmpeg is gone before the conversion opens the source");
+    const cues = await sidecars.read("session", sidecars.revision("session"), 0);
+    assert.match(cues!.text, /spoken/, "what it had read is still served");
+    assert.equal(cues!.complete, false);
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });

@@ -600,6 +600,22 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     void seekTo(timeRef.current, true);
   };
 
+  /** Subtitles are read beside the conversion, so switching them leaves the picture alone. */
+  const changeSubtitle = async (subtitle: number | null) => {
+    const id = sessionRef.current; if (!id) return;
+    setError("");
+    try {
+      const next = await api.setTrack(id, { subtitle, time: timeRef.current });
+      if (sessionRef.current !== next.id) return;
+      if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarPass(0); }
+      setSession(next);
+    } catch (value) {
+      const message = value instanceof Error ? value.message : String(value);
+      report("ERROR", `Subtitle switch failed: ${message}`, { ...context(), phase: "track", changes: { subtitle } });
+      setError(`${t("player.subtitleSwitchFailed")} ${describeError(value)}`.trim());
+    }
+  };
+
   /** Another track or quality means another FFmpeg mapping, so the conversion restarts at the current position. */
   const changeTrack = async (changes: { audio?: number; subtitle?: number | null; quality?: number | null }) => {
     const id = sessionRef.current; if (!id) return;
@@ -669,8 +685,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     // Touching the picker is an explicit instruction, so it always ends the quick hide:
     // the chosen track shows up right away and turning subtitles off clears the crossed icon.
     setSubtitlesHidden(false);
-    if (value.startsWith("embedded:")) { setAddonSubtitle(null); await changeTrack({ subtitle: Number(value.slice(9)) }); return; }
-    if (session?.subtitleTrack !== null && session !== null) await changeTrack({ subtitle: null });
+    if (value.startsWith("embedded:")) { setAddonSubtitle(null); await changeSubtitle(Number(value.slice(9))); return; }
+    if (session?.subtitleTrack !== null && session !== null) await changeSubtitle(null);
     setAddonSubtitle(value.startsWith("addon:") ? addonSubtitles[Number(value.slice(6))] ?? null : null);
   };
 

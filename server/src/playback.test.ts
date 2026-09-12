@@ -381,7 +381,7 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
   let spawned = false;
   manager.spawnAt = async () => { spawned = true; return "/nope"; };
   let extracted = 0;
-  manager.sidecars.run = async (_args: string[], _file: string, signal: AbortSignal) => {
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   };
@@ -410,7 +410,7 @@ test("mkv with subtitles still remuxes", async () => {
     return "/hls";
   };
   let extracted = 0;
-  manager.sidecars.run = async (_args: string[], _file: string, signal: AbortSignal) => {
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
     extracted += 1;
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
   };
@@ -610,7 +610,7 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   const events: string[] = [];
   const readers: number[] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
-  manager.sidecars.run = async (args: string[], file: string, signal: AbortSignal) => {
+  manager.sidecars.run = async (args: string[], file: string, _append: boolean, signal: AbortSignal) => {
     readers.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
     // What FFmpeg would have written by then: cues with the source's own timestamps.
     await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
@@ -651,4 +651,38 @@ test("stop terminates media and subtitle readers before revoking their source", 
   manager.purge = async () => {};
   await manager.stop(session.id);
   assert.equal(revoked, true);
+});
+
+test("switching subtitles changes the reader, not the conversion", async () => {
+  const manager = new PlaybackManager("/tmp/test-subtitle-switch") as any;
+  manager.inspect = async () => ({ container: "matroska", duration: 7000,
+    video: { codec: "hevc" }, audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3" }],
+    subtitleTracks: [{ index: 0, codec: "subrip", language: "en" }, { index: 1, codec: "subrip", language: "cs" }],
+  });
+  const spawns: number[] = [];
+  const readers: number[] = [];
+  manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; session.generation += 1; spawns.push(offset); return `/api/playback/${session.id}/${session.generation}/master.m3u8`; };
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) => {
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  };
+  const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 900, subtitleLanguage: "cs" });
+  assert.deepEqual(spawns, [900]);
+
+  const switched = await manager.track(started.id, { subtitle: 0, time: 950 });
+  // No second FFmpeg for the picture, and the player keeps the generation it is already playing.
+  assert.deepEqual(spawns, [900], "the conversion was left alone");
+  assert.equal(switched.subtitleTrack, 0);
+  assert.equal(switched.url, started.url);
+  assert.notEqual(/revision=([0-9a-f-]+)/.exec(switched.sidecarUrl)?.[1], /revision=([0-9a-f-]+)/.exec(started.sidecarUrl)?.[1]);
+
+  const off = await manager.track(started.id, { subtitle: null, time: 950 });
+  assert.deepEqual(spawns, [900]);
+  assert.equal(off.sidecarUrl, undefined);
+
+  // Audio still needs the conversion, so that one does restart.
+  await manager.track(started.id, { audio: 0, subtitle: 1, time: 960 });
+  assert.deepEqual(spawns, [900, 960]);
+  void readers;
+  await manager.sidecars.stop(started.id);
 });

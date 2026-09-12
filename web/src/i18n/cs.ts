@@ -186,6 +186,7 @@ export const cs: Catalog = {
   "player.playbackFailed": "Přehrávání selhalo: {details} ({type})",
   "player.noHls": "Tento prohlížeč neumí přehrát HLS.",
   "player.browserRefused": "Prohlížeč tenhle stream nepřehrál.",
+  "player.subtitleSwitchFailed": "Titulky se nepodařilo přepnout.",
 
   // Oblíbené a ukládání; sdílí přehrávač, katalog i knihovna.
   "favorite.add": "Přidat do oblíbených",

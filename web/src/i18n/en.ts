@@ -190,6 +190,7 @@ export const en = {
   "player.playbackFailed": "Playback failed: {details} ({type})",
   "player.noHls": "This browser cannot play HLS.",
   "player.browserRefused": "The browser could not play this stream.",
+  "player.subtitleSwitchFailed": "The subtitles could not be switched.",
 
   // Favorites and saving, shared by the player, the catalog and the library.
   "favorite.add": "Add to favorites",

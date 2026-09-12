@@ -232,6 +232,12 @@ that way stays empty for as long as the film takes to read -- minutes on a remot
 source, which is indistinguishable from subtitles that never work. The cues come
 through its stdout instead, and a unit test reads them while the reader still runs.
 
+Switching subtitles does not touch the conversion: the cues never ride in it, and a
+restart would both interrupt the picture and ask the source for a second connection,
+which the hosts behind these films often refuse. For the same reason the reader runs
+in bursts -- it fills a quarter of an hour ahead, lets go of the source, and picks up
+where it stopped when the picture catches up -- and releases it outright before a seek.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

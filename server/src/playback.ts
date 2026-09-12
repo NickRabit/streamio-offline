@@ -392,6 +392,15 @@ export class PlaybackManager {
       if (changes.audio !== undefined) session.audioTrack = Math.max(0, changes.audio);
       if (changes.subtitle !== undefined) session.subtitleTrack = changes.subtitle;
       if (changes.quality !== undefined) session.quality = changes.quality != null && QUALITY_BITRATE[changes.quality] ? changes.quality : null;
+      // Subtitles never ride in the conversion, they are read beside it. Restarting FFmpeg
+      // for them would interrupt the picture and ask the source for another connection --
+      // which is the one thing these hosts tend to refuse.
+      if (changes.subtitle !== undefined && changes.audio === undefined && changes.quality === undefined) {
+        if (session.subtitleTrack !== null) this.extractSidecar(session);
+        else await this.sidecars.stop(id);
+        log("INFO", "Subtitle track switched", { id, subtitleTrack: session.subtitleTrack, offset: Math.round(session.offset) });
+        return this.describe(session, this.currentUrl(session));
+      }
       // Going back to the original may satisfy the conditions for direct play again.
       if (session.quality === null && session.audioTrack === 0 && !session.copyRejected
         && this.canDirectPlay(session.stream, session.info, session.capabilities)) {
@@ -411,6 +420,10 @@ export class PlaybackManager {
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
+    // The source usually allows one connection at a time, so the subtitle reader lets
+    // go of it before the conversion asks for its own.
+    await this.sidecars.release(id);
+    this.assertActive(session);
     // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
     session.pendingKill = this.kill(session);
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
@@ -531,6 +544,13 @@ export class PlaybackManager {
     session.claimed = true;
     session.lastAccess = Date.now();
     return cues;
+  }
+
+  /** What the player is playing right now: the generation being written, or the file itself. */
+  private currentUrl(session: Session) {
+    return session.mode === "direct"
+      ? this.proxyPath(session.stream)
+      : `/api/playback/${session.id}/${session.generation}/master.m3u8`;
   }
 
   /** The offset rides in the address: a seek only re-reads the same cues, shifted. */

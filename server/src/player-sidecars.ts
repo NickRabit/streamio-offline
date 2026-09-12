@@ -3,19 +3,37 @@ import { randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { Transform } from "node:stream";
 import { log } from "./logger.js";
 import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
-type Extract = (args: string[], file: string, signal: AbortSignal) => Promise<unknown>;
+type Extract = (args: string[], file: string, append: boolean, signal: AbortSignal) => Promise<unknown>;
 
-/** Through a pipe, not "-y file": writing to a file FFmpeg keeps the cues in its own
+/** A resumed reader writes its own WEBVTT header, which belongs only at the top. */
+const withoutHeader = () => {
+  let past = false;
+  return new Transform({
+    transform(chunk, _encoding, next) {
+      if (past) return next(null, chunk);
+      const text = chunk.toString() as string;
+      const blank = text.indexOf("\n\n");
+      if (blank < 0) return next();
+      past = true;
+      next(null, text.slice(blank + 2));
+    },
+  });
+};
+
+/** Through a pipe, not "-y file": writing a file itself FFmpeg keeps the cues in its own
  *  buffer and the sidecar stays empty until the whole film has been read, which on a
  *  remote source is minutes. A pipe is written through, so the cues land as they come. */
-const extract: Extract = (args, file, signal) => new Promise<void>((resolve, reject) => {
-  const out = createWriteStream(file);
+const extract: Extract = (args, file, append, signal) => new Promise<void>((resolve, reject) => {
+  const out = createWriteStream(file, append ? { flags: "a" } : {});
   out.once("error", reject);
   out.once("open", () => {
-    const child = spawn("ffmpeg", args, { stdio: ["ignore", out, "pipe"] });
+    const child = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const cues = append ? child.stdout.pipe(withoutHeader()) : child.stdout;
+    cues.pipe(out);
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => { stderr = (stderr + chunk.toString()).slice(-2000); });
     const kill = () => child.kill("SIGKILL");
@@ -35,13 +53,17 @@ const extract: Extract = (args, file, signal) => new Promise<void>((resolve, rej
 
 /** Cues have to reach this far past the playhead before the track is worth attaching. */
 export const SIDECAR_LEAD_S = 120;
+/** And this far before the reader lets go of the source: a seek needs a connection of
+ *  its own, and the hosts behind these films rarely give out a second one. */
+export const SIDECAR_AHEAD_S = 900;
 
 interface Job {
   revision: string; track: number; start: number; file: string;
-  controller: AbortController; done: Promise<void>; complete: boolean;
+  directory: string; args: (start: number) => Promise<string[]>;
+  controller: AbortController; done: Promise<void>;
+  running: boolean; complete: boolean; served: boolean;
   /** How far the cues written so far reach, refreshed whenever the player asks for them. */
   coverage: number;
-  served: boolean;
 }
 
 export class PlayerSidecars {
@@ -50,37 +72,74 @@ export class PlayerSidecars {
 
   /** One reader per track: a seek usually lands inside what this one has already written,
    *  and only a position it cannot serve -- another track, a jump back before its start, or
-   *  one so far ahead that it would have to read the film to get there -- needs another FFmpeg. */
+   *  one so far ahead that it would have to read the film to get there -- needs another. */
   ensure(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
-    const startedAt = Date.now();
     const current = this.jobs.get(id);
-    if (current && current.track === track && offset >= current.start && offset <= current.coverage) return;
+    if (current && current.track === track && offset >= current.start && offset <= current.coverage) {
+      this.keepAhead(current, id, offset);
+      return;
+    }
     const previous = current;
     previous?.controller.abort();
     const revision = randomUUID();
     const start = Math.max(0, offset);
     const job: Job = {
       revision, track, start, file: path.join(directory, `sidecar-${revision}.vtt`),
-      controller: new AbortController(), done: Promise.resolve(), complete: false, coverage: -Infinity, served: false,
+      directory, args, controller: new AbortController(), done: Promise.resolve(),
+      running: false, complete: false, served: false, coverage: -Infinity,
     };
     this.jobs.set(id, job);
-    log("INFO", "Reading embedded subtitles", { id, track, from: Math.round(start) });
+    void (async () => {
+      if (previous) { await previous.done; await rm(previous.file, { force: true }).catch(() => undefined); }
+      if (this.jobs.get(id) !== job) return;
+      this.launch(id, job, start, false);
+    })();
+  }
+
+  private launch(id: string, job: Job, from: number, append: boolean) {
+    // This burst's own signal: a pause gives the job a fresh one for the next burst, and
+    // reading the job's current signal here would make a paused reader look finished.
+    const { signal } = job.controller;
+    if (signal.aborted) return;
+    job.running = true;
+    log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), resumed: append });
+    const startedAt = Date.now();
     job.done = (async () => {
       try {
-        if (previous) { await previous.done; await rm(previous.file, { force: true }).catch(() => undefined); }
-        if (job.controller.signal.aborted) return;
-        await mkdir(directory, { recursive: true });
-        const input = await args(start);
-        if (job.controller.signal.aborted) return;
-        await this.run([...input, "-f", "webvtt", "pipe:1"], job.file, job.controller.signal);
-        job.complete = !job.controller.signal.aborted;
-        if (job.complete) { job.coverage = Infinity; log("INFO", "Embedded subtitles read to the end", { id, track, seconds: Math.round((Date.now() - startedAt) / 1000) }); }
+        await mkdir(job.directory, { recursive: true });
+        const input = await job.args(from);
+        if (signal.aborted) return;
+        await this.run([...input, "-f", "webvtt", "pipe:1"], job.file, append, signal);
+        if (!signal.aborted) {
+          job.complete = true;
+          job.coverage = Infinity;
+          log("INFO", "Embedded subtitles read to the end", { id, track: job.track, seconds: Math.round((Date.now() - startedAt) / 1000) });
+        }
       } catch (error) {
-        if (!job.controller.signal.aborted) this.failed(id, error);
+        if (!signal.aborted) this.failed(id, error);
       } finally {
-        if (!job.complete) await rm(job.file, { force: true }).catch(() => undefined);
+        job.running = false;
       }
     })();
+  }
+
+  /** The reader runs in bursts: it fills the cues a quarter of an hour ahead and then
+   *  releases the source, so a seek or a track switch has a connection to open. */
+  private keepAhead(job: Job, id: string, offset: number) {
+    if (job.complete) return;
+    if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
+    if (!job.running && job.coverage < offset + SIDECAR_LEAD_S) {
+      const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;
+      this.launch(id, job, from, Number.isFinite(job.coverage));
+    }
+  }
+
+  /** Stops the FFmpeg but keeps the cues it found, so reading can pick up where it left off. */
+  private async pause(job: Job) {
+    const stopping = job.controller;
+    stopping.abort();
+    await job.done;
+    if (job.controller === stopping) job.controller = new AbortController();
   }
 
   revision(id: string) { return this.jobs.get(id)?.revision; }
@@ -95,6 +154,7 @@ export class PlayerSidecars {
     const text = job.complete ? raw : completeVttBlocks(raw);
     if (!job.complete) {
       job.coverage = vttCoverage(text);
+      this.keepAhead(job, id, offset);
       if (job.coverage < offset + SIDECAR_LEAD_S) {
         // The one line that says why a film is playing without subtitles.
         log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });
@@ -104,6 +164,12 @@ export class PlayerSidecars {
     if (!job.served) { job.served = true; log("INFO", "Embedded subtitles reached the player", { id, track: job.track, complete: job.complete }); }
     const shifted = offset > 0 ? shiftVtt(text, offset) : text;
     return { text: shifted, complete: job.complete, coverage: job.complete ? Infinity : job.coverage };
+  }
+
+  /** Lets go of the source without losing the cues, for a conversion that needs to open it. */
+  async release(id: string) {
+    const job = this.jobs.get(id);
+    if (job?.running) await this.pause(job);
   }
 
   async stop(id: string) {
