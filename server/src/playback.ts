@@ -636,7 +636,11 @@ export class PlaybackManager {
   /** Embedded subtitles are switched on by themselves only when the preferred language really matches. */
   private preferredSubtitle(tracks: Track[], preferred?: string): number | null {
     if (!tracks.length || !preferred) return null;
-    return tracks.find((track) => track.language === preferred)?.index ?? null;
+    const spoken = tracks.filter((track) => track.language === preferred);
+    // A forced track carries only the lines spoken in another language, so choosing one by
+    // itself looks exactly like subtitles that do not work: the picker says they are on and
+    // the screen stays empty for minutes. It is taken only when the language has nothing else.
+    return (spoken.find((track) => !track.forced) ?? spoken[0])?.index ?? null;
   }
 
   private proxyPath(stream: StreamItem) { return mediaResources.path(stream); }

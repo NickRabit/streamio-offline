@@ -849,3 +849,39 @@ test("the player asking for a segment is what counts as watching", () => {
   manager.attended(session.id);
   assert.ok(session.clientAt !== undefined && Date.now() - session.clientAt < 1000);
 });
+
+test("the forced track is not what the preferred language means", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback-forced") as any;
+  manager.inspect = async () => ({
+    container: "mov,mp4,m4a,3gp,3g2,mj2",
+    video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
+    audioTracks: [{ index: 0, codec: "aac", language: "en" }],
+    subtitleTracks: [
+      { index: 0, codec: "subrip", language: "cs", title: "CZ forced", forced: true },
+      { index: 1, codec: "subrip", language: "cs", title: "CZ" },
+      { index: 2, codec: "subrip", language: "en" },
+    ],
+  });
+  manager.spawnAt = async () => "/nope";
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
+  assert.equal(started.subtitleTrack, 1, "the track that carries every line, not the one for foreign speech");
+  await manager.stop(started.id);
+});
+
+test("a language with nothing but a forced track still gets it", async () => {
+  const manager = new PlaybackManager("/tmp/test-playback-forced-only") as any;
+  manager.inspect = async () => ({
+    container: "mov,mp4,m4a,3gp,3g2,mj2",
+    video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
+    audioTracks: [{ index: 0, codec: "aac", language: "en" }],
+    subtitleTracks: [{ index: 0, codec: "subrip", language: "en" }, { index: 1, codec: "subrip", language: "cs", forced: true }],
+  });
+  manager.spawnAt = async () => "/nope";
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
+  assert.equal(started.subtitleTrack, 1);
+  await manager.stop(started.id);
+});
