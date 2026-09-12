@@ -242,7 +242,9 @@ A copied video cannot start between keyframes, so a seek lands on the one before
 second asked for -- up to a couple of seconds earlier on some encodes. The conversion
 writes that keyframe out once, with source timestamps, and the session takes its
 position from it, which keeps the cues and the clock on the picture instead of ahead
-of it. Check on a real film that a line is spoken as it appears, after a seek as well
+of it. The generation's own zero sits on whichever track comes first, usually the
+audio a fraction of a second earlier, so the picture's place inside the first segment
+is taken off the keyframe as well. Check on a real film that a line is spoken as it appears, after a seek as well
 as after switching the track.
 
 Timing is the part tests cannot settle. A slow source delays the first cues,

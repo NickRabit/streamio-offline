@@ -155,14 +155,29 @@ export function correctedOffset(asked: number, started?: number) {
   return started !== undefined && started <= asked && asked - started < 30 ? started : asked;
 }
 
-export async function generationStart(file: string): Promise<number | undefined> {
+const probeNumber = async (args: string[]) => {
   try {
-    const { stdout } = await promisify(execFile)("ffprobe", [
-      "-hide_banner", "-v", "error", "-show_entries", "format=start_time", "-of", "csv=p=0", file,
-    ], { timeout: 10_000 });
-    const value = Number(stdout.trim());
-    return Number.isFinite(value) && value >= 0 ? value : undefined;
+    const { stdout } = await promisify(execFile)("ffprobe", ["-hide_banner", "-v", "error", ...args], { timeout: 15_000 });
+    const value = Number(stdout.split("\n")[0]?.trim());
+    return Number.isFinite(value) ? value : undefined;
   } catch { return undefined; }
+};
+
+/** Where the generation really begins in the film. The copied keyframe says where the picture
+ *  starts, but make_zero puts the generation's zero on whichever track comes first -- usually
+ *  the audio, a fraction of a second earlier. That fraction is what the picture sits at inside
+ *  the generation, so taking it off the keyframe gives the second the player is really showing. */
+export async function generationStart(startFrame: string, playlist: string): Promise<number | undefined> {
+  const [keyframe, pictureAt] = await Promise.all([
+    probeNumber(["-show_entries", "format=start_time", "-of", "csv=p=0", startFrame]),
+    probeNumber(["-select_streams", "v", "-read_intervals", "%+1", "-show_entries", "packet=pts_time", "-of", "csv=p=0", playlist]),
+  ]);
+  return generationZero(keyframe, pictureAt);
+}
+
+export function generationZero(keyframe?: number, pictureAt?: number) {
+  if (keyframe === undefined || keyframe < 0) return undefined;
+  return pictureAt !== undefined && pictureAt >= 0 ? keyframe - pictureAt : keyframe;
 }
 
 export const hlsPlaylistFiles = (playlist: string) => {
@@ -324,7 +339,7 @@ export class PlaybackManager {
   }
 
   /** Overridden in tests, which have no FFmpeg to ask. */
-  protected startOfGeneration(file: string) { return generationStart(file); }
+  protected startOfGeneration(startFrame: string, playlist: string) { return generationStart(startFrame, playlist); }
 
   private async probeSource(stream: StreamItem) {
     if (!(await sourceReachable(stream))) {
@@ -807,7 +822,7 @@ export class PlaybackManager {
       return undefined;
     }
     if (output !== undefined) {
-      const started = correctedOffset(offset, await this.startOfGeneration(path.join(directory, START_FRAME)));
+      const started = correctedOffset(offset, await this.startOfGeneration(path.join(directory, START_FRAME), path.join(directory, "index-0.m3u8")));
       if (started !== offset && session.offset === offset) {
         session.offset = started;
         log("DEBUG", "The picture starts at the keyframe before the seek", { id: session.id, asked: Math.round(offset), starts: started.toFixed(3) });

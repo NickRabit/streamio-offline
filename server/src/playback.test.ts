@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { writeFile } from "node:fs/promises";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, correctedOffset, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, correctedOffset, generationZero, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -685,6 +685,17 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   assert.deepEqual(spawns, [900, 960]);
   void readers;
   await manager.sidecars.stop(started.id);
+});
+
+test("the generation starts where its first track does, not where the picture sits inside it", () => {
+  // make_zero puts the zero on whichever track comes first. When that is the audio, the picture
+  // sits a little way inside the generation, and the film is that much further back than the
+  // keyframe says -- measured on a real remux: a keyframe at 1233.634 with the picture at 0.055.
+  assert.equal(generationZero(1233.634, 0.055)?.toFixed(3), "1233.579");
+  // Nothing to read from the playlist yet: the keyframe alone is still closer than the request.
+  assert.equal(generationZero(1233.634, undefined), 1233.634);
+  assert.equal(generationZero(undefined, 0.055), undefined);
+  assert.equal(generationZero(1233.634, -1), 1233.634);
 });
 
 test("the position follows the keyframe the copy really starts on", () => {
