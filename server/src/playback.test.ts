@@ -221,6 +221,34 @@ test("a seek with copied AC3 audio converts it to AAC for the fMP4 init segment"
   assert.deepEqual(seeked.slice(audio, audio + 6), ["-c:a", "aac", "-ac", "2", "-b:a", "160k"]);
 });
 
+test("a conversion reconnects when a remote source drops the stream", () => {
+  const manager = new PlaybackManager("/tmp/test-playback-reconnect") as any;
+  const session = {
+    stream: { url: "https://example.test/large.mkv" },
+    capabilities: { hevc: true, ac3: true },
+    info: {
+      video: { codec: "hevc" },
+      audio: { codec: "ac3" },
+      audioTracks: [{ index: 0, codec: "ac3" }],
+      subtitleTracks: [],
+    },
+    quality: null,
+    audioTrack: 0,
+    subtitleTrack: null,
+  };
+
+  const args = manager.args(session, 3949, "/tmp/output", false) as string[];
+  const input = args.indexOf("-i");
+  assert.ok(input > 0, "the input position is present");
+  assert.deepEqual(args.slice(args.indexOf("-reconnect"), args.indexOf("-reconnect") + 8), [
+    "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10",
+  ]);
+  assert.ok(args.indexOf("-reconnect") < input, "reconnect options apply to the input, not the output");
+  const tag = args.indexOf("-tag:v");
+  assert.equal(args[tag + 1], "hvc1");
+  assert.deepEqual(args.slice(tag + 2, tag + 4), ["-strict", "unofficial"], "Dolby Vision HEVC needs the unofficial fMP4 config boxes");
+});
+
 test("a trailing request for the previous generation still gets its directory for a while", () => {
   const manager = new PlaybackManager("/tmp/test-playback") as any;
   const session = {
@@ -609,9 +637,11 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   });
   const events: string[] = [];
   const readers: number[] = [];
+  const sidecarArgs: string[][] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
   manager.sidecars.run = async (args: string[], file: string, _append: boolean, signal: AbortSignal) => {
     readers.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
+    sidecarArgs.push(args);
     // What FFmpeg would have written by then: cues with the source's own timestamps.
     await writeFile(file, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
     await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
@@ -628,6 +658,14 @@ test("seeking re-reads the same subtitles instead of starting FFmpeg again", asy
   while (readers.length < 2) await pause(5);
   // Only the jump behind the reader needed another FFmpeg; the seek it already covers did not.
   assert.deepEqual(readers, [5245, 900]);
+  for (const args of sidecarArgs) {
+    const input = args.indexOf("-i");
+    assert.ok(input > 0, "the sidecar input position is present");
+    assert.deepEqual(args.slice(args.indexOf("-reconnect"), args.indexOf("-reconnect") + 8), [
+      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10",
+    ]);
+    assert.ok(args.indexOf("-reconnect") < input, "sidecar reconnect options apply to the input");
+  }
   assert.match(started.sidecarUrl ?? "", /\?revision=[0-9a-f-]+&offset=5245\.000$/);
   assert.match(resumed.sidecarUrl ?? "", /&offset=5400\.000$/);
   assert.equal(revisionOf(started.sidecarUrl), revisionOf(resumed.sidecarUrl));
@@ -686,4 +724,3 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   void readers;
   await manager.sidecars.stop(started.id);
 });
-

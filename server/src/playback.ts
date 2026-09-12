@@ -567,6 +567,10 @@ export class PlaybackManager {
     const playlist = isPlaylistSource(session.stream, session.info);
     this.sidecars.ensure(session.id, path.join(this.root, session.id), index, session.offset, async (start) => [
       "-hide_banner", "-loglevel", "error", "-nostdin",
+      // The sidecar reads from the same remote host as the conversion and can lose the
+      // connection the same way. Reconnecting keeps the cue timestamps coming without
+      // starting the extraction from a different source position.
+      "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10",
       // The same playlist through the same demuxer, so the same flags -- and the same
       // reason to leave them out when the source is an ordinary file.
       ...(playlist ? await playlistArgs("ffmpeg") : []),
@@ -772,11 +776,19 @@ export class PlaybackManager {
     });
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
     session.process = child; session.hardware = hardware; session.error = undefined;
-    let stderr = ""; let finished = false; let exitCode: number | null = null;
+    let stderr = ""; let finished = false; let exitCode: number | null = null; let handedToClient = false;
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-16_000); });
     child.once("error", (error) => { finished = true; session.error = error.message; });
     // Only 'close' guarantees stderr has been read; 'exit' routinely misses the last message.
-    child.once("close", (code, signal) => { finished = true; exitCode = code; if (code !== 0 && signal === null) session.error = describeFailure(stderr, code); });
+    child.once("close", (code, signal) => {
+      finished = true; exitCode = code;
+      if (code !== 0 && signal === null) session.error = describeFailure(stderr, code);
+      // A conversion that died after the client attached would otherwise stay silent until
+      // the player reports a stall, with no clue whether the source or FFmpeg was at fault.
+      if (handedToClient && code !== 0 && signal === null) {
+        log("WARN", "FFmpeg stopped after playback had started", { id: session.id, generation: session.generation, code, reason: session.error, stderr: redact(stderr).slice(-500) });
+      }
+    });
 
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
     const output = await waitForHlsOutput(directory, () => finished, () => session.stopped);
@@ -786,6 +798,7 @@ export class PlaybackManager {
       return undefined;
     }
     if (output !== undefined) {
+      handedToClient = true;
       const segments = (output.match(/#EXTINF/g) ?? []).length;
       log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
       return url;
@@ -836,6 +849,10 @@ export class PlaybackManager {
         args.push("-init_hw_device", `vaapi=va:${this.vaapiDevice!}`, "-filter_hw_device", "va");
       }
     }
+    // Remote hosts drop a connection now and then, especially on a deep range seek into a
+    // large file. Without these options FFmpeg treats that as the end of the input and the
+    // conversion dies after the first segment, leaving the player stalled.
+    args.push("-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_on_network_error", "1", "-reconnect_delay_max", "10");
     // A lead is paid for in disk writes: repackaging at 8x real time pours ~340 MB out of
     // FFmpeg in 20 s and a weaker NAS chokes pushing dirty pages through.
     // Three keeps seeking just as brisk (the initial burst is what counts) at a third of the writes.
@@ -861,7 +878,12 @@ export class PlaybackManager {
     if (copyVideo) {
       args.push("-c:v", "copy");
       // Safari plays HEVC in fMP4 only under the hvc1 tag; with the default hev1 it refuses the stream.
-      if (sourceVideo === "hevc") args.push("-tag:v", "hvc1");
+      if (sourceVideo === "hevc") {
+        args.push("-tag:v", "hvc1");
+        // Dolby Vision HEVC in Matroska carries its config as Block Addition metadata.
+        // The fMP4 muxer will not write the dvcC/dvvC box unless unofficial formats are allowed.
+        args.push("-strict", "unofficial");
+      }
     }
     // A keyframe every 2 s keeps segments short: HLS may only cut on keyframes, so a longer GOP
     // would stretch the wait for the first segment after a start and after every seek.
