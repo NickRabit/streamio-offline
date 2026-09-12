@@ -3,7 +3,7 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S, SIDECAR_RESUME_LEAD_S } from "./player-sidecars.js";
+import { PlayerSidecars, SIDECAR_AHEAD_S, SIDECAR_LEAD_S } from "./player-sidecars.js";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 10));
 const cue = (from: number, to: number, text: string) => {
@@ -186,8 +186,7 @@ test("the reader lets go of the source once it is far enough ahead, and picks it
 
     // The picture catches up with the cues, so the reader is asked for more, from where it stopped.
     const later = 100 + SIDECAR_AHEAD_S;
-    void SIDECAR_RESUME_LEAD_S;
-    await sidecars.read("session", revision, later);
+    await sidecars.read("session", revision, 100, 0, later);
     while (!running) await tick();
     assert.equal(runs.length, 2);
     assert.equal(runs[1].append, true, "the cues found so far are kept");

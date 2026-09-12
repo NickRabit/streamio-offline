@@ -253,7 +253,9 @@ How fast the cues arrive is the source's business, so the track is attached as s
 they reach past the picture rather than a couple of minutes beyond it: on a NAS reading
 from a remote film, two minutes of cues take longer to fetch than the viewer's next
 seek, and the wait looked like subtitles that never came. The reader keeps going and
-the player reads the track again as it gets further.
+the player reads the track again once it has a useful window ahead, or once the current
+window is spent. Its polls carry the live playhead separately from the generation offset,
+so a direct-playing film wakes the reader again after its first fifteen-minute burst.
 
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
