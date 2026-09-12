@@ -1,5 +1,6 @@
 import express from "express";
 import { once } from "node:events";
+import { RangeCache } from "./range-cache.js";
 import { nextVideoFile } from "./next-file.js";
 import { isInternalMediaPath, mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
@@ -67,6 +68,7 @@ const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () =
     mediaResources.remove(owned.resourceId);
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
+  if (owned) rangeCache.forget(owned.resourceId);
   playbackOwners.delete(id); releasedOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);
@@ -581,6 +583,8 @@ const SOURCE_RESUMES = 5;
 const SOURCE_QUIET_MS = 20_000;
 const SOURCE_QUIET_HEADER_MS = 6_000;
 const SOURCE_HEADER_MS = 30_000;
+/** The header and the index of a film, kept so the next FFmpeg does not fetch them again. */
+const rangeCache = new RangeCache();
 const quietSources = new Map<string, number>();
 const sourceIsQuiet = (key: string) => (quietSources.get(key) ?? 0) > Date.now() - SOURCE_QUIET_MS;
 const noteSourceQuiet = (key: string) => {
@@ -2070,6 +2074,16 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   }
   await validateRemoteUrl(raw);
   countBytes(res, playbackMeta(stream), ownedSession);
+  const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
+  const askedRange = String(req.headers.range ?? "");
+  const held = req.method === "HEAD" ? undefined : rangeCache.get(cacheKey, askedRange);
+  if (held?.complete) {
+    // The whole of that read is here, so the source hears nothing about it at all.
+    res.status(held.status);
+    for (const [name, value] of Object.entries(held.headers)) res.setHeader(name, value);
+    log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: held.bytes.length });
+    return void res.end(held.bytes);
+  }
   const headers: Record<string, string> = { ...stream.behaviorHints?.proxyHeaders?.request };
   if (req.headers.range) headers.range = req.headers.range;
   const controller = new AbortController();
@@ -2151,6 +2165,9 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   const until = asked?.[2] ? Number(asked[2]) : undefined;
   const expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
   let delivered = 0;
+  // Worth keeping only while it is still short: a longer read is the picture going by.
+  let keep: Buffer[] | undefined = req.method === "GET" ? [] : undefined;
+  let kept = 0;
   let body: ReadableStream | null = upstream.body;
   for (let resumed = 0; ; ) {
     let broke: unknown;
@@ -2160,6 +2177,10 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
         // file, and a body longer than the length already promised breaks the response itself.
         const piece = expected === undefined ? chunk as Buffer : (chunk as Buffer).subarray(0, expected - delivered);
         delivered += piece.length;
+        if (keep) {
+          kept += piece.length;
+          if (kept > rangeCache.limit) keep = undefined; else keep.push(Buffer.from(piece));
+        }
         if (piece.length && !res.write(piece)) await once(res, "drain");
         if (expected !== undefined && delivered >= expected) break;
       }
@@ -2169,7 +2190,17 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
       return;
     }
     const short = expected !== undefined && delivered < expected;
-    if (!broke && !short) break;
+    if (!broke && !short) {
+      if (keep && expected !== undefined && delivered === expected) {
+        rangeCache.put(cacheKey, askedRange, {
+          status: upstream.status,
+          headers: Object.fromEntries(["content-type", "content-length", "content-range", "accept-ranges"]
+            .map((name) => [name, upstream.headers.get(name)]).filter((pair): pair is [string, string] => pair[1] !== null)),
+          bytes: Buffer.concat(keep), complete: true,
+        });
+      }
+      break;
+    }
     if (resumed >= SOURCE_RESUMES || expected === undefined || !short) {
       noteSourceQuiet(resource.parent ?? resource.id);
       log("WARN", "The transfer from the source broke off", {

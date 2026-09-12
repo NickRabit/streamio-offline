@@ -327,6 +327,15 @@ still writing to, says so, and names what asked -- a generation that was replace
 conversion attempt that failed, or a session that ended. A directory whose process has
 already died is still fair game, which the retry after a failed hardware attempt needs.
 
+Every FFmpeg that opens a film reads the same two places before anything else: the header
+at the start and the index at the far end. With a conversion and a subtitle reader, both
+starting over at every seek, the log has the same byte offset fetched four times inside a
+minute -- and these hosts count connections, not bytes. Those reads are kept now, keyed by
+the exact range that was asked for, since an answer to "bytes=0-" is not an answer to
+"bytes=0-31" and handing one over for the other truncates or overruns the reply. The
+fixture counts what actually reached it, which is how the test knows the second read never
+left the server.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
