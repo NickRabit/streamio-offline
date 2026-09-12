@@ -311,3 +311,36 @@ test("asking for the same position again keeps the reader that is already on it"
     assert.equal(sidecars.revision("session"), revision, "and the player keeps the address it is polling");
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
+
+test("subtitle polls cannot reopen the source while repeated seeks hold it released", { timeout: 5000 }, async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sidecar-seek-polls-"));
+  let starts = 0;
+  let running = 0;
+  const sidecars = new PlayerSidecars(async (_args, file, _append, signal) => {
+    starts++;
+    await writeFile(file, `WEBVTT\n\n${cue(10, 20, "spoken")}\n\n`);
+    running++;
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+    running--;
+  });
+  try {
+    sidecars.ensure("session", directory, 0, 0, async () => []);
+    while (!running) await tick();
+    const revision = sidecars.revision("session");
+    for (let seek = 0; seek < 4; seek++) {
+      await sidecars.release("session");
+      const before = starts;
+      for (let poll = 0; poll < 4; poll++) {
+        const result = await sidecars.read("session", revision, 0, 0.5, 19);
+        assert.match(result!.text, /00:00:10.500 --> 00:00:20.500/);
+        await tick();
+      }
+      assert.equal(starts, before, "polling existing cues must not compete with the new video connection");
+      assert.equal(running, 0);
+      sidecars.ensure("session", directory, 0, 0, async () => []);
+      while (!running) await tick();
+      assert.equal(starts, before + 1, "reading resumes only when the conversion releases the source");
+      assert.equal(sidecars.revision("session"), revision);
+    }
+  } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
+});

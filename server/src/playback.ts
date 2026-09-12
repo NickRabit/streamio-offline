@@ -431,6 +431,14 @@ export class PlaybackManager {
   }
 
   private async restart(session: Session, time: number, message: string) {
+    try { return await this.restartConversion(session, time, message); }
+    catch (error) {
+      if (!session.stopped && session.subtitleTrack !== null) this.extractSidecar(session);
+      throw error;
+    }
+  }
+
+  private async restartConversion(session: Session, time: number, message: string) {
     this.assertActive(session);
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;

@@ -400,3 +400,10 @@ need FFmpeg on PATH. The fake addon generates a small VP9/Opus WebM from the
 existing MP4 fixture for browser playback on Chromium builds without H.264.
 The proxy tests also use the original MP4 for actual probing, direct descriptors,
 range requests, HLS resource rewriting, subtitle and download ownership checks.
+
+During a seek, releasing the subtitle reader is a persistent hold: polling already
+extracted cues cannot reopen its source until the conversion explicitly calls
+`ensure` again. A regression exercises four release/poll/resume cycles and checks
+that the same subtitle revision and timing correction survive. A browser test
+closes the player during its fourth seek and delivers a late session-gone error;
+that error must not start another film or report against a newer session.

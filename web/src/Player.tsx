@@ -580,6 +580,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         const escalating = escalateRef.current; escalateRef.current = false;
         try { next = escalating ? await api.escalatePlayback(id, requested) : await api.seekPlayback(id, requested); }
         catch (value) {
+          if (epoch !== seekEpochRef.current) return;
           if (!(value instanceof ApiError) || !(value.code === "RESOURCE_NOT_FOUND" || value.messageKey === "err.playbackSessionGone")) throw value;
           // The server may have restarted in the meantime, or cleaned up an idle session.
           // A new HLS session starts at the target; a direct stream is moved by the browser.
@@ -599,6 +600,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       }
     }
     catch (value) {
+      if (epoch !== seekEpochRef.current) return;
       const message = value instanceof Error ? value.message : String(value);
       report("ERROR", `Seek failed: ${message}`, { ...context(), phase: "seek", target: Math.round(bounded) });
       if (epoch === seekEpochRef.current) setError(describeError(value));
