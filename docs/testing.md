@@ -407,3 +407,8 @@ extracted cues cannot reopen its source until the conversion explicitly calls
 that the same subtitle revision and timing correction survive. A browser test
 closes the player during its fourth seek and delivers a late session-gone error;
 that error must not start another film or report against a newer session.
+
+The transfer meter is held to the reading, not to how it stores it: one regression drives
+forty thousand writes past repeated compaction and an idle gap, comparing every reading
+against a plain model of the same history, and another sends a burst inside a single
+millisecond and expects the reading of the one write it stands for.
