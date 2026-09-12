@@ -1,7 +1,5 @@
 import { enterPlayerFullscreen, exitPlayerFullscreen, playerIsFullscreen, supportsPlayerFullscreen } from "./player-fullscreen";
 import Hls from "hls.js";
-import { AirPlayButton } from "./AirPlayButton";
-import { isAirPlayWireless, prefersNativeAirPlay, supportsAirPlay, type AirPlayVideo } from "./player-airplay";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
@@ -200,9 +198,6 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const [browserFullscreen, setBrowserFullscreen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  const mediaUrlRef = useRef("");
-  const playlistRef = useRef(false);
-  const airplayPreparingRef = useRef(false);
   const sessionRef = useRef<string | null>(null);
   const modeRef = useRef<PlaybackMode>("transcode");
   const offsetRef = useRef(0);
@@ -388,27 +383,15 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     if (id) void api.stopPlayback(id).catch(() => undefined);
   };
 
-  const attach = (url: string, mode: PlaybackMode, autoplay = true, playlist = false, forceNative = false) => {
+  const attach = (url: string, mode: PlaybackMode, autoplay = true, playlist = false) => {
     const video = videoRef.current; if (!video) return;
     detach();
-    mediaUrlRef.current = url;
-    playlistRef.current = playlist;
     // Direct play normally means handing the element the address and letting the
     // browser get on with it. A playlist is the exception: only Safari reads one
     // natively, so it falls through to hls.js the same way a converted stream
     // does — and costs the server nothing, unlike converting it would.
     if (mode === "direct" && !playlist) { video.src = url; if (autoplay) void video.play().catch(() => undefined); return; }
-    // Native HLS only while AirPlay is actually selected (HomePods on Mac). On
-    // iPhone it refuses a HEVC remux whose audio was rewritten to AAC.
-    video.pause();
-    video.removeAttribute("src");
-    try { video.load(); } catch { /* clearing a failed native source */ }
-    const native = (forceNative || airplayPreparingRef.current || prefersNativeAirPlay(video as AirPlayVideo))
-      && Boolean(video.canPlayType("application/vnd.apple.mpegurl"));
-    if (native) {
-      video.src = url;
-      if (autoplay) void video.play().catch(() => undefined);
-    } else if (Hls.isSupported()) {
+    if (Hls.isSupported()) {
       // A longer buffer on both sides means the browser handles an ordinary few-second
       // skip itself, immediately, instead of restarting FFmpeg on the server.
       // maxBufferHole bridges the small gaps at segment boundaries (a video copy only cuts
@@ -451,36 +434,6 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     }
   };
 
-  const switchAirPlaySource = (native: boolean) => {
-    const video = videoRef.current;
-    const url = mediaUrlRef.current;
-    if (!video || !url || abandonedRef.current) return;
-    const usingHls = Boolean(hlsRef.current);
-    if (native === !usingHls) return;
-    const at = video.currentTime;
-    const play = !video.paused;
-    airplayPreparingRef.current = native;
-    attach(url, modeRef.current, play, playlistRef.current, native);
-    if (at <= 0.25) return;
-    const move = () => { video.currentTime = at; };
-    if (video.readyState >= 1) move();
-    else video.addEventListener("loadedmetadata", move, { once: true });
-  };
-  const switchAirPlaySourceRef = useRef(switchAirPlaySource);
-  switchAirPlaySourceRef.current = switchAirPlaySource;
-
-  useEffect(() => {
-    const video = videoRef.current as AirPlayVideo | null;
-    if (!open || !video || !supportsAirPlay(video)) return;
-    const onWireless = () => {
-      const wireless = isAirPlayWireless(video);
-      airplayPreparingRef.current = false;
-      switchAirPlaySourceRef.current(wireless);
-    };
-    video.addEventListener("webkitcurrentplaybacktargetiswirelesschanged", onWireless);
-    return () => video.removeEventListener("webkitcurrentplaybacktargetiswirelesschanged", onWireless);
-  }, [open]);
-
   const showTime = (value: number) => { timeRef.current = value; setTime(value); };
 
   /** Shared description of the session: without it an error report is a bare "it did not play". */
@@ -493,6 +446,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const applySession = (next: PlaybackSession, autoplay = true) => {
     // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
     abandonedRef.current = false;
+    if (next.sidecarUrl !== session?.sidecarUrl) setSidecarReady(false);
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
@@ -507,7 +461,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; airplayPreparingRef.current = false; setSidecarReady(false);
+    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there.
     (async () => {
@@ -550,16 +504,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const url = session?.sidecarUrl;
     if (!url) { setSidecarReady(false); return; }
     let stop = false;
+    const controller = new AbortController();
     setSidecarReady(false);
     void (async () => {
-      for (let attempt = 0; attempt < 40 && !stop; attempt += 1) {
-        const response = await fetch(url).catch(() => undefined);
+      const deadline = Date.now() + 60_000;
+      while (!stop && Date.now() < deadline) {
+        const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }).catch(() => undefined);
         if (stop) return;
         if (response?.ok) { setSidecarReady(true); return; }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     })();
-    return () => { stop = true; };
+    return () => { stop = true; controller.abort(); };
   }, [session?.sidecarUrl]);
 
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
@@ -911,7 +867,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
       if (settingsOpen || controlsVisible) { clearControlsTimer(); setControlsVisible(false); }
       else revealControls();
     }}>
-      <video ref={videoRef} playsInline x-webkit-airplay="allow"
+      <video ref={videoRef} playsInline disableRemotePlayback x-webkit-airplay="deny"
         onPlay={() => setPaused(false)} onPause={() => setPaused(true)}
         onTimeUpdate={(event) => {
           const absolute = offsetRef.current + event.currentTarget.currentTime;
@@ -920,7 +876,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
-        onError={() => {
+        onError={(event) => {
+          if (event.target !== event.currentTarget) return;
           if (seekInFlightRef.current || abandonedRef.current) return;
           const media = videoRef.current?.error;
           report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
@@ -933,20 +890,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
             viaHls: Boolean(hlsRef.current),
           });
           if (media?.code === 3) {
-            // Opening the HomePod picker briefly uses native HLS; if Safari
-            // refuses that remux, go back to hls.js instead of transcoding.
-            if (airplayPreparingRef.current && !isAirPlayWireless(videoRef.current as AirPlayVideo)) {
-              airplayPreparingRef.current = false;
-              switchAirPlaySourceRef.current(false);
-              return;
-            }
             recoverFromDecodeRef.current("element");
             return;
           }
           abandon(t("player.browserRefused"));
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
+          ? <track key={session.sidecarUrl} kind="subtitles" src={session.sidecarUrl} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
@@ -977,9 +927,6 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           {onNext && <button className="next-episode" disabled={nextBusy} aria-label={t("player.nextEpisode")} title={t("player.nextEpisodeTitle", { title: nextTitle ?? "" })} onClick={() => void onNext()}><SkipForward /></button>}
         </div>
         <Volume2 />
-        <AirPlayButton videoRef={videoRef} visible={controlsVisible}
-          onPrepareNative={() => switchAirPlaySourceRef.current(true)}
-          onCancelNative={() => { airplayPreparingRef.current = false; switchAirPlaySourceRef.current(false); }} />
         <input aria-label={t("player.volume")} className="volume" type="range" min="0" max="100" defaultValue="100" onChange={(event) => { const video = videoRef.current; if (video) video.volume = Number(event.target.value) / 100; }} />
 
         {((session?.subtitleTracks.length ?? 0) > 0 || addonSubtitles.length > 0 || session?.sidecarUrl) && <button disabled={subtitleValue === "off" && !session?.sidecarUrl} aria-label={subtitlesHidden ? t("player.showSubtitles") : t("player.hideSubtitles")} title={subtitlesHidden ? t("player.showSubtitlesKey") : t("player.hideSubtitlesKey")} aria-pressed={!subtitlesHidden} onClick={() => setSubtitlesHidden(!subtitlesHidden)}>{subtitlesHidden ? <CaptionsOff /> : <Captions />}</button>}

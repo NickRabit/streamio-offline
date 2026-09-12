@@ -7,6 +7,7 @@ import path from "node:path";
 import { mediaResources, safeSourceText } from "./media-resources.js";
 import { createHash } from "node:crypto";
 import { PlayerPreviews } from "./player-previews.js";
+import { PlayerSidecars } from "./player-sidecars.js";
 import { INTERNAL_TOKEN } from "./auth.js";
 import { log } from "./logger.js";
 import { pickByLanguage } from "./language.js";
@@ -156,6 +157,21 @@ export const hlsPlaylistFiles = (playlist: string) => {
   }
   return files;
 };
+
+export async function waitForHlsOutput(directory: string, finished: () => boolean, cancelled: () => boolean, timeoutMs = 40_000): Promise<string | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && !cancelled()) {
+    try {
+      const playlist = await readFile(path.join(directory, "index-0.m3u8"), "utf8");
+      if (hlsCanStart(playlist)) {
+        const files = await Promise.all(hlsPlaylistFiles(playlist).map((name) => stat(path.join(directory, name)).then((value) => value.size > 0, () => false)));
+        if (files.every(Boolean)) return playlist;
+      }
+    } catch { /* FFmpeg has not published a playlist yet. */ }
+    if (finished()) return;
+    await sleep(100);
+  }
+}
 // AC-3 family does not expose enough codec information to the fragmented MP4 muxer
 // until the first packet arrives. After an input seek video can arrive first, making
 // HLS fail while writing the init segment ("Cannot write moov atom before AC3 packets").
@@ -192,7 +208,10 @@ export class PlaybackManager {
   private sessions = new Map<string, Session>();
   private inspected = new Map<string, { info?: MediaInfo; at: number }>();
   private inspecting = new Map<string, Promise<MediaInfo | undefined>>();
-  private sidecarReady = new Set<string>();
+  private sidecars = new PlayerSidecars(undefined, (id, error) => {
+    const reason = error instanceof Error ? error.message : String(error);
+    log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id, reason: reason.slice(0, 200) });
+  });
   private readonly root: string;
   private vaapiDevice?: string;
   /** Some chips decode and encode but have no video processing unit, so scale_vaapi fails. */
@@ -322,8 +341,8 @@ export class PlaybackManager {
     // muxing WebVTT into fMP4 HLS makes the muxer die with "timescale not set".
     const avDefault = audioTrack === 0 && quality === null;
     const direct = this.directPlay(stream, info, capabilities);
-    if (subtitleTrack !== null) this.extractSidecar(session);
     if (avDefault && direct.ok) {
+      if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Direct play from source", { id, reason: direct.reason, ...summary });
       return this.describe(session, source);
     }
@@ -335,6 +354,7 @@ export class PlaybackManager {
       const limit = info?.duration ? Math.max(0, info.duration - 2) : Number.POSITIVE_INFINITY;
       const startTime = Math.max(0, Math.min(options.startTime ?? 0, limit));
       const url = await this.spawnAt(session, startTime);
+      if (subtitleTrack !== null) this.extractSidecar(session);
       log("INFO", "Conversion started", {
         id, mode: session.mode, reason, hardware: session.hardware,
         copyVideo: plan.copyVideo, copyAudio: plan.copyAudio,
@@ -378,7 +398,7 @@ export class PlaybackManager {
         session.pendingKill = this.kill(session);
         session.mode = "direct"; session.offset = 0;
         if (session.subtitleTrack !== null) this.extractSidecar(session);
-        else this.sidecarReady.delete(session.id);
+        else await this.sidecars.stop(session.id);
         log("INFO", "Back to direct play", { id });
         return this.describe(session, this.proxyPath(session.stream));
       }
@@ -391,11 +411,12 @@ export class PlaybackManager {
     const id = session.id;
     const limit = session.info?.duration ? Math.max(0, session.info.duration - 2) : Number.POSITIVE_INFINITY;
     const target = Math.max(0, Math.min(time, limit));
+    await this.sidecars.stop(id);
+    this.assertActive(session);
     // The old FFmpeg winds down in the background; the new one writes to a different generation, so they have nothing to fight over.
     session.pendingKill = this.kill(session);
     if (session.mode === "direct") session.mode = this.plan(session).copyVideo ? "remux" : "transcode";
     session.offset = target;
-    if (session.subtitleTrack !== null) this.extractSidecar(session);
     let url: string;
     try { url = await this.spawnAt(session, target); }
     catch (error) {
@@ -405,6 +426,7 @@ export class PlaybackManager {
       this.assertActive(session);
       url = await this.spawnAt(session, target);
     }
+    if (session.subtitleTrack !== null) this.extractSidecar(session);
     // Whether the restart ended up on the GPU is worth knowing: a transcode that says
     // nothing looks the same in the log as one that quietly fell back to the processor.
     log("INFO", message, { id, offset: Math.round(target), mode: session.mode, hardware: session.hardware, audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack });
@@ -430,9 +452,8 @@ export class PlaybackManager {
     log("DEBUG", "Playback session stopped", { id, mode: session.mode, generation: session.generation, position: Math.round(session.offset) });
     session.stopped = true;
     this.sessions.delete(id);
+    await Promise.all([this.sidecars.stop(id), this.kill(session)]);
     this.onStop(id);
-    this.sidecarReady.delete(id);
-    await this.kill(session);
     await session.operations.wait();
     await this.kill(session);
     await this.purge(path.join(this.root, id));
@@ -499,42 +520,34 @@ export class PlaybackManager {
       audioTracks: (session.info?.audioTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       subtitleTracks: (session.info?.subtitleTracks ?? []).map((track) => ({ ...track, title: safeSourceText(track.title, session.stream) })),
       audioTrack: session.audioTrack, subtitleTrack: session.subtitleTrack, quality: session.quality,
-      sidecarUrl: session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt` : undefined,
+      sidecarUrl: session.subtitleTrack !== null ? `/api/playback/${session.id}/sidecar.vtt${this.sidecars.revision(session.id) ? `?revision=${this.sidecars.revision(session.id)}` : ""}` : undefined,
       playlist: session.mode === "direct" ? isPlaylistSource(session.stream, session.info) : true,
     };
   }
 
-  sidecarFile(id: string) {
+  sidecarFile(id: string, revision?: string) {
     const session = this.sessions.get(id);
-    if (!session || session.subtitleTrack === null || !this.sidecarReady.has(id)) return undefined;
+    const file = this.sidecars.file(id, revision);
+    if (!session || session.subtitleTrack === null || !file) return undefined;
     session.claimed = true;
     session.lastAccess = Date.now();
-    return path.join(this.root, id, "sidecar.vtt");
+    return file;
   }
 
   private extractSidecar(session: Session) {
     const index = session.subtitleTrack;
     if (index === null) return;
-    this.sidecarReady.delete(session.id);
-    const dest = path.join(this.root, session.id, "sidecar.vtt");
-    void (async () => {
-      try {
-        await mkdir(path.dirname(dest), { recursive: true });
-        await promisify(execFile)("ffmpeg", [
-          "-hide_banner", "-loglevel", "error", "-nostdin",
-          // The same playlist through the same demuxer, so the same flags -- and the same
-          // reason to leave them out when the source is an ordinary file.
-          ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
-          ...(session.offset > 0 ? ["-ss", session.offset.toFixed(3)] : []),
-          "-i", this.localUrl(this.proxyPath(session.stream)),
-          "-map", `0:s:${index}`, "-c:s", "webvtt", "-y", dest,
-        ], { timeout: 45_000 });
-        if (this.sessions.get(session.id) === session && session.subtitleTrack === index) this.sidecarReady.add(session.id);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        log("WARN", "Embedded subtitles could not be extracted as a sidecar", { id: session.id, reason: reason.slice(0, 200) });
-      }
-    })();
+    const offset = session.offset;
+    const source = this.localUrl(this.proxyPath(session.stream));
+    this.sidecars.start(session.id, path.join(this.root, session.id), async () => [
+      "-hide_banner", "-loglevel", "error", "-nostdin",
+      // The same playlist through the same demuxer, so the same flags -- and the same
+      // reason to leave them out when the source is an ordinary file.
+      ...(isPlaylistSource(session.stream, session.info) ? await playlistArgs("ffmpeg") : []),
+      ...(offset > 0 ? ["-ss", offset.toFixed(3)] : []),
+      "-i", source,
+      "-map", `0:s:${index}`, "-c:s", "webvtt",
+    ]);
   }
 
   /** Embedded subtitles are switched on by themselves only when the preferred language really matches. */
@@ -735,33 +748,17 @@ export class PlaybackManager {
     // Only 'close' guarantees stderr has been read; 'exit' routinely misses the last message.
     child.once("close", (code, signal) => { finished = true; exitCode = code; if (code !== 0 && signal === null) session.error = describeFailure(stderr, code); });
 
-    // The master appears with the header, but the variant playlist only with the first segment.
-    const ready = path.join(directory, "index-0.m3u8");
     const url = `/api/playback/${session.id}/${session.generation}/master.m3u8`;
-    // EVENT playlists have no live edge. Waiting for a second segment used to hide
-    // hls.js stalling; liveDurationInfinity on the client makes one segment enough.
-    for (let attempt = 0; attempt < 400; attempt += 1) {
-      if (session.stopped) {
-        child.kill("SIGTERM");
-        log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });
-        return undefined;
-      }
-      try {
-        const playlist = await readFile(ready, "utf8");
-        if (hlsCanStart(playlist)) {
-          let filesReady = true;
-          for (const name of hlsPlaylistFiles(playlist)) {
-            try { if ((await stat(path.join(directory, name))).size <= 0) filesReady = false; }
-            catch { filesReady = false; }
-          }
-          if (!filesReady) continue;
-          const segments = (playlist.match(/#EXTINF/g) ?? []).length;
-          log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
-          return url;
-        }
-      } catch { /* the playlist does not exist yet */ }
-      if (finished) break;
-      await sleep(100);
+    const output = await waitForHlsOutput(directory, () => finished, () => session.stopped);
+    if (session.stopped) {
+      child.kill("SIGTERM");
+      log("DEBUG", "Conversion abandoned, the session is gone", { id: session.id, generation: session.generation, ms: Date.now() - startedAt });
+      return undefined;
+    }
+    if (output !== undefined) {
+      const segments = (output.match(/#EXTINF/g) ?? []).length;
+      log("DEBUG", "FFmpeg is producing segments", { id: session.id, generation: session.generation, hardware, segments, ms: Date.now() - startedAt });
+      return url;
     }
     if (!finished) { child.kill("SIGKILL"); session.error ||= "The conversion did not get going within 40 seconds."; }
     session.error ||= describeFailure(stderr, exitCode);

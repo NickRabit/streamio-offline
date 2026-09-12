@@ -1896,7 +1896,7 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 })))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
-  const file = playback.sidecarFile(String(req.params.id));
+  const file = playback.sidecarFile(String(req.params.id), typeof req.query.revision === "string" ? req.query.revision : undefined);
   if (!file) return res.status(404).end();
   res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").sendFile(path.basename(file), { root: path.dirname(file), dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
 }));

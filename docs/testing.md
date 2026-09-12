@@ -201,40 +201,23 @@ scroll restoration. Playwright's WebKit is not iOS Safari: it does not reproduce
 mobile browser chrome, the collapsing URL bar, or the safe-area behaviour that
 caused several of the landscape fixes. Those still need a real device.
 
-### AirPlay on physical Apple devices
+### Remote playback and seek regressions
 
-The custom player offers an AirPlay button when the browser exposes Apple's
-route picker. Available receivers enable it, and an active wireless route stays
-selectable so the user can change output. Native HLS is preferred on browsers
-with both native HLS and AirPlay support; the custom controls remain in use.
+AirPlay is disabled in the custom player. The video element disallows remote
+playback, no route picker is offered, and wireless events do not switch the
+playback engine. HLS uses hls.js when supported, with native HLS only as a
+fallback for browsers without MSE support.
 
-Unit tests cover discovery, picker rejection, connection state, cleanup,
-native-HLS selection, and scoped receiver access. Proxy integration tests fetch
-direct media and HLS master, variant, init, and segment URLs without cookies,
-and check that the grant cannot authorize other media or playback controls.
-These tests do not verify an actual wireless connection. Before
-claiming device compatibility, test Safari on iPhone, iPad, and Mac with:
+Before restoring AirPlay, verify actual iPhone and Mac playback with HomePods
+and video receivers, including HEVC with converted AAC audio, seeking, receiver
+loss, and return to local playback. Browser API mocks cannot establish device
+compatibility or reliable reconnection.
 
-- A HomePod or stereo pair: select audio output, check lip sync, pause, seek,
-  change episodes, and return to local output through the picker.
-- An Apple TV or AirPlay TV: test direct files and converted HLS, including
-  seeking and subtitles. HTML subtitle overlays are local UI and are not sent
-  to the receiver as video subtitles.
-- Receiver loss: turn the receiver off and check Safari's local output and
-  pause state. The app follows the wireless-state event without restarting or
-  forcing playback, so local resumption depends on the browser.
-- Unavailable receivers and rejected picker requests: the custom player must
-  remain usable, without opening native fullscreen controls.
-
-The browser owns device selection and reconnection; the app cannot save or
-silently select a named HomePod. AirPlay-capable clients receive an opaque
-receiver grant in their media URL. It permits only GET/HEAD of that playback's
-media tree and generated HLS files, for at most 12 hours or the login lifetime,
-whichever is shorter. Stop, logout, and server restart invalidate it. HLS child
-URLs retain the grant, and log redaction masks it. Normal clients keep cookie
-authentication. Receivers still need to reach the server's LAN address; an
-external reverse proxy requiring its own login may block them. A working
-localhost video alone does not prove remote playback works.
+Server tests cover delayed HLS initialization on slow storage, subtitle process
+cancellation and exit before media revocation, and subtitle offsets after
+repeated seeks. The browser regression checks that embedded subtitle URLs load
+directly and subtitle failures leave playback running. Real Synology and iPhone
+verification remains necessary for hardware performance and codec behavior.
 
 ## Continuous integration
 
