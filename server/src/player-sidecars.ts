@@ -89,7 +89,10 @@ export class PlayerSidecars {
     // A reader started at this very position is the right one even before it has written a cue:
     // without this, every repeated call replaced a reader that was only just getting going, and
     // each replacement is another connection to a source that counts them.
-    if (current && current.track === track && offset >= current.start && (offset === current.start || offset <= current.coverage)) {
+    // Within a second of where it began is the same position: the offset arrives rounded through
+    // one path and exact through another, and a hair of difference must not cost a connection.
+    const sameStart = current !== undefined && Math.abs(offset - current.start) < 1;
+    if (current && current.track === track && (sameStart || (offset >= current.start && offset <= current.coverage))) {
       this.keepAhead(current, id, offset);
       return;
     }
@@ -110,7 +113,7 @@ export class PlayerSidecars {
     })();
   }
 
-  private launch(id: string, job: Job, from: number, append: boolean) {
+  private launch(id: string, job: Job, from: number, append: boolean, why: "new" | "catching up" | "again" = append ? "catching up" : "new") {
     // This burst's own signal: a pause gives the job a fresh one for the next burst, and
     // reading the job's current signal here would make a paused reader look finished.
     const { signal } = job.controller;
@@ -118,7 +121,7 @@ export class PlayerSidecars {
     // been closed: its FFmpeg would outlive the media it reads and hammer a revoked source.
     if (signal.aborted || this.jobs.get(id) !== job) return;
     job.running = true;
-    log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), resumed: append });
+    log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), why });
     const startedAt = Date.now();
     job.done = (async () => {
       try {
@@ -142,6 +145,7 @@ export class PlayerSidecars {
         }
       } finally {
         job.running = false;
+        if (!job.complete) log("DEBUG", "The subtitle reader stopped", { id, track: job.track, ended: signal.aborted ? "it was told to" : "the reader ended by itself", coverage: Math.round(job.coverage) });
       }
     })();
   }
@@ -153,7 +157,7 @@ export class PlayerSidecars {
     if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
     if (!job.running && job.coverage < offset + SIDECAR_RESUME_LEAD_S) {
       const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;
-      this.launch(id, job, from, Number.isFinite(job.coverage));
+      this.launch(id, job, from, Number.isFinite(job.coverage), Number.isFinite(job.coverage) ? "catching up" : "again");
     }
   }
 

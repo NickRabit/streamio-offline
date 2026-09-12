@@ -305,6 +305,9 @@ test("asking for the same position again keeps the reader that is already on it"
     sidecars.ensure("session", directory, 1, 933, args);
     await tick();
     assert.deepEqual(starts, [933], "the reader that is already reading that position is left to work");
+    sidecars.ensure("session", directory, 1, 933.4, args);
+    await tick();
+    assert.deepEqual(starts, [933], "and a hair of difference in the position is the same position");
     assert.equal(sidecars.revision("session"), revision, "and the player keeps the address it is polling");
   } finally { await sidecars.stop("session"); await rm(directory, { recursive: true, force: true }); }
 });
