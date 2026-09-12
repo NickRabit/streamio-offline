@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { writeFile } from "node:fs/promises";
 import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -380,13 +381,18 @@ test("a playable mp4 with a preferred subtitle stays on direct play", async () =
   let spawned = false;
   manager.spawnAt = async () => { spawned = true; return "/nope"; };
   let extracted = 0;
-  manager.extractSidecar = () => { extracted += 1; };
+  manager.sidecars.run = async (_args: string[], signal: AbortSignal) => {
+    extracted += 1;
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  };
   const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, false);
   assert.equal(started.mode, "direct");
   assert.equal(started.subtitleTrack, 0);
+  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt\?revision=/);
+  while (!extracted) await pause(5);
   assert.equal(extracted, 1);
-  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt$/);
+  await manager.sidecars.stop(started.id);
 });
 
 test("mkv with subtitles still remuxes", async () => {
@@ -404,12 +410,17 @@ test("mkv with subtitles still remuxes", async () => {
     return "/hls";
   };
   let extracted = 0;
-  manager.extractSidecar = () => { extracted += 1; };
+  manager.sidecars.run = async (_args: string[], signal: AbortSignal) => {
+    extracted += 1;
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  };
   const started = await manager.start({ url: "https://cdn.example/movie.mkv" }, playCaps, { subtitleLanguage: "cs" });
   assert.equal(spawned, true);
   assert.equal(started.mode, "remux");
+  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt\?revision=/);
+  while (!extracted) await pause(5);
   assert.equal(extracted, 1);
-  assert.match(started.sidecarUrl ?? "", /sidecar\.vtt$/);
+  await manager.sidecars.stop(started.id);
 });
 
 const remuxSession = (manager: any, overrides: Record<string, unknown> = {}) => {
@@ -590,21 +601,40 @@ test("the playlist flags are left out for a source that is not a playlist", () =
   assert.equal(isPlaylistSource({ url: "https://example.test/api/media/abc" }, { container: "mov,mp4,m4a" } as any), false);
 });
 
-test("resumed remux subtitle extraction starts after HLS is ready and at its offset", async () => {
+test("seeking re-reads the same subtitles instead of starting FFmpeg again", async () => {
   const manager = new PlaybackManager("/tmp/test-seek-sidecars") as any;
   manager.inspect = async () => ({ container: "matroska", duration: 7000,
     video: { codec: "hevc" }, audio: { codec: "ac3" },
     audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [{ index: 2, codec: "subrip", language: "cs" }],
   });
   const events: string[] = [];
+  const readers: number[] = [];
   manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
-  manager.extractSidecar = (session: any) => events.push(`subtitles:${session.offset}`);
-  manager.sidecars.stop = async () => { events.push("cancel-subtitles"); };
+  manager.sidecars.run = async (args: string[], signal: AbortSignal) => {
+    readers.push(Number(args[args.indexOf("-ss") + 1] ?? 0));
+    // What FFmpeg would have written by then: cues with the source's own timestamps.
+    await writeFile(args.at(-1)!, "WEBVTT\n\n01:27:30.000 --> 01:40:00.000\nspoken\n\n");
+    await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  };
   const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 5245, subtitleLanguage: "cs" });
-  await manager.seek(started.id, 3265);
-  await manager.seek(started.id, 4872);
-  assert.deepEqual(events, ["video:5245", "subtitles:5245", "cancel-subtitles", "video:3265", "subtitles:3265", "cancel-subtitles", "video:4872", "subtitles:4872"]);
+  while (!readers.length) await pause(5);
+  // The player asks for the cues, which is also how the reader's progress becomes known.
+  let cues;
+  while (!(cues = await manager.sidecar(started.id, revisionOf(started.sidecarUrl), 5245))) await pause(5);
+  assert.match(cues.text, /00:00:05\.000 --> 00:12:35\.000\nspoken/, "the cues are shifted to the generation being played");
+  const resumed = await manager.seek(started.id, 5400);
+  const back = await manager.seek(started.id, 900);
+  assert.deepEqual(events, ["video:5245", "video:5400", "video:900"]);
+  while (readers.length < 2) await pause(5);
+  // Only the jump behind the reader needed another FFmpeg; the seek it already covers did not.
+  assert.deepEqual(readers, [5245, 900]);
+  assert.match(started.sidecarUrl ?? "", /\?revision=[0-9a-f-]+&offset=5245\.000$/);
+  assert.match(resumed.sidecarUrl ?? "", /&offset=5400\.000$/);
+  assert.equal(revisionOf(started.sidecarUrl), revisionOf(resumed.sidecarUrl));
+  assert.notEqual(revisionOf(resumed.sidecarUrl), revisionOf(back.sidecarUrl));
+  await manager.sidecars.stop(started.id);
 });
+const revisionOf = (url?: string) => /revision=([0-9a-f-]+)/.exec(url ?? "")?.[1];
 
 test("stop terminates media and subtitle readers before revoking their source", async () => {
   let mediaRunning = true;

@@ -3,6 +3,7 @@ import { nextVideoFile } from "./next-file.js";
 import { isInternalMediaPath, mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
 import { AirPlayAccess } from "./airplay-access.js";
+import { shiftVtt } from "./vtt.js";
 import path from "node:path";
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, statfs } from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
@@ -1896,9 +1897,15 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 })))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
-  const file = playback.sidecarFile(String(req.params.id), typeof req.query.revision === "string" ? req.query.revision : undefined);
-  if (!file) return res.status(404).end();
-  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store").sendFile(path.basename(file), { root: path.dirname(file), dotfiles: "deny" }, (error) => { if (error && !res.headersSent) res.status(404).end(); });
+  const cues = await playback.sidecar(
+    String(req.params.id),
+    typeof req.query.revision === "string" ? req.query.revision : undefined,
+    Math.max(0, Number(req.query.offset) || 0),
+  );
+  if (!cues) return res.status(404).end();
+  // Until the reader has the whole track the player keeps asking, so it is told which it has.
+  res.type("text/vtt; charset=utf-8").setHeader("cache-control", "private, no-store")
+    .setHeader("x-sidecar-complete", cues.complete ? "1" : "0").send(cues.text);
 }));
 app.get("/api/playback/:id/:generation/:file", asyncRoute(async (req, res) => {
   const directory = playback.directory(String(req.params.id), String(req.params.generation));
@@ -2041,18 +2048,6 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
     log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
   }
 }));
-
-// After a transcode restart the video starts at zero, so the subtitles have to shift by the same amount.
-const CUE = /(\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3}) --> (\d{2,}:\d{2}:\d{2}\.\d{3}|\d{2}:\d{2}\.\d{3})/;
-const cueSeconds = (value: string) => { const parts = value.split(":").map(Number); return parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1]; };
-const cueStamp = (value: number) => { const total = Math.max(0, value); return `${String(Math.floor(total / 3600)).padStart(2, "0")}:${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}:${(total % 60).toFixed(3).padStart(6, "0")}`; };
-function shiftVtt(text: string, offset: number) {
-  return text.split(/\n\n+/).map((block) => {
-    const match = block.match(CUE); if (!match) return block;
-    const end = cueSeconds(match[2]) - offset; if (end <= 0) return "";
-    return block.replace(CUE, `${cueStamp(cueSeconds(match[1]) - offset)} --> ${cueStamp(end)}`);
-  }).filter(Boolean).join("\n\n");
-}
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {
   res.status(410).setHeader("cache-control", "private, no-store").json({ error: "This media API has been retired.", code: "UNSAFE_SOURCE_INPUT" });

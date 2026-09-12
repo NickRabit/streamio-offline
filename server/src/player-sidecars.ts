@@ -1,49 +1,84 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { completeVttBlocks, shiftVtt, vttCoverage } from "./vtt.js";
 
 type Extract = (args: string[], signal: AbortSignal) => Promise<unknown>;
 const extract: Extract = async (args, signal) => {
-  const pending = promisify(execFile)("ffmpeg", args, { signal, timeout: 45_000, killSignal: "SIGKILL" });
+  // Reading subtitles out of a remote film means pulling the rest of the file through
+  // the proxy, which takes minutes on a slow link. Only the abort ends it early; the
+  // timeout is a backstop against an FFmpeg that hung instead of finishing.
+  const pending = promisify(execFile)("ffmpeg", args, { signal, timeout: 30 * 60_000, killSignal: "SIGKILL" });
   const closed = new Promise<void>((resolve) => pending.child.once("close", () => resolve()));
   try { return await pending; }
   finally { await closed; }
 };
-interface Job { revision: string; file: string; controller: AbortController; done: Promise<void>; ready: boolean }
+
+/** Cues have to reach this far past the playhead before the track is worth attaching. */
+export const SIDECAR_LEAD_S = 120;
+
+interface Job {
+  revision: string; track: number; start: number; file: string;
+  controller: AbortController; done: Promise<void>; complete: boolean;
+  /** How far the cues written so far reach, refreshed whenever the player asks for them. */
+  coverage: number;
+}
 
 export class PlayerSidecars {
   private jobs = new Map<string, Job>();
   constructor(private run: Extract = extract, private failed: (id: string, error: unknown) => void = () => {}) {}
 
-  start(id: string, directory: string, args: () => Promise<string[]>) {
-    const previous = this.jobs.get(id);
+  /** One reader per track: a seek usually lands inside what this one has already written,
+   *  and only a position it cannot serve -- another track, a jump back before its start, or
+   *  one so far ahead that it would have to read the film to get there -- needs another FFmpeg. */
+  ensure(id: string, directory: string, track: number, offset: number, args: (start: number) => Promise<string[]>) {
+    const current = this.jobs.get(id);
+    if (current && current.track === track && offset >= current.start && offset <= current.coverage) return;
+    const previous = current;
     previous?.controller.abort();
     const revision = randomUUID();
-    const job: Job = { revision, file: path.join(directory, `sidecar-${revision}.vtt`), controller: new AbortController(), done: Promise.resolve(), ready: false };
+    const start = Math.max(0, offset);
+    const job: Job = {
+      revision, track, start, file: path.join(directory, `sidecar-${revision}.vtt`),
+      controller: new AbortController(), done: Promise.resolve(), complete: false, coverage: -Infinity,
+    };
     this.jobs.set(id, job);
     job.done = (async () => {
       try {
-        if (previous) { await previous.done; await rm(previous.file, { force: true }); }
+        if (previous) { await previous.done; await rm(previous.file, { force: true }).catch(() => undefined); }
         if (job.controller.signal.aborted) return;
         await mkdir(directory, { recursive: true });
-        const input = await args();
+        const input = await args(start);
         if (job.controller.signal.aborted) return;
         await this.run([...input, "-y", job.file], job.controller.signal);
-        job.ready = !job.controller.signal.aborted && this.jobs.get(id) === job;
+        job.complete = !job.controller.signal.aborted;
+        if (job.complete) job.coverage = Infinity;
       } catch (error) {
         if (!job.controller.signal.aborted) this.failed(id, error);
       } finally {
-        if (!job.ready) await rm(job.file, { force: true }).catch(() => undefined);
+        if (!job.complete) await rm(job.file, { force: true }).catch(() => undefined);
       }
     })();
   }
 
   revision(id: string) { return this.jobs.get(id)?.revision; }
-  file(id: string, revision?: string) {
+
+  /** The cues are written with source timestamps, so they are shifted to the playing
+   *  generation here rather than extracted again for every position. */
+  async read(id: string, revision: string | undefined, offset: number): Promise<{ text: string; complete: boolean } | undefined> {
     const job = this.jobs.get(id);
-    return job?.ready && (!revision || job.revision === revision) ? job.file : undefined;
+    if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
+    let raw: string;
+    try { raw = await readFile(job.file, "utf8"); } catch { return undefined; }
+    const text = job.complete ? raw : completeVttBlocks(raw);
+    if (!job.complete) {
+      job.coverage = vttCoverage(text);
+      if (job.coverage < offset + SIDECAR_LEAD_S) return undefined;
+    }
+    const shifted = offset > 0 ? shiftVtt(text, offset) : text;
+    return { text: shifted, complete: job.complete };
   }
 
   async stop(id: string) {

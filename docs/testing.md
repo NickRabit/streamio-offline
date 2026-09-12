@@ -214,13 +214,25 @@ loss, and return to local playback. Browser API mocks cannot establish device
 compatibility or reliable reconnection.
 
 Server tests cover delayed HLS initialization on slow storage, subtitle process
-cancellation and exit before media revocation, and subtitle offsets after
-repeated seeks. Client tests cover the sidecar poll: its retries, its deadline,
-cancellation when the session changes, and the hand-wired per-request timeout
-that keeps the poll working on Safari without `AbortSignal.any`. The browser
-regression checks that embedded subtitle URLs load directly and subtitle
-failures leave playback running. Real Synology and iPhone verification remains
-necessary for hardware performance and codec behavior.
+cancellation and exit before media revocation, and the subtitle reader: one per
+track, kept across a seek it already covers, restarted for another track, a jump
+back before its start, or a position beyond what it has read. Reading embedded
+subtitles out of a remote film pulls the rest of the file through the proxy, so
+the cues are extracted once with source timestamps (`-copyts`) and shifted to
+the playing generation on the way out; without that an input seek rebases them
+to whatever packet it landed on, minutes away from the picture. Client tests
+cover the poll: its retries, cancellation when the session changes, the second
+attach once the reader has the whole track, and the hand-wired per-request
+timeout that keeps it working on Safari without `AbortSignal.any`. The browser
+regression checks that embedded subtitles attach, attach again when complete,
+and that a subtitle failure leaves playback running.
+
+Timing is the part tests cannot settle. A slow source delays the first cues,
+and the reader competes with the conversion for the same link. Check on a real
+film from a remote source: subtitles appear within seconds of starting, survive
+several seeks without the picture stalling, and stay in step with the dialogue
+an hour in. Real Synology and iPhone verification remains necessary for
+hardware performance and codec behavior.
 
 ## Continuous integration
 

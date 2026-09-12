@@ -3,7 +3,7 @@ import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
-import { waitForSidecar } from "./player-sidecar";
+import { watchSidecar } from "./player-sidecar";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
@@ -216,6 +216,9 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const abandonedRef = useRef(false);
   const escalateRef = useRef(false);
   const [sidecarReady, setSidecarReady] = useState(false);
+  // The track is attached as soon as the cues reach the playhead and again once the
+  // reader has the rest of them, so a long film is not left silent halfway through.
+  const [sidecarComplete, setSidecarComplete] = useState(false);
   const [session, setSession] = useState<PlaybackSession | null>(null);
   const [addonSubtitle, setAddonSubtitle] = useState<Subtitle | null>(null);
   const [offset, setOffset] = useState(0);
@@ -447,7 +450,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const applySession = (next: PlaybackSession, autoplay = true) => {
     // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
     abandonedRef.current = false;
-    if (next.sidecarUrl !== session?.sidecarUrl) setSidecarReady(false);
+    if (next.sidecarUrl !== session?.sidecarUrl) { setSidecarReady(false); setSidecarComplete(false); }
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
@@ -462,7 +465,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     timeRef.current = 0; offsetRef.current = 0; probeDurationRef.current = 0; seekingRef.current = false; pendingSeekRef.current = null;
     reportRef.current = { position: 0, duration: 0 }; setResumedFrom(0);
     stallsRef.current = []; setQualityHint(null); setDownloadState("idle");
-    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false);
+    decodeRecoversRef.current = []; abandonedRef.current = false; escalateRef.current = false; setSidecarReady(false); setSidecarComplete(false);
     setSubtitlesHidden(false); subtitlesHiddenRef.current = false;
     // Resuming: the server knows the position and starts playback right there.
     (async () => {
@@ -503,10 +506,13 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
 
   useEffect(() => {
     const url = session?.sidecarUrl;
-    if (!url) { setSidecarReady(false); return; }
+    if (!url) { setSidecarReady(false); setSidecarComplete(false); return; }
     const controller = new AbortController();
-    setSidecarReady(false);
-    void waitForSidecar(url, controller.signal).then((ready) => { if (ready && !controller.signal.aborted) setSidecarReady(true); });
+    setSidecarReady(false); setSidecarComplete(false);
+    void watchSidecar(url, controller.signal, ({ ready, complete }) => {
+      if (controller.signal.aborted) return;
+      setSidecarReady(ready); setSidecarComplete(complete);
+    });
     return () => controller.abort();
   }, [session?.sidecarUrl]);
 
@@ -888,7 +894,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           abandon(t("player.browserRefused"));
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={session.sidecarUrl} kind="subtitles" src={session.sidecarUrl} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
+          ? <track key={`${session.sidecarUrl}:${sidecarComplete}`} kind="subtitles" src={`${session.sidecarUrl}&pass=${sidecarComplete ? "full" : "lead"}`} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}
