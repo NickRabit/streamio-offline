@@ -215,9 +215,12 @@ compatibility or reliable reconnection.
 
 Server tests cover delayed HLS initialization on slow storage, subtitle process
 cancellation and exit before media revocation, and subtitle offsets after
-repeated seeks. The browser regression checks that embedded subtitle URLs load
-directly and subtitle failures leave playback running. Real Synology and iPhone
-verification remains necessary for hardware performance and codec behavior.
+repeated seeks. Client tests cover the sidecar poll: its retries, its deadline,
+cancellation when the session changes, and the hand-wired per-request timeout
+that keeps the poll working on Safari without `AbortSignal.any`. The browser
+regression checks that embedded subtitle URLs load directly and subtitle
+failures leave playback running. Real Synology and iPhone verification remains
+necessary for hardware performance and codec behavior.
 
 ## Continuous integration
 

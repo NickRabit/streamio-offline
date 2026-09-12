@@ -3,6 +3,7 @@ import Hls from "hls.js";
 import { useEffect, useRef, useState } from "react";
 import { AudioLines, Captions, CaptionsOff, Check, Download, HardDrive, Star, Gauge, Maximize, Minimize, Pause, Play, RotateCcw, RotateCw, Settings, SlidersHorizontal, SkipBack, SkipForward, Volume2, X } from "lucide-react";
 import { ApiError, api, describeError, subtitleUrl } from "./api";
+import { waitForSidecar } from "./player-sidecar";
 import { label } from "./languages";
 import { hostOf, report } from "./diagnostics";
 import { AHEAD_CATCHUP_MS, HLS_PLAYER_CONFIG, ignoreHlsErrorDuringRestart, planDecodeRecovery, planSeek, recordDecodeRecover, waitForSeekable } from "./player-hls";
@@ -503,19 +504,10 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   useEffect(() => {
     const url = session?.sidecarUrl;
     if (!url) { setSidecarReady(false); return; }
-    let stop = false;
     const controller = new AbortController();
     setSidecarReady(false);
-    void (async () => {
-      const deadline = Date.now() + 60_000;
-      while (!stop && Date.now() < deadline) {
-        const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }).catch(() => undefined);
-        if (stop) return;
-        if (response?.ok) { setSidecarReady(true); return; }
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-    })();
-    return () => { stop = true; controller.abort(); };
+    void waitForSidecar(url, controller.signal).then((ready) => { if (ready && !controller.signal.aborted) setSidecarReady(true); });
+    return () => controller.abort();
   }, [session?.sidecarUrl]);
 
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
