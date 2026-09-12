@@ -493,6 +493,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
   const applySession = (next: PlaybackSession, autoplay = true) => {
     // A fresh conversion deserves a fresh verdict, even after an earlier one was given up on.
     abandonedRef.current = false;
+    if (next.sidecarUrl !== session?.sidecarUrl) setSidecarReady(false);
     sessionRef.current = next.id; modeRef.current = next.mode; offsetRef.current = next.offset;
     setSession(next); setOffset(next.offset); showTime(next.offset);
     if (next.duration) { probeDurationRef.current = next.duration; setDuration(next.duration); }
@@ -550,16 +551,18 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
     const url = session?.sidecarUrl;
     if (!url) { setSidecarReady(false); return; }
     let stop = false;
+    const controller = new AbortController();
     setSidecarReady(false);
     void (async () => {
-      for (let attempt = 0; attempt < 40 && !stop; attempt += 1) {
-        const response = await fetch(url).catch(() => undefined);
+      const deadline = Date.now() + 60_000;
+      while (!stop && Date.now() < deadline) {
+        const response = await fetch(url, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) }).catch(() => undefined);
         if (stop) return;
         if (response?.ok) { setSidecarReady(true); return; }
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
     })();
-    return () => { stop = true; };
+    return () => { stop = true; controller.abort(); };
   }, [session?.sidecarUrl]);
 
   /** Inside the produced part we seek at once; otherwise the conversion restarts at the new position. */
@@ -920,7 +923,8 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
         }}
         onDurationChange={(event) => { const value = event.currentTarget.duration; if (Number.isFinite(value) && (modeRef.current === "direct" || !probeDurationRef.current)) setDuration(value); }}
         onWaiting={noteStall} onPlaying={clearBuffering}
-        onError={() => {
+        onError={(event) => {
+          if (event.target !== event.currentTarget) return;
           if (seekInFlightRef.current || abandonedRef.current) return;
           const media = videoRef.current?.error;
           report("ERROR", `The video element refused the stream (code ${media?.code ?? "?"})`, {
@@ -946,7 +950,7 @@ export function Player({ previousTitle, onPrevious, nextTitle, nextBusy, onNext,
           abandon(t("player.browserRefused"));
         }}>
         {sidecarReady && session?.sidecarUrl
-          ? <track key={session.sidecarUrl} kind="subtitles" src={subtitleUrl(session.sidecarUrl)} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
+          ? <track key={session.sidecarUrl} kind="subtitles" src={session.sidecarUrl} srcLang={subtitleLanguage} label={t("player.subtitles")} default />
           : addonSubtitle && <track key={`${addonSubtitle.subtitleId}:${offset}`} kind="subtitles" src={subtitleUrl(subtitleIds[addonSubtitle.subtitleId] ?? addonSubtitle.subtitleId, offset)} srcLang={addonSubtitle.lang || subtitleLanguage} label={label(addonSubtitle.lang)} default />}
       </video>
       {subtitleText && <div className="player-subtitles" aria-live="off">{subtitleText}</div>}

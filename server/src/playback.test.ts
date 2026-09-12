@@ -589,3 +589,36 @@ test("the playlist flags are left out for a source that is not a playlist", () =
   assert.equal(isPlaylistSource({ url: "https://example.test/api/media/abc" }, { container: "hls,applehttp" } as any), true);
   assert.equal(isPlaylistSource({ url: "https://example.test/api/media/abc" }, { container: "mov,mp4,m4a" } as any), false);
 });
+
+test("resumed remux subtitle extraction starts after HLS is ready and at its offset", async () => {
+  const manager = new PlaybackManager("/tmp/test-seek-sidecars") as any;
+  manager.inspect = async () => ({ container: "matroska", duration: 7000,
+    video: { codec: "hevc" }, audio: { codec: "ac3" },
+    audioTracks: [{ index: 0, codec: "ac3" }], subtitleTracks: [{ index: 2, codec: "subrip", language: "cs" }],
+  });
+  const events: string[] = [];
+  manager.spawnAt = async (session: any, offset: number) => { session.offset = offset; events.push(`video:${offset}`); return "/hls"; };
+  manager.extractSidecar = (session: any) => events.push(`subtitles:${session.offset}`);
+  manager.sidecars.stop = async () => { events.push("cancel-subtitles"); };
+  const started = await manager.start({ url: "https://cdn.example/large.mkv" }, { hevc: true }, { startTime: 5245, subtitleLanguage: "cs" });
+  await manager.seek(started.id, 3265);
+  await manager.seek(started.id, 4872);
+  assert.deepEqual(events, ["video:5245", "subtitles:5245", "cancel-subtitles", "video:3265", "subtitles:3265", "cancel-subtitles", "video:4872", "subtitles:4872"]);
+});
+
+test("stop terminates media and subtitle readers before revoking their source", async () => {
+  let mediaRunning = true;
+  let subtitlesRunning = true;
+  let revoked = false;
+  const manager = new PlaybackManager("/tmp/test-seek-stop", () => {
+    assert.equal(mediaRunning, false);
+    assert.equal(subtitlesRunning, false);
+    revoked = true;
+  }) as any;
+  const session = remuxSession(manager);
+  manager.kill = async () => { await pause(10); mediaRunning = false; };
+  manager.sidecars.stop = async () => { await pause(20); subtitlesRunning = false; };
+  manager.purge = async () => {};
+  await manager.stop(session.id);
+  assert.equal(revoked, true);
+});
