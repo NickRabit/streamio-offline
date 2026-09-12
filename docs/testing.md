@@ -239,13 +239,12 @@ in bursts -- it fills a quarter of an hour ahead, lets go of the source, and pic
 where it stopped when the picture catches up -- and releases it outright before a seek.
 
 A copied video cannot start between keyframes, so a seek lands on the one before the
-second asked for -- up to a couple of seconds earlier on some encodes. The conversion
-writes that keyframe out once, with source timestamps, and the session takes its
-position from it, which keeps the cues and the clock on the picture instead of ahead
-of it. The generation's own zero sits on whichever track comes first, usually the
-audio a fraction of a second earlier, so the picture's place inside the first segment
-is taken off the keyframe as well. Check on a real film that a line is spoken as it appears, after a seek as well
-as after switching the track.
+second asked for, and the cues keep that much of a head start against the picture --
+measured between 0.05 s and 0.37 s on one film, a whole keyframe interval on sparser
+encodes. Where that landing is cannot be read while the conversion runs: FFmpeg holds
+a side output of its own until it exits, whatever the format and whatever the flushing
+flags, and asking the source directly costs a second connection, which is what these
+hosts refuse. What is left of the offset is for the viewer to dial out.
 
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
