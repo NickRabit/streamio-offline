@@ -44,13 +44,21 @@ test("switching on an embedded track serves its cues, and a seek shifts them", a
   expect(first.text).toContain("WEBVTT");
   expect(first.text).toMatch(/00:00\.023 --> 00:09\.023\nTitulek 1/);
 
-  // Half an hour in the film starts at zero again, so the cues have to move with it.
+  // Half an hour in the film starts at zero again, so the cues have to move with it -- and with
+  // the keyframe the copy really starts on, which is at or just before the second asked for.
   const sought = await (await request.post(`/api/playback/${started.id}/seek`, { data: { time: 100 } })).json();
-  expect(sought.sidecarUrl).toMatch(/&offset=100\.000$/);
+  const start = Number(/&offset=([\d.]+)/.exec(sought.sidecarUrl)![1]);
+  expect(start).toBeLessThanOrEqual(100);
+  expect(start).toBeGreaterThan(95);
+  expect(sought.offset).toBeCloseTo(start, 3);
   const shifted = await cues(sought.sidecarUrl);
   expect(shifted.text).toMatch(/Titulek 11/);
   expect(shifted.text).not.toMatch(/Titulek 1\n/);
-  expect(shifted.text).toMatch(/00:00:00\.023 --> 00:00:09\.023\nTitulek 11/);
+  // Titulek 11 is spoken at 100 s, so it lands where the picture stands when the generation starts.
+  const eleventh = /(\d{2}):(\d{2}):(\d{2}\.\d{3}) --> [^\n]+\nTitulek 11/.exec(shifted.text);
+  expect(eleventh, shifted.text.slice(0, 200)).not.toBeNull();
+  const at = Number(eleventh![1]) * 3600 + Number(eleventh![2]) * 60 + Number(eleventh![3]);
+  expect(at).toBeCloseTo(100.023 - start, 2);
   // The same reader serves the new position: seeking must not start FFmpeg again.
   expect(/revision=([0-9a-f-]+)/.exec(sought.sidecarUrl)?.[1]).toBe(/revision=([0-9a-f-]+)/.exec(switched.sidecarUrl)?.[1]);
 

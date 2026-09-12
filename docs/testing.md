@@ -238,6 +238,13 @@ which the hosts behind these films often refuse. For the same reason the reader 
 in bursts -- it fills a quarter of an hour ahead, lets go of the source, and picks up
 where it stopped when the picture catches up -- and releases it outright before a seek.
 
+A copied video cannot start between keyframes, so a seek lands on the one before the
+second asked for -- up to a couple of seconds earlier on some encodes. The conversion
+writes that keyframe out once, with source timestamps, and the session takes its
+position from it, which keeps the cues and the clock on the picture instead of ahead
+of it. Check on a real film that a line is spoken as it appears, after a seek as well
+as after switching the track.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

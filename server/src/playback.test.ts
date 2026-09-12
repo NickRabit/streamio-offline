@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { writeFile } from "node:fs/promises";
-import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
+import { PlaybackManager, SOURCE_UNREACHABLE, SerialOperations, correctedOffset, describeFailure, hlsCanStart, hlsPlaylistFiles, isPlaylistSource, sourceReachable } from "./playback.js";
 
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -685,4 +685,31 @@ test("switching subtitles changes the reader, not the conversion", async () => {
   assert.deepEqual(spawns, [900, 960]);
   void readers;
   await manager.sidecars.stop(started.id);
+});
+
+test("the position follows the keyframe the copy really starts on", () => {
+  // A copied video begins at the keyframe before the requested second; the subtitles and the
+  // clock have to use that, or the cues run ahead of the picture by the distance between them.
+  assert.equal(correctedOffset(1234, 1233.634), 1233.634);
+  assert.equal(correctedOffset(1234, undefined), 1234);
+  // A start after the request, or minutes before it, is not this seek landing.
+  assert.equal(correctedOffset(1234, 1240), 1234);
+  assert.equal(correctedOffset(1234, 900), 1234);
+  assert.equal(correctedOffset(0, 0), 0);
+});
+
+test("the seek writes one keyframe beside the segments, and only when there is a picture", () => {
+  const manager = new PlaybackManager("/tmp/test-start-frame") as any;
+  const session = (info: any) => ({ id: "s", stream: { url: "https://cdn.example/f.mkv" }, capabilities: { hevc: true }, info,
+    mode: "remux", generation: 1, offset: 0, hardware: false, audioTrack: 0, subtitleTrack: null, quality: null,
+    startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false });
+  const withVideo = session({ container: "matroska", video: { codec: "hevc" }, audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] });
+  const seeked = manager.args(withVideo, 1234, "/tmp/gen", false).join(" ");
+  assert.match(seeked, /-copyts/);
+  assert.match(seeked, /-frames:v 1 -f mp4 -y \/tmp\/gen\/start\.mp4/);
+  // From the start there is nothing to correct, so the extra output is not written.
+  const fromZero = manager.args(withVideo, 0, "/tmp/gen", false).join(" ");
+  assert.doesNotMatch(fromZero, /start\.mp4|-copyts/);
+  const audioOnly = manager.args(session({ container: "matroska", audio: { codec: "aac" }, audioTracks: [{ index: 0, codec: "aac" }], subtitleTracks: [] }), 1234, "/tmp/gen", false).join(" ");
+  assert.doesNotMatch(audioOnly, /start\.mp4|-copyts/);
 });
