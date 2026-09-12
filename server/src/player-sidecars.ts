@@ -152,7 +152,7 @@ export class PlayerSidecars {
 
   /** The cues are written with source timestamps, so they are shifted to the playing
    *  generation here rather than extracted again for every position. */
-  async read(id: string, revision: string | undefined, offset: number, delay = 0): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
+  async read(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset): Promise<{ text: string; complete: boolean; coverage: number } | undefined> {
     const job = this.jobs.get(id);
     if (!job || (revision !== undefined && job.revision !== revision)) return undefined;
     let raw: string;
@@ -160,7 +160,7 @@ export class PlayerSidecars {
     const text = job.complete ? raw : completeVttBlocks(raw);
     if (!job.complete) {
       job.coverage = vttCoverage(text);
-      this.keepAhead(job, id, offset);
+      if (position !== null) this.keepAhead(job, id, position);
       if (job.coverage < offset + SIDECAR_LEAD_S) {
         // The one line that says why a film is playing without subtitles.
         log("DEBUG", "Embedded subtitles are still behind the picture", { id, wanted: Math.round(offset + SIDECAR_LEAD_S), reached: Math.round(job.coverage) });

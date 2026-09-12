@@ -1905,11 +1905,15 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 })))));
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => { await playback.stop(String(req.params.id)); res.status(204).end(); }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
+  const offset = Math.max(0, Number(req.query.offset) || 0);
+  const requestedPosition = Number(req.query.position);
+  const position = Number.isFinite(requestedPosition) ? Math.max(offset, requestedPosition) : null;
   const cues = await playback.sidecar(
     String(req.params.id),
     typeof req.query.revision === "string" ? req.query.revision : undefined,
-    Math.max(0, Number(req.query.offset) || 0),
+    offset,
     subtitleDelay(req.query.delay),
+    position,
   );
   if (!cues) return res.status(404).end();
   // Until the reader has the whole track the player keeps asking, so it is told which it has.

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SIDECAR_REFRESH_LEAD_S, SIDECAR_REQUEST_MS, watchSidecar } from "./player-sidecar";
+import { SIDECAR_POLL_MS, SIDECAR_REFRESH_LEAD_S, SIDECAR_REQUEST_MS, SIDECAR_SETTLED_POLL_MS, watchSidecar } from "./player-sidecar";
 
 const answer = (ok: boolean, headers: Record<string, string> = {}) => ({
   ok, body: null, headers: new Headers(ok ? headers : {}),
@@ -31,6 +31,25 @@ describe("watchSidecar", () => {
     // The second answer arrives while the picture is still far behind the cues, so nothing is remounted for it.
     expect(states).toEqual([{ complete: false, pass: 0 }, { complete: false, pass: 1 }, { complete: true, pass: 2 }]);
     expect(600 - SIDECAR_REFRESH_LEAD_S).toBeLessThan(playheads[2]);
+  });
+
+  it("does not remount a short track on every poll while the reader catches up", async () => {
+    const answers = [reading(10), reading(15), reading(25), reading(70), whole];
+    const playheads = [0, 5, 9, 10, 10];
+    let at = 0;
+    let playhead = 0;
+    const urls: string[] = [];
+    const fetcher = vi.fn().mockImplementation((url: string) => {
+      urls.push(url);
+      playhead = playheads[at];
+      return Promise.resolve(answers[at++]);
+    });
+    const states: unknown[] = [];
+    const waits: number[] = [];
+    await watchSidecar("/sidecar.vtt?revision=test", new AbortController().signal, () => playhead, (state) => states.push(state), fetcher, async (ms) => { waits.push(ms); });
+    expect(states).toEqual([{ complete: false, pass: 0 }, { complete: false, pass: 1 }, { complete: true, pass: 2 }]);
+    expect(urls).toContain("/sidecar.vtt?revision=test&position=10.000");
+    expect(waits).toEqual([SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_POLL_MS, SIDECAR_SETTLED_POLL_MS]);
   });
 
   it("does not remount the track when the reader has found nothing new", async () => {

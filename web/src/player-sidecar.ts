@@ -35,7 +35,9 @@ export async function watchSidecar(
   let attached = -Infinity;
   while (!signal.aborted) {
     const request = requestSignal(signal, SIDECAR_REQUEST_MS);
-    const response = await fetcher(url, { signal: request.signal }).catch(() => undefined);
+    const requestedAt = Math.max(0, playhead());
+    const pollUrl = `${url}${url.includes("?") ? "&" : "?"}position=${requestedAt.toFixed(3)}`;
+    const response = await fetcher(pollUrl, { signal: request.signal }).catch(() => undefined);
     request.settle();
     if (signal.aborted) return;
     // The element fetches the track itself; this copy of the body is dead weight.
@@ -43,14 +45,18 @@ export async function watchSidecar(
     if (response?.ok) {
       const complete = response.headers.get("x-sidecar-complete") === "1";
       const coverage = complete ? Infinity : Number(response.headers.get("x-sidecar-coverage") ?? "");
-      const caughtUp = playhead() > attached - SIDECAR_REFRESH_LEAD_S && coverage > attached;
-      if (pass < 0 || complete || caughtUp) {
+      const position = Math.max(0, playhead());
+      const attachedShort = attached < position + SIDECAR_REFRESH_LEAD_S;
+      const newWindow = coverage > attached
+        && (position >= attached || (attachedShort && coverage >= position + SIDECAR_REFRESH_LEAD_S));
+      if (pass < 0 || complete || newWindow) {
         pass += 1;
         attached = Number.isFinite(coverage) ? coverage : Infinity;
         onState({ complete, pass });
       }
       if (complete) return;
     }
-    await delay(pass < 0 ? SIDECAR_POLL_MS : SIDECAR_SETTLED_POLL_MS);
+    const needsCloseWatch = pass < 0 || attached < Math.max(0, playhead()) + SIDECAR_REFRESH_LEAD_S;
+    await delay(needsCloseWatch ? SIDECAR_POLL_MS : SIDECAR_SETTLED_POLL_MS);
   }
 }
