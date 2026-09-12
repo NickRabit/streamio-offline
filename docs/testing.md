@@ -257,6 +257,11 @@ the player reads the track again once it has a useful window ahead, or once the 
 window is spent. Its polls carry the live playhead separately from the generation offset,
 so a direct-playing film wakes the reader again after its first fifteen-minute burst.
 
+The remux playlist grows as an EVENT stream. Keep the hls.js start three segments behind
+its edge and align it with the first buffered segment: a one-segment live reserve can put
+the playhead at the last few milliseconds of a newly published fragment, which immediately
+stalls after a seek on a high-bitrate file even though earlier media is already available.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
