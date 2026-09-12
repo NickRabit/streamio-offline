@@ -117,6 +117,8 @@ interface Session {
   operations: SerialOperations; stopped: boolean;
   /** Until the client first loads it, a session is only a promise; an unclaimed one is closed after a while. */
   claimed: boolean;
+  /** Set when the player let go of it: still running, waiting to be taken over or swept. */
+  lingerUntil?: number;
   /** The generation whose trailing requests are still served for a while after a restart. */
   retired?: { generation: number; directory: string; until: number };
   /** The client refused the copied stream, so this session must never copy again. */
@@ -180,6 +182,9 @@ const IDLE_MS = 5 * 60_000;
 // If the start finishes after the client gave up, the session and its FFmpeg hang around for
 // five minutes, reading from the source the whole time. An unclaimed session has nothing to wait for.
 const UNCLAIMED_MS = 45_000;
+/** How long a closed session keeps running, so that opening the same film again takes it over
+ *  instead of building a second conversion and asking the source for another connection. */
+const LINGER_MS = 45_000;
 // Requests sent just before a transcode restart arrive at the new generation. hls.js treats a 404
 // on a playlist as fatal, so the old generation is kept around for a while.
 const RETIRED_MS = 15_000;
@@ -260,6 +265,11 @@ export class PlaybackManager {
    *  is a start the client never took up, and has no reason to wait out the whole idle limit. */
   private reap() {
     for (const session of [...this.sessions.values()]) {
+      if (session.lingerUntil !== undefined && Date.now() > session.lingerUntil) {
+        log("INFO", "The closed session was not taken over, closing it", { id: session.id, mode: session.mode });
+        void this.stop(session.id); continue;
+      }
+      if (session.lingerUntil !== undefined) continue;
       const idle = Date.now() - session.lastAccess;
       if (!session.claimed && session.mode !== "direct" && idle > UNCLAIMED_MS) {
         log("INFO", "Unclaimed session closed", { id: session.id, mode: session.mode, seconds: Math.round(idle / 1000) });
@@ -294,6 +304,7 @@ export class PlaybackManager {
       const info = await this.probeSource(stream);
       log(info ? "INFO" : "WARN", info ? "Source inspected" : "Source could not be inspected (ffprobe found nothing usable)", {
         video: info?.video?.codec, duration: info?.duration ? Math.round(info.duration) : undefined,
+        dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
         audio: info?.audioTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
         subtitles: info?.subtitleTracks.map((track) => `${track.codec}/${track.language ?? "?"}${track.title ? `/${track.title}` : ""}`),
       });
@@ -318,6 +329,12 @@ export class PlaybackManager {
   async start(stream: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor> {
     if (!stream.url) throw new AppError("This source has no direct address to play.", "err.noPlayableAddress");
     const id = crypto.randomUUID();
+    for (const held of [...this.sessions.values()]) {
+      if (held.lingerUntil !== undefined && held.stream.url !== stream.url) {
+        log("INFO", "Closing the film left running, another one is starting", { id: held.id });
+        void this.stop(held.id);
+      }
+    }
     const source = this.proxyPath(stream);
     // Through inspect(), so the source list and the player never disagree about what the file holds.
     const info = await this.inspect(stream);
@@ -335,7 +352,10 @@ export class PlaybackManager {
       audioTrack, subtitleTrack, quality, startedAt: Date.now(), lastAccess: Date.now(), operations: new SerialOperations(), stopped: false, claimed: false,
     };
     this.sessions.set(id, session);
-    const summary = { video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length };
+    const summary = {
+      video: info?.video?.codec, audio: info?.audio?.codec, audioTracks: audioTracks.length, subtitleTracks: subtitleTracks.length,
+      dolbyVisionEnhancementLayer: info?.video?.dolbyVisionEnhancementLayer,
+    };
 
     // Audio and quality decide conversion. Embedded subtitles always ride as a sidecar:
     // muxing WebVTT into fMP4 HLS makes the muxer die with "timescale not set".
@@ -445,7 +465,7 @@ export class PlaybackManager {
   }
 
   async preview(id: string, time: number, signal: AbortSignal) {
-    const session = this.sessions.get(id);
+    const session = this.playing(id);
     if (!session || !Number.isFinite(time) || time < 0) return undefined;
     const at = Math.min(time, Math.max(0, (session.info?.duration ?? time + 1) - 0.1));
     return this.previews.frame(id, this.localUrl(this.proxyPath(session.stream)), at, signal);
@@ -454,6 +474,52 @@ export class PlaybackManager {
   touch(id: string) {
     const session = this.sessions.get(id);
     if (session) { session.lastAccess = Date.now(); session.claimed = true; }
+  }
+
+  /** The player let go of the session. The conversion is left running for a short while: the
+   *  viewer who closes a film and opens it again gets it back, and the source is asked for
+   *  nothing at all -- these hosts stop answering when they see connection after connection. */
+  release(id: string) {
+    const session = this.sessions.get(id);
+    if (!session) return;
+    session.lingerUntil = Date.now() + LINGER_MS;
+    log("INFO", "Playback released, keeping it warm", { id, mode: session.mode, position: Math.round(session.offset), seconds: Math.round(LINGER_MS / 1000) });
+  }
+
+  /** Takes back a session the player let go of, if it is the same film and the same tracks. */
+  async reclaim(source: StreamItem, capabilities: ClientCapabilities = {}, options: PlaybackOptions = {}): Promise<PlaybackDescriptor | undefined> {
+    const session = [...this.sessions.values()].find((held) => held.lingerUntil !== undefined && held.stream.url === source.url);
+    if (!session) return undefined;
+    // What the conversion was planned for has to be what is being asked for now, or the film
+    // comes back in a shape this client cannot play.
+    if (JSON.stringify(session.capabilities) !== JSON.stringify(capabilities)) return undefined;
+    // The film has to come back as this request would have started it: the same tracks and the
+    // same quality, whether they were asked for or left to the usual choice.
+    const audio = options.audioTrack ?? Math.max(0, pickByLanguage(session.info?.audioTracks ?? [], options.audioLanguage));
+    const subtitle = options.subtitleTrack !== undefined
+      ? options.subtitleTrack
+      : this.preferredSubtitle(session.info?.subtitleTracks ?? [], options.subtitleLanguage);
+    const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
+    if (audio !== session.audioTrack || subtitle !== session.subtitleTrack || quality !== session.quality) return undefined;
+    session.lingerUntil = undefined;
+    session.lastAccess = Date.now();
+    const at = Math.max(0, options.startTime ?? session.offset);
+    const produced = session.mode === "direct" ? Number.POSITIVE_INFINITY : await this.producedUntil(session);
+    if (at + 1 < session.offset || at > produced) {
+      log("INFO", "Playback taken over, moving it to the new position", { id: session.id, at: Math.round(at), had: Math.round(session.offset) });
+      return session.operations.run(() => this.restart(session, at, "Playback taken over at another position"));
+    }
+    log("INFO", "Playback taken over from the session still running", { id: session.id, at: Math.round(at), offset: Math.round(session.offset) });
+    return this.describe(session, this.currentUrl(session));
+  }
+
+  /** How far the generation on disk reaches, so a position inside it needs no new FFmpeg. */
+  private async producedUntil(session: Session) {
+    try {
+      const playlist = await readFile(path.join(this.root, session.id, String(session.generation), "index-0.m3u8"), "utf8");
+      const seconds = [...playlist.matchAll(/#EXTINF:([\d.]+)/g)].reduce((total, [, value]) => total + Number(value), 0);
+      return session.offset + seconds;
+    } catch { return session.offset; }
   }
 
   async stop(id: string) {
@@ -501,7 +567,7 @@ export class PlaybackManager {
   }
 
   directory(id: string, generation: string) {
-    const session = this.sessions.get(id);
+    const session = this.playing(id);
     if (!session) return undefined;
     const retired = session.retired;
     const directory = String(session.generation) === generation ? session.directory
@@ -514,9 +580,16 @@ export class PlaybackManager {
   }
 
   private require(id: string) {
-    const session = this.sessions.get(id);
-    if (!session || session.stopped) throw new AppError("The playback session no longer exists.", "err.playbackSessionGone");
+    const session = this.playing(id);
+    if (!session) throw new AppError("The playback session no longer exists.", "err.playbackSessionGone");
     return session;
+  }
+
+  /** A session the player let go of is nobody's to read or steer until it is taken back:
+   *  from outside the server the film is over, whatever FFmpeg is still doing inside it. */
+  private playing(id: string) {
+    const session = this.sessions.get(id);
+    return session && !session.stopped && session.lingerUntil === undefined ? session : undefined;
   }
 
   private assertActive(session: Session) {
@@ -537,7 +610,7 @@ export class PlaybackManager {
   }
 
   async sidecar(id: string, revision: string | undefined, offset: number, delay = 0, position: number | null = offset) {
-    const session = this.sessions.get(id);
+    const session = this.playing(id);
     if (!session || session.subtitleTrack === null) return undefined;
     const cues = await this.sidecars.read(id, revision, offset, delay, position);
     if (!cues) return undefined;
@@ -776,6 +849,7 @@ export class PlaybackManager {
     });
     const child = spawn("ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
     session.process = child; session.hardware = hardware; session.error = undefined;
+    const generation = session.generation;
     let stderr = ""; let finished = false; let exitCode: number | null = null; let handedToClient = false;
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-16_000); });
     child.once("error", (error) => { finished = true; session.error = error.message; });
@@ -785,8 +859,8 @@ export class PlaybackManager {
       if (code !== 0 && signal === null) session.error = describeFailure(stderr, code);
       // A conversion that died after the client attached would otherwise stay silent until
       // the player reports a stall, with no clue whether the source or FFmpeg was at fault.
-      if (handedToClient && code !== 0 && signal === null) {
-        log("WARN", "FFmpeg stopped after playback had started", { id: session.id, generation: session.generation, code, reason: session.error, stderr: redact(stderr).slice(-500) });
+      if (handedToClient && code !== 0 && signal === null && !session.stopped) {
+        log("WARN", "FFmpeg stopped after playback had started", { id: session.id, generation, code, reason: session.error, stderr: redact(stderr).slice(-500) });
       }
     });
 
@@ -849,6 +923,10 @@ export class PlaybackManager {
         args.push("-init_hw_device", `vaapi=va:${this.vaapiDevice!}`, "-filter_hw_device", "va");
       }
     }
+    // FFmpeg 7.1 does not know the hvcE Block Addition Mapping used by some Dolby Vision
+    // Matroska files. Under the default strictness that unknown mapping is a fatal input
+    // error; unofficial lets the copy continue without the enhancement layer.
+    if (copyVideo && sourceVideo === "hevc") args.push("-strict", "unofficial");
     // Remote hosts drop a connection now and then, especially on a deep range seek into a
     // large file. Without these options FFmpeg treats that as the end of the input and the
     // conversion dies after the first segment, leaving the player stalled.

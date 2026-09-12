@@ -53,14 +53,16 @@ await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...b
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
+/** Sessions the player let go of: still converting, but out of reach until they are taken back. */
+const releasedOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
-  const owned = playbackOwners.get(id);
+  const owned = playbackOwners.get(id) ?? releasedOwners.get(id);
   if (owned) {
     mediaResources.remove(owned.resourceId);
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
-  playbackOwners.delete(id);
+  playbackOwners.delete(id); releasedOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);
 });
@@ -1871,6 +1873,26 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
       const subtitle = mediaResources.get(id, owner.sid, "subtitle");
       subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
     }
+    // A receiver grant belongs to the session it was made for, so a film that wants one starts fresh.
+    const reclaimed = req.body.capabilities?.airplay === true
+      ? undefined
+      : await playback.reclaim(prepared.stream, req.body.capabilities as ClientCapabilities, options);
+    if (reclaimed) {
+      // The session kept its own media resource; this request's is not needed.
+      mediaResources.remove(prepared.resourceId);
+      const held = releasedOwners.get(reclaimed.id) ?? playbackOwners.get(reclaimed.id);
+      if (held) {
+        releasedOwners.delete(reclaimed.id);
+        playbackOwners.set(reclaimed.id, held);
+        mediaResources.sealInternal(held.resourceId, false);
+      }
+      for (const key of Object.keys(subtitleIds)) delete subtitleIds[key];
+      for (const key of req.body.subtitleIds ?? []) {
+        const subtitle = mediaResources.get(key, owner.sid, "subtitle");
+        subtitleIds[key] = mediaResources.add(subtitle.stream, owner, "subtitle", held?.resourceId);
+      }
+      return void res.status(201).setHeader("cache-control", "private, no-store").json({ ...playbackResponse(reclaimed), subtitleIds });
+    }
     started = await playback.start(prepared.stream, req.body.capabilities as ClientCapabilities, options);
     if (currentSession(req)?.sid !== owner.sid) {
       await playback.stop(started.id);
@@ -1911,7 +1933,22 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
   // Who closed a session is the difference between a viewer leaving and the server giving up.
   log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentSession(req)?.username });
-  await playback.stop(String(req.params.id));
+  // Kept running for a short while rather than torn down: opening the same film again takes it
+  // back, which is one conversion and one connection instead of two.
+  const id = String(req.params.id);
+  // Outside the server the film is over: the grant goes, transfers in flight are cut, and the
+  // media answers nobody but the conversion that is being kept warm.
+  const owned = playbackOwners.get(id);
+  if (owned) {
+    airplayAccess.remove(id);
+    mediaResources.sealInternal(owned.resourceId);
+    for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
+    // Out of the player's reach the moment it lets go: every route for this session answers as
+    // it does for one that is over, while the conversion behind it is kept warm.
+    playbackOwners.delete(id);
+    releasedOwners.set(id, owned);
+  }
+  playback.release(id);
   res.status(204).end();
 }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {

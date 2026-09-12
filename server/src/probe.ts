@@ -19,13 +19,24 @@ export interface Track {
 export interface MediaInfo {
   container: string;
   duration?: number;
-  video?: { codec: string; width?: number; height?: number; profile?: string; pixelFormat?: string };
+  video?: { codec: string; width?: number; height?: number; profile?: string; pixelFormat?: string; dolbyVisionEnhancementLayer?: boolean };
   audio?: { codec: string; channels?: number };
   audioTracks: Track[];
   subtitleTracks: Track[];
 }
 
-interface ProbeStream { codec_type?: string; codec_name?: string; profile?: string; pix_fmt?: string; width?: number; height?: number; channels?: number; disposition?: Record<string, number>; tags?: Record<string, string> }
+interface ProbeStream {
+  codec_type?: string;
+  codec_name?: string;
+  profile?: string;
+  pix_fmt?: string;
+  width?: number;
+  height?: number;
+  channels?: number;
+  disposition?: Record<string, number>;
+  tags?: Record<string, string>;
+  side_data_list?: Array<Record<string, unknown>>;
+}
 
 // The browser cannot show image subtitles and they cannot be converted to WebVTT.
 const BITMAP_SUBTITLES = new Set(["dvd_subtitle", "hdmv_pgs_subtitle", "dvb_subtitle", "xsub"]);
@@ -39,6 +50,17 @@ const toTrack = (stream: ProbeStream, index: number): Track => ({
   default: stream.disposition?.default === 1,
   forced: stream.disposition?.forced === 1,
 });
+
+/** FFmpeg 7.1 does not know the hvcE Block Addition Mapping used by some Dolby Vision
+ *  Matroska files. The copy path skips that enhancement layer with non-strict input
+ *  handling, so this is kept only to make such sources visible in the logs. */
+export const hasDolbyVisionEnhancementLayer = (stream?: Pick<ProbeStream, "side_data_list" | "tags">) => {
+  const sides = stream?.side_data_list ?? [];
+  if (sides.some((side) => /dolby vision enhancement-layer/i.test(String(side.name ?? side.side_data_type ?? "")))) return true;
+  const dovi = sides.find((side) => String(side.side_data_type ?? "").toLowerCase() === "dovi configuration record");
+  if (dovi && Number(dovi.el_present_flag) === 1) return true;
+  return /dolby vision enhancement-layer/i.test(JSON.stringify(stream?.tags ?? {}));
+};
 
 // Playlists name their segments as they please, and ffmpeg refuses the unfamiliar endings by
 // default -- which reads as an unplayable source. Newer ffmpeg split the old single option into
@@ -119,7 +141,14 @@ async function inspect(input: string, limits: string[], timeout: number, stage: 
       info: {
         container: data.format?.format_name ?? "",
         duration: Number.isFinite(duration) && duration > 0 ? duration : undefined,
-        video: video?.codec_name ? { codec: video.codec_name, width: video.width, height: video.height, profile: video.profile, pixelFormat: video.pix_fmt } : undefined,
+        video: video?.codec_name ? {
+          codec: video.codec_name,
+          width: video.width,
+          height: video.height,
+          profile: video.profile,
+          pixelFormat: video.pix_fmt,
+          dolbyVisionEnhancementLayer: hasDolbyVisionEnhancementLayer(video),
+        } : undefined,
         audio: audio?.codec_name ? { codec: audio.codec_name, channels: audio.channels } : undefined,
         audioTracks, subtitleTracks,
       },
