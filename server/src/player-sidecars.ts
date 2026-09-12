@@ -51,8 +51,12 @@ const extract: Extract = (args, file, append, signal) => new Promise<void>((reso
   });
 });
 
-/** Cues have to reach this far past the playhead before the track is worth attaching. */
-export const SIDECAR_LEAD_S = 120;
+/** Cues only have to reach a little past the playhead to be worth attaching: on a slow
+ *  source reading a couple of minutes ahead takes longer than the viewer's next seek, and
+ *  the player reads the track again as the reader gets further. */
+export const SIDECAR_LEAD_S = 5;
+/** A paused reader picks up again while the cues are still this far ahead of the picture. */
+export const SIDECAR_RESUME_LEAD_S = 120;
 /** And this far before the reader lets go of the source: a seek needs a connection of
  *  its own, and the hosts behind these films rarely give out a second one. */
 export const SIDECAR_AHEAD_S = 900;
@@ -100,7 +104,9 @@ export class PlayerSidecars {
     // This burst's own signal: a pause gives the job a fresh one for the next burst, and
     // reading the job's current signal here would make a paused reader look finished.
     const { signal } = job.controller;
-    if (signal.aborted) return;
+    // A read that was already on its way must not start a reader for a session that has since
+    // been closed: its FFmpeg would outlive the media it reads and hammer a revoked source.
+    if (signal.aborted || this.jobs.get(id) !== job) return;
     job.running = true;
     log("INFO", "Reading embedded subtitles", { id, track: job.track, from: Math.round(from), resumed: append });
     const startedAt = Date.now();
@@ -128,7 +134,7 @@ export class PlayerSidecars {
   private keepAhead(job: Job, id: string, offset: number) {
     if (job.complete) return;
     if (job.running && job.coverage >= offset + SIDECAR_AHEAD_S) { void this.pause(job); return; }
-    if (!job.running && job.coverage < offset + SIDECAR_LEAD_S) {
+    if (!job.running && job.coverage < offset + SIDECAR_RESUME_LEAD_S) {
       const from = Number.isFinite(job.coverage) ? Math.max(job.start, job.coverage) : job.start;
       this.launch(id, job, from, Number.isFinite(job.coverage));
     }

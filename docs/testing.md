@@ -249,6 +249,12 @@ steps by a quarter of a second, with the comma and full stop keys, and rides in 
 address of both the embedded cues and the addon ones, so the element simply reloads
 them. It resets with the film.
 
+How fast the cues arrive is the source's business, so the track is attached as soon as
+they reach past the picture rather than a couple of minutes beyond it: on a NAS reading
+from a remote film, two minutes of cues take longer to fetch than the viewer's next
+seek, and the wait looked like subtitles that never came. The reader keeps going and
+the player reads the track again as it gets further.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive
