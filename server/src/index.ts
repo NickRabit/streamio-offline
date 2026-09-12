@@ -1,4 +1,5 @@
 import express from "express";
+import { once } from "node:events";
 import { nextVideoFile } from "./next-file.js";
 import { isInternalMediaPath, mediaChildPath, mediaResources, openMediaUrl, ResourceError, safeSourceText, type ResourceOwner } from "./media-resources.js";
 import { readMediaText, rewritePlaylist } from "./media-playlist.js";
@@ -24,7 +25,7 @@ import { images } from "./images.js";
 import { configureSecureMode, secureMode, securityHeaders } from "./secure.js";
 import { publicSettings, Store } from "./store.js";
 import { advanceTorrent, normalizeToken, verifyRealDebridToken } from "./debrid.js";
-import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance } from "./logger.js";
+import { clearLog, currentLevel, flushLog, initLogger, log, parseLevel, readLog, startLogMaintenance, setLevel } from "./logger.js";
 import { browseDirectory, describePath, emptiedFolders, entryDirectory, isPathWithin, isVideo, listFolders, listVideos, moveDestination, orphanedCatalogKeys, pageFiles, remapPath, resolveInside, scanLibrary, sortFiles, summarize } from "./library.js";
 import { browseMeta, cacheFieldsFromMeta, episodeKey, episodeNumberOf, episodesFromMeta, dropKeyed, knownTitleOf, lookupSkipped, matchKeyFor, matchStatus, needsBackfill, needsEpisodes, pinInherited, remapKeyed, scanMiss, suggestionFor, titleUnits, unmatchAt, type LibraryMetaRecord } from "./library-match.js";
 import { parseMediaPath } from "./library-parse.js";
@@ -48,8 +49,12 @@ const app = express(); const store = new Store();
 let markServerReady!: () => void;
 const serverReady = new Promise<void>((resolve) => { markServerReady = resolve; });
 await store.load();
+// A level chosen in the interface outlives the container it was chosen in.
+const savedLevel = parseLevel(store.settings().logLevel);
+if (savedLevel) setLevel(savedLevel);
+log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
 configureSecureMode(() => store.settings().secureMode !== false);
-await initLogger(); startLogMaintenance(); log("INFO", "Server starting", { ...build, logLevel: currentLevel() });
+await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
@@ -571,6 +576,8 @@ const SOURCE_RETRY_MS = 400;
 /** A source that has just gone quiet gets one short chance instead of three long ones. Somebody
  *  is waiting on a seek, and a minute of retries against a host that is not answering reads as a
  *  player that has stopped taking clicks. */
+/** How many times a broken transfer is picked up again before the viewer is told. */
+const SOURCE_RESUMES = 5;
 const SOURCE_QUIET_MS = 20_000;
 const SOURCE_QUIET_HEADER_MS = 6_000;
 const SOURCE_HEADER_MS = 30_000;
@@ -1840,6 +1847,14 @@ app.patch("/api/settings", asyncRoute(async (req, res) => {
     if (req.body.showResumeRow !== undefined) state.settings.showResumeRow = Boolean(req.body.showResumeRow);
     if (req.body.libraryAutoScan !== undefined) state.settings.libraryAutoScan = Boolean(req.body.libraryAutoScan);
     if (req.body.libraryScanPauseOnDownload !== undefined) state.settings.libraryScanPauseOnDownload = Boolean(req.body.libraryScanPauseOnDownload);
+    // Detail has to be recorded before it can be read: a line the server never wrote is not
+    // something the log view can filter back into sight.
+    if (req.body.logLevel !== undefined) {
+      const wanted = parseLevel(req.body.logLevel);
+      state.settings.logLevel = wanted;
+      setLevel(wanted ?? parseLevel(process.env.LOG_LEVEL) ?? "INFO");
+      log("INFO", "The server log level was changed from the interface", { level: currentLevel(), user: currentUser(req) });
+    }
     if (req.body.secureMode !== undefined) state.settings.secureMode = Boolean(req.body.secureMode);
     if (req.body.addonRefreshHours !== undefined) state.settings.addonRefreshHours = normalizeRefreshHours(req.body.addonRefreshHours);
     if (req.body.artworkLocation !== undefined) {
@@ -2127,15 +2142,56 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
   if (!upstream.body) return res.end();
   const { Readable } = await import("node:stream");
-  try { await pipeline(Readable.fromWeb(upstream.body as never), res, { signal: controller.signal }); }
-  catch (error) {
-    await upstream.body?.cancel().catch(() => undefined);
-    if (!res.destroyed && !res.writableEnded) {
-      log("WARN", "The transfer from the source broke off", { req: req.id, url: raw, range: req.headers.range, reason: error instanceof Error ? error.message : String(error) });
-      throw error;
+  // These hosts hand over a few seconds and then cut the stream. FFmpeg answers that by
+  // reconnecting on its own -- another connection into a host that is counting them, and one
+  // it usually refuses. The transfer is picked up here instead, from the byte it stopped at,
+  // so what FFmpeg reads is one unbroken response.
+  const asked = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? "");
+  const from = Number(asked?.[1] || 0);
+  const until = asked?.[2] ? Number(asked[2]) : undefined;
+  const expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
+  let delivered = 0;
+  let body: ReadableStream | null = upstream.body;
+  for (let resumed = 0; ; ) {
+    let broke: unknown;
+    try {
+      for await (const chunk of Readable.fromWeb(body as never)) {
+        // Never more than was asked for: a source picking the transfer up runs to the end of the
+        // file, and a body longer than the length already promised breaks the response itself.
+        const piece = expected === undefined ? chunk as Buffer : (chunk as Buffer).subarray(0, expected - delivered);
+        delivered += piece.length;
+        if (piece.length && !res.write(piece)) await once(res, "drain");
+        if (expected !== undefined && delivered >= expected) break;
+      }
+    } catch (error) { broke = error; }
+    if (res.destroyed || res.writableEnded || controller.signal.aborted) {
+      log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
+      return;
     }
-    log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
+    const short = expected !== undefined && delivered < expected;
+    if (!broke && !short) break;
+    if (resumed >= SOURCE_RESUMES || expected === undefined || !short) {
+      noteSourceQuiet(resource.parent ?? resource.id);
+      log("WARN", "The transfer from the source broke off", {
+        req: req.id, url: raw, range: req.headers.range, delivered, expected, resumed,
+        reason: broke instanceof Error ? broke.message : broke === undefined ? "it ended early" : String(broke),
+      });
+      throw broke ?? new Error("The source ended the transfer early.");
+    }
+    resumed += 1;
+    log("WARN", "The transfer broke off, picking it up where it stopped", { req: req.id, url: raw, at: from + delivered, delivered, expected, resumed });
+    await sleep(SOURCE_RETRY_MS * resumed);
+    const resumeRange = `bytes=${from + delivered}-${until !== undefined ? until : ""}`;
+    const next = await safeFetch(raw, { headers: { ...headers, range: resumeRange }, signal: controller.signal }).catch(() => undefined);
+    if (!next || ![200, 206].includes(next.status) || !next.body) {
+      await next?.body?.cancel().catch(() => undefined);
+      noteSourceQuiet(resource.parent ?? resource.id);
+      log("WARN", "The source would not pick the transfer up", { req: req.id, url: raw, at: from + delivered, status: next?.status });
+      throw broke ?? new Error("The source ended the transfer early.");
+    }
+    body = next.body;
   }
+  res.end();
 }));
 
 app.all(["/api/proxy", "/api/subtitle", "/api/library/file"], (_req, res) => {

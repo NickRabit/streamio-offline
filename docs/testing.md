@@ -298,6 +298,18 @@ that has just gone quiet gets one short chance instead, and the tries come back 
 as it answers again. The addon fixture can take a request and never answer, which is
 how the two are told apart in the suite.
 
+These hosts also hand over a few seconds and then cut the stream. FFmpeg answers that by
+reconnecting on its own, which is another connection into a host that is counting them,
+so the proxy picks the transfer up itself instead -- from the byte it stopped at, and
+never past the range that was asked for, since a body longer than the length already
+promised breaks the response. The fixture can cut a transfer mid-stream to prove the
+range still arrives whole.
+
+What the server records is a setting now, not only a container variable: a line that was
+never written cannot be filtered back into view, which made the level in the log panel
+look unrelated to anything. The panel sets what is recorded, the filter above it decides
+what is shown, and the download carries whatever the filter is showing.
+
 Timing is the part tests cannot settle. A slow source delays the first cues,
 and the reader competes with the conversion for the same link. Check on a real
 film from a remote source: subtitles appear within seconds of starting, survive

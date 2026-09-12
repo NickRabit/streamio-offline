@@ -276,3 +276,22 @@ test("a source that has gone quiet is given up on quickly, not after a minute of
     await request.delete(`/api/playback/${playback.id}`);
   }
 });
+
+test("a transfer the source cuts is picked up where it stopped", async ({ request }) => {
+  const playback = await start(request);
+  try {
+    const whole = await request.get(playback.url, { headers: { range: "bytes=0-2047" } });
+    expect(whole.status()).toBe(206);
+    const expected = await whole.body();
+    // The host hands over a few bytes of the next one and hangs up mid-transfer.
+    await control(request, "cut-once");
+    const cut = await request.get(playback.url, { headers: { range: "bytes=0-2047" } });
+    expect(cut.status()).toBe(206);
+    const received = await cut.body();
+    expect(received.length, "the range comes back whole, not truncated").toBe(expected.length);
+    expect(received.equals(expected)).toBe(true);
+  } finally {
+    await control(request, "video");
+    await request.delete(`/api/playback/${playback.id}`);
+  }
+});

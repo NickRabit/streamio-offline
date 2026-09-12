@@ -23,6 +23,11 @@ export function parseLevel(value: unknown): LogLevel | undefined {
 }
 export const currentLevel = (): LogLevel => LEVELS.find((level) => ORDER[level] === threshold) ?? "INFO";
 
+/** What the server writes down, which is not the same as what the interface shows: a line that
+ *  was never recorded cannot be filtered back into view. Set from the settings, so asking for
+ *  detail does not mean editing the container. */
+export function setLevel(level: LogLevel) { threshold = ORDER[level]; }
+
 export async function initLogger(dataDir = process.env.DATA_DIR ?? "/data") {
   filename = path.join(dataDir, "app.log");
   threshold = ORDER[parseLevel(process.env.LOG_LEVEL) ?? "INFO"];

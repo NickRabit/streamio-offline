@@ -21,6 +21,8 @@ export interface Settings {
   libraryScanPauseOnDownload: boolean;
   /** Artwork is fetched by the server, so no provider ever sees the browser. */
   secureMode: boolean;
+  /** What the server records. Left out, the container's LOG_LEVEL decides. */
+  logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR";
   /** Hours between automatic addon manifest refreshes; 0 leaves it to the buttons. */
   addonRefreshHours: number;
   catalogTileSize: TileSize; libraryTileSize: TileSize;
