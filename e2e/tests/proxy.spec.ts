@@ -241,3 +241,17 @@ test("timeline previews return private JPEG frames and expire with playback", as
   await request.delete(`/api/playback/${playback.id}`);
   expect((await request.get(url)).status()).toBe(404);
 });
+
+test("a source that drops the connection is asked again instead of failing the playback", async ({ request }) => {
+  const playback = await start(request);
+  try {
+    // The host hangs up on the next request, as these do on a large file, and answers the one after.
+    await control(request, "drop-once");
+    const response = await request.get(playback.url, { headers: { range: "bytes=0-31" } });
+    expect(response.status(), await response.text()).toBe(206);
+    expect((await response.body()).length).toBe(32);
+  } finally {
+    await control(request, "video");
+    await request.delete(`/api/playback/${playback.id}`);
+  }
+});

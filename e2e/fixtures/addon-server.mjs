@@ -105,6 +105,8 @@ const server = createServer((req, res) => {
   if (pathname === "/proxy-subtitle") { res.writeHead(200, { "content-type": "text/vtt" }); return res.end("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nHello\n"); }
   if (pathname === "/proxy-fixture.mp4") {
     if (req.headers.authorization !== "Bearer header-canary") return res.writeHead(403).end("header-canary");
+    // A host that drops the connection once, the way the real ones do on a big file.
+    if (proxyMode === "drop-once") { proxyMode = "video"; return void req.socket.destroy(); }
     if (proxyMode === "video") return void serveVideo(req, res);
     if (proxyMode === "head") { res.writeHead(req.method === "HEAD" ? 200 : 405); return res.end(); }
     if (proxyMode === "playlist") {

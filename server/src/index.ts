@@ -563,6 +563,11 @@ const subtitleDelay = (value: unknown) => {
   return Number.isFinite(delay) ? Math.max(-SUBTITLE_DELAY_LIMIT_S, Math.min(SUBTITLE_DELAY_LIMIT_S, delay)) : 0;
 };
 
+/** How many times a dropped source request is repeated, and how long between the tries. */
+const SOURCE_ATTEMPTS = 3;
+const SOURCE_RETRY_MS = 400;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 const DOWNLOAD_DIR = process.env.DOWNLOAD_DIR ?? "/downloads";
 const DEVICE_TICKET_TTL = 24 * 60 * 60_000;
 type DeviceDownloadTicket = {
@@ -2009,20 +2014,30 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   // Seek and stop close the previous Range. Without aborting here the old
   // upstream keeps downloading from the debrid host and starves the new one.
   res.on("close", () => { if (!res.writableEnded) controller.abort(); });
+  // These hosts drop a connection now and then, on a range deep into a large file as
+  // readily as on the first byte. Handing that straight to FFmpeg ends the conversion and
+  // the viewer's seek with it, so a dropped request is asked again before it is given up on.
   let upstream: Response;
-  try { upstream = await safeFetch(raw, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); }
-  catch (error) {
-    if (res.destroyed || res.writableEnded) {
-      log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
-      return;
+  for (let attempt = 1; ; attempt += 1) {
+    try { upstream = await safeFetch(raw, { method: req.method === "HEAD" ? "HEAD" : "GET", headers, signal: controller.signal }); break; }
+    catch (error) {
+      if (res.destroyed || res.writableEnded) {
+        clearTimeout(headerTimeout);
+        log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
+        return;
+      }
+      const reason = headerTimedOut ? "no response within 30 s" : (error instanceof Error ? error.message : String(error));
+      // A timeout or a viewer who left is not worth repeating; a dropped connection is.
+      if (attempt >= SOURCE_ATTEMPTS || headerTimedOut || controller.signal.aborted) {
+        clearTimeout(headerTimeout);
+        log("WARN", "The source did not respond", { req: req.id, url: raw, range: req.headers.range, reason, attempts: attempt });
+        throw error;
+      }
+      log("WARN", "The source dropped the request, asking again", { req: req.id, url: raw, range: req.headers.range, reason, attempt });
+      await sleep(SOURCE_RETRY_MS * attempt);
     }
-    log("WARN", "The source did not respond", {
-      req: req.id, url: raw, range: req.headers.range,
-      reason: headerTimedOut ? "no response within 30 s" : (error instanceof Error ? error.message : String(error)),
-    });
-    throw error;
   }
-  finally { clearTimeout(headerTimeout); }
+  clearTimeout(headerTimeout);
   if (res.destroyed || res.writableEnded) {
     await upstream.body?.cancel().catch(() => undefined);
     return;
