@@ -59,17 +59,15 @@ await initLogger(); startLogMaintenance();
 if (restrictedMode()) log("INFO", "Restricted mode enabled");
 await images.load();
 const playbackOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
-/** Sessions the player let go of: still converting, but out of reach until they are taken back. */
-const releasedOwners = new Map<string, { owner: ResourceOwner; resourceId: string }>();
 const airplayAccess = new AirPlayAccess(mediaResources);
 const queue = new DownloadQueue(() => store.settings().concurrentDownloads, () => store.settings().parallelPerProvider ?? 1, undefined, undefined, { segments: () => store.settings().downloadSegments ?? 1 }); const playback = new PlaybackManager(undefined, (id) => {
-  const owned = playbackOwners.get(id) ?? releasedOwners.get(id);
+  const owned = playbackOwners.get(id);
   if (owned) {
     mediaResources.remove(owned.resourceId);
     for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
   }
   if (owned) rangeCache.forget(owned.resourceId);
-  playbackOwners.delete(id); releasedOwners.delete(id);
+  playbackOwners.delete(id);
   airplayAccess.remove(id);
   throughput.forget(id);
 });
@@ -583,6 +581,12 @@ const SOURCE_RESUMES = 5;
 const SOURCE_QUIET_MS = 20_000;
 const SOURCE_QUIET_HEADER_MS = 6_000;
 const SOURCE_HEADER_MS = 30_000;
+/** What a cached answer has to repeat to be the same answer. */
+const answerHeaders = (upstream: Response) => Object.fromEntries(
+  ["content-type", "content-length", "content-range", "accept-ranges"]
+    .map((name) => [name, upstream.headers.get(name)])
+    .filter((pair): pair is [string, string] => pair[1] !== null));
+
 /** The header and the index of a film, kept so the next FFmpeg does not fetch them again. */
 const rangeCache = new RangeCache();
 const quietSources = new Map<string, number>();
@@ -1904,26 +1908,6 @@ app.post("/api/playback", asyncRoute(async (req, res) => {
       const subtitle = mediaResources.get(id, owner.sid, "subtitle");
       subtitleIds[id] = mediaResources.add(subtitle.stream, owner, "subtitle", prepared.resourceId);
     }
-    // A receiver grant belongs to the session it was made for, so a film that wants one starts fresh.
-    const reclaimed = req.body.capabilities?.airplay === true
-      ? undefined
-      : await playback.reclaim(prepared.stream, req.body.capabilities as ClientCapabilities, options);
-    if (reclaimed) {
-      // The session kept its own media resource; this request's is not needed.
-      mediaResources.remove(prepared.resourceId);
-      const held = releasedOwners.get(reclaimed.id) ?? playbackOwners.get(reclaimed.id);
-      if (held) {
-        releasedOwners.delete(reclaimed.id);
-        playbackOwners.set(reclaimed.id, held);
-        mediaResources.sealInternal(held.resourceId, false);
-      }
-      for (const key of Object.keys(subtitleIds)) delete subtitleIds[key];
-      for (const key of req.body.subtitleIds ?? []) {
-        const subtitle = mediaResources.get(key, owner.sid, "subtitle");
-        subtitleIds[key] = mediaResources.add(subtitle.stream, owner, "subtitle", held?.resourceId);
-      }
-      return void res.status(201).setHeader("cache-control", "private, no-store").json({ ...playbackResponse(reclaimed), subtitleIds });
-    }
     started = await playback.start(prepared.stream, req.body.capabilities as ClientCapabilities, options);
     if (currentSession(req)?.sid !== owner.sid) {
       await playback.stop(started.id);
@@ -1941,7 +1925,7 @@ app.use("/api/playback/:id", (req, res, next) => {
   const owned = playbackOwners.get(String(req.params.id));
   if (!owned || owned.owner.sid !== (airplayRequest(req)?.owner.sid ?? currentSession(req)?.sid)) return res.status(404).json({ error: "Playback session unavailable.", code: "RESOURCE_NOT_FOUND" });
   res.setHeader("cache-control", "private, no-store");
-  playback.touch(String(req.params.id));
+  playback.attended(String(req.params.id));
   next();
 });
 app.get("/api/playback/:id/preview", asyncRoute(async (req, res) => {
@@ -1964,22 +1948,7 @@ app.post("/api/playback/:id/track", asyncRoute(async (req, res) => res.json(play
 app.delete("/api/playback/:id", asyncRoute(async (req, res) => {
   // Who closed a session is the difference between a viewer leaving and the server giving up.
   log("INFO", "Playback session closed by the player", { id: String(req.params.id), user: currentSession(req)?.username });
-  // Kept running for a short while rather than torn down: opening the same film again takes it
-  // back, which is one conversion and one connection instead of two.
-  const id = String(req.params.id);
-  // Outside the server the film is over: the grant goes, transfers in flight are cut, and the
-  // media answers nobody but the conversion that is being kept warm.
-  const owned = playbackOwners.get(id);
-  if (owned) {
-    airplayAccess.remove(id);
-    mediaResources.sealInternal(owned.resourceId);
-    for (const active of activeMedia) if (active.resourceId === owned.resourceId) active.res.destroy();
-    // Out of the player's reach the moment it lets go: every route for this session answers as
-    // it does for one that is over, while the conversion behind it is kept warm.
-    playbackOwners.delete(id);
-    releasedOwners.set(id, owned);
-  }
-  playback.release(id);
+  await playback.stop(String(req.params.id));
   res.status(204).end();
 }));
 app.get("/api/playback/:id/sidecar.vtt", asyncRoute(async (req, res) => {
@@ -2077,15 +2046,25 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   const cacheKey = `${resource.parent ?? resource.id}:${typeof req.params.signed === "string" ? req.params.signed : ""}`;
   const askedRange = String(req.headers.range ?? "");
   const held = req.method === "HEAD" ? undefined : rangeCache.get(cacheKey, askedRange);
-  if (held?.complete) {
-    // The whole of that read is here, so the source hears nothing about it at all.
+  let alreadySent = 0;
+  if (held) {
+    // A reader that opens a film reads its header and stops; what it needs is here, and the
+    // source hears nothing. Only a reader that keeps going is handed on to it, from where this
+    // leaves off.
     res.status(held.status);
     for (const [name, value] of Object.entries(held.headers)) res.setHeader(name, value);
-    log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: held.bytes.length });
-    return void res.end(held.bytes);
+    if (!res.write(held.bytes)) await once(res, "drain");
+    alreadySent = held.bytes.length;
+    log("DEBUG", "Served a read the source had already answered", { req: req.id, range: askedRange || "whole file", bytes: alreadySent, whole: held.complete });
+    if (held.complete) return void res.end();
+    // The moment's grace is what tells a header probe from a reader that wants the film.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (res.destroyed || res.writableEnded) return;
   }
   const headers: Record<string, string> = { ...stream.behaviorHints?.proxyHeaders?.request };
   if (req.headers.range) headers.range = req.headers.range;
+  // Handed on from where the cached start left off, so the source is asked only for the rest.
+  if (alreadySent) headers.range = `bytes=${Number(/bytes=(\d*)-/.exec(askedRange)?.[1] || 0) + alreadySent}-${/bytes=\d*-(\d+)/.exec(askedRange)?.[1] ?? ""}`;
   const controller = new AbortController();
   let headerTimedOut = false;
   const quiet = sourceIsQuiet(resource.parent ?? resource.id);
@@ -2152,8 +2131,10 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
     res.status(upstream.status).type("application/vnd.apple.mpegurl").setHeader("cache-control", "private, no-store").send(playlist);
     return;
   }
-  res.status(upstream.status);
-  for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+  if (!alreadySent) {
+    res.status(upstream.status);
+    for (const name of ["content-type", "content-length", "content-range", "accept-ranges"]) { const value = upstream.headers.get(name); if (value) res.setHeader(name, value); }
+  }
   if (!upstream.body) return res.end();
   const { Readable } = await import("node:stream");
   // These hosts hand over a few seconds and then cut the stream. FFmpeg answers that by
@@ -2161,7 +2142,7 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
   // it usually refuses. The transfer is picked up here instead, from the byte it stopped at,
   // so what FFmpeg reads is one unbroken response.
   const asked = /bytes=(\d*)-(\d*)/.exec(req.headers.range ?? "");
-  const from = Number(asked?.[1] || 0);
+  const from = Number(asked?.[1] || 0) + alreadySent;
   const until = asked?.[2] ? Number(asked[2]) : undefined;
   const expected = Number(upstream.headers.get("content-length") ?? "") || undefined;
   let delivered = 0;
@@ -2186,18 +2167,17 @@ app.get(["/api/media/:resourceId", "/api/media/:resourceId/u/:signed"], asyncRou
       }
     } catch (error) { broke = error; }
     if (res.destroyed || res.writableEnded || controller.signal.aborted) {
+      // What it read before it left is what the next one will ask for first.
+      if (keep && !alreadySent && delivered) {
+        rangeCache.put(cacheKey, askedRange, { status: upstream.status, headers: answerHeaders(upstream), bytes: Buffer.concat(keep), complete: false });
+      }
       log("DEBUG", "The client closed the transfer", { req: req.id, url: raw, range: req.headers.range });
       return;
     }
     const short = expected !== undefined && delivered < expected;
     if (!broke && !short) {
-      if (keep && expected !== undefined && delivered === expected) {
-        rangeCache.put(cacheKey, askedRange, {
-          status: upstream.status,
-          headers: Object.fromEntries(["content-type", "content-length", "content-range", "accept-ranges"]
-            .map((name) => [name, upstream.headers.get(name)]).filter((pair): pair is [string, string] => pair[1] !== null)),
-          bytes: Buffer.concat(keep), complete: true,
-        });
+      if (keep && !alreadySent && expected !== undefined && delivered === expected) {
+        rangeCache.put(cacheKey, askedRange, { status: upstream.status, headers: answerHeaders(upstream), bytes: Buffer.concat(keep), complete: true });
       }
       break;
     }

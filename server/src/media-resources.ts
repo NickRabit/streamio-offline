@@ -7,8 +7,6 @@ export type ResourceScope = "source" | "media" | "subtitle";
 interface Resource {
   id: string; owner: ResourceOwner; scope: ResourceScope; stream: StreamItem;
   expiresAt: number; parent?: string; bytes: number; key: string;
-  /** Readable by FFmpeg on loopback only, while a closed film is kept warm. */
-  internalOnly?: boolean;
 }
 export class ResourceError extends Error {
   constructor(readonly status: number, readonly code: string) {
@@ -191,22 +189,12 @@ export class MediaResources {
       throw new ResourceError(owned ? 410 : 404, owned ? "RESOURCE_EXPIRED" : "RESOURCE_NOT_FOUND");
     }
     if ((!internal && record.owner.sid !== sid) || record.scope !== scope) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
-    // A film the player let go of keeps converting for a moment, but nothing outside the server
-    // may read it any longer: the viewer stopped it, and anything handed out earlier stops too.
-    if (record.internalOnly && !internal) throw new ResourceError(404, "RESOURCE_NOT_FOUND");
     if (record.expiresAt <= this.now()) {
       this.remove(id, true);
       throw new ResourceError(410, "RESOURCE_EXPIRED");
     }
     if (record.parent) this.get(record.parent, sid, "media", internal);
     return record;
-  }
-
-  /** Leaves the resource readable by FFmpeg on loopback and by nobody else, or gives it back. */
-  sealInternal(id: string, sealed = true) {
-    const record = this.entries.get(id);
-    if (record) record.internalOnly = sealed;
-    for (const child of this.entries.values()) if (child.parent === id) this.sealInternal(child.id, sealed);
   }
 
   remove(id: string, expired = false) {
