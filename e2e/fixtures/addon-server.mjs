@@ -96,7 +96,7 @@ async function serveVideo(req, res, file = videoFile) {
 }
 
 let proxyMode = "video";
-const server = createServer((req, res) => {
+const server = createServer(async (req, res) => {
   const { pathname, searchParams } = new URL(req.url ?? "/", `http://127.0.0.1:${port}`);
   const parts = route(pathname);
 
@@ -109,6 +109,21 @@ const server = createServer((req, res) => {
     if (proxyMode === "drop-once") { proxyMode = "video"; return void req.socket.destroy(); }
     // Takes the request and never answers, the way a host that has had enough behaves.
     if (proxyMode === "hang") return;
+    // Hands over the first few bytes and then cuts the stream, which is the common one.
+    if (proxyMode === "cut-once") {
+      proxyMode = "video";
+      const info = await stat(videoFile).catch(() => undefined);
+      if (!info) return void res.writeHead(404).end();
+      const asked = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+      const start = asked?.[1] ? Number(asked[1]) : 0;
+      const end = Math.min(asked?.[2] ? Number(asked[2]) : info.size - 1, info.size - 1);
+      res.writeHead(asked ? 206 : 200, {
+        "content-type": "video/mp4", "accept-ranges": "bytes", "content-length": end - start + 1,
+        ...(asked ? { "content-range": `bytes ${start}-${end}/${info.size}` } : {}),
+      });
+      createReadStream(videoFile, { start, end: Math.min(start + 15, end) }).pipe(res, { end: false });
+      return void setTimeout(() => req.socket.destroy(), 30);
+    }
     if (proxyMode === "video") return void serveVideo(req, res);
     if (proxyMode === "head") { res.writeHead(req.method === "HEAD" ? 200 : 405); return res.end(); }
     if (proxyMode === "playlist") {

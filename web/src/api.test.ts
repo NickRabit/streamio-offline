@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { describeError, ApiError, api } from "./api";
+import { describeError, ApiError, api , logDownloadUrl } from "./api";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -151,5 +151,21 @@ describe("describeError", () => {
     fetchMock.mockResolvedValue(json({ error: "Too many failed attempts. Try again in 30 s.", messageKey: "err.tooManyAttempts", vars: { seconds: 30 } }, 429));
     const error = await api.addons().catch((value) => value);
     expect(describeError(error)).toBe("Too many failed attempts. Try again in 30 s.");
+  });
+});
+
+describe("logDownloadUrl", () => {
+  it("downloads the whole log when nothing is filtered", () => {
+    expect(logDownloadUrl()).toBe("/api/logs");
+    expect(logDownloadUrl({ tail: 0, level: "", hours: 0, search: "" })).toBe("/api/logs");
+  });
+
+  it("carries what the viewer is looking at, so the file matches the screen", () => {
+    expect(logDownloadUrl({ tail: 500, level: "WARN", hours: 24, search: "seek" }))
+      .toBe("/api/logs?tail=500&level=WARN&hours=24&q=seek");
+  });
+
+  it("escapes a search that would otherwise break the address", () => {
+    expect(logDownloadUrl({ search: "a&b c" })).toBe("/api/logs?q=a%26b%20c");
   });
 });

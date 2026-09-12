@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { clearLog, flushLog, initLogger, log, pruneLog, readLog } from "./logger.js";
+import { clearLog, currentLevel, flushLog, initLogger, log, pruneLog, readLog, setLevel } from "./logger.js";
 
 const withLogger = async (env: Record<string, string | undefined>, body: (directory: string) => Promise<void>) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stremio-logger-"));
@@ -144,4 +144,27 @@ test("an empty log reports that instead of failing", async () => {
     await writeFile(path.join(directory, "app.log"), "");
     assert.match(await readLog({}), /no entries/);
   });
+});
+
+test("what the server records is a setting, not only a container variable", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "log-level-"));
+  const original = process.env.LOG_LEVEL;
+  try {
+    process.env.LOG_LEVEL = "INFO";
+    await initLogger(directory);
+    assert.equal(currentLevel(), "INFO");
+    log("DEBUG", "detail nobody asked for");
+    await flushLog();
+    assert.doesNotMatch(await readLog(), /detail nobody asked for/, "below the level, so it is never written");
+
+    // Asking for detail in the interface has to reach the writer, or the log view has nothing to show.
+    setLevel("DEBUG");
+    assert.equal(currentLevel(), "DEBUG");
+    log("DEBUG", "detail that was asked for");
+    await flushLog();
+    assert.match(await readLog(), /detail that was asked for/);
+  } finally {
+    if (original === undefined) delete process.env.LOG_LEVEL; else process.env.LOG_LEVEL = original;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

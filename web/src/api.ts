@@ -154,6 +154,17 @@ export async function saveToDevice(payload: { title?: string; stream?: Stream; m
   return prepared.filename;
 }
 
+/** The download has to be the log the viewer is looking at, filters and all. */
+export const logDownloadUrl = (options: { tail?: number; level?: string; hours?: number; search?: string } = {}) => {
+  const query = [
+    options.tail ? `tail=${options.tail}` : "",
+    options.level ? `level=${encodeURIComponent(options.level)}` : "",
+    options.hours ? `hours=${options.hours}` : "",
+    options.search ? `q=${encodeURIComponent(options.search)}` : "",
+  ].filter(Boolean).join("&");
+  return `/api/logs${query ? `?${query}` : ""}`;
+};
+
 export const subtitleUrl = (subtitleId: string, offset = 0, delay = 0) => {
   const query = [offset ? `offset=${offset.toFixed(3)}` : "", delay ? `delay=${delay.toFixed(2)}` : ""].filter(Boolean).join("&");
   return `/api/subtitle/${encodeURIComponent(subtitleId)}${query ? `?${query}` : ""}`;

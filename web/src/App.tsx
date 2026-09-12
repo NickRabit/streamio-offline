@@ -1,6 +1,6 @@
 import { FormEvent, UIEvent, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowDown, BarChart3, ArrowUp, Check, Copy, FolderInput, FolderOpen, Images, KeyRound, Languages, LayoutGrid, List, MoreVertical, PanelLeftClose, PanelLeftOpen, Pencil, RotateCcw, ShieldCheck, Sparkles, Star, FileJson, Link2, LogOut, ChevronDown, ChevronLeft, ChevronRight, CirclePlay, Download, FileText, Film, FolderCog, HardDrive, Library, PackagePlus, Pause, Play, Plus, RefreshCw, Search, SearchX, Settings, Subtitles, Trash2, Upload, X } from "lucide-react";
-import { api, ApiError, describeError, saveToDevice } from "./api";
+import { api, ApiError, describeError, logDownloadUrl, saveToDevice } from "./api";
 import { AccountSettings, LoginScreen } from "./Login";
 import { SettingControl, SettingsSectionHead } from "./settings-ui";
 import { LOCALES, LOCALE_NAMES } from "./i18n";
@@ -1425,12 +1425,24 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
   const [tail, setTail] = useState(200);
   const [wrap, setWrap] = useState(false);
   const [lines, setLines] = useState<LogLine[]>([]);
+  // What the server writes down, as opposed to the level above, which only filters what it wrote.
+  const [recording, setRecording] = useState("INFO");
+
+  const changeRecording = async (level: string) => {
+    const previous = recording;
+    setRecording(level);
+    try { await api.updateSettings({ logLevel: level as AppSettings["logLevel"] }); onNotify(t("diag.recordLevelSaved", { level })); }
+    catch (error) { setRecording(previous); onError(error); }
+  };
 
   const loadOverview = async () => {
     setBusy(true);
     try {
-      const [diagnostics, text] = await Promise.all([api.diagnostics(), api.logs({ tail: 500, level: "WARN", hours, search: query, inline: true })]);
+      const [diagnostics, text, saved] = await Promise.all([
+        api.diagnostics(), api.logs({ tail: 500, level: "WARN", hours, search: query, inline: true }), api.settings(),
+      ]);
       setInfo(diagnostics);
+      setRecording(saved.logLevel ?? "INFO");
       setIssues(groupLog(parseLog(text)));
     } catch (error) { onError(error); }
     finally { setBusy(false); }
@@ -1515,7 +1527,8 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
 
       <div className="log-toggle">
         <button onClick={() => setShowLog(!showLog)} aria-expanded={showLog}><ChevronDown className={showLog ? "rotated" : ""}/> {t(showLog ? "diag.hideLog" : "diag.showLog")}</button>
-        <a className="button" href="/api/logs" download="stremio-offline.log"><Download/> {t("common.download")}</a>
+        <a className="button" href={logDownloadUrl(showLog ? { tail, level, hours, search: query } : {})}
+          title={showLog ? t("diag.downloadShown") : t("diag.downloadAll")} download="stremio-offline.log"><Download/> {t("common.download")}</a>
         <button onClick={() => void copyLog()}><Copy/> {t("common.copy")}</button>
         <button className="danger" onClick={() => void clearLog()}><Trash2/> {t("diag.clearLog")}</button>
       </div>
@@ -1524,6 +1537,9 @@ function DiagnosticsSection({ build, onNotify, onError }: { build: BuildInfo | n
         <div className="log-filters">
           <label><span>{t("diag.level")}</span><select aria-label={t("diag.logLevel")} value={level} onChange={(event) => setLevel(event.target.value)}>{LOG_LEVELS.map(([value, key]) => <option key={value} value={value}>{t(key)}</option>)}</select></label>
           <label><span>{t("diag.lines")}</span><select aria-label={t("diag.lineCount")} value={tail} onChange={(event) => setTail(Number(event.target.value))}>{[100, 200, 500, 1000].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+          <label><span>{t("diag.recordLevel")}</span><select aria-label={t("diag.recordLevelLabel")} value={recording} onChange={(event) => void changeRecording(event.target.value)}>
+            {LOG_LEVELS.filter(([value]) => value).map(([value, key]) => <option key={value} value={value}>{t(key)}</option>)}
+          </select></label>
           <label className="log-wrap"><input type="checkbox" checked={wrap} onChange={(event) => setWrap(event.target.checked)}/><span>{t("diag.wrapLines")}</span></label>
         </div>
         <div className={`log-viewer${wrap ? " wrap" : ""}`} aria-label={t("diag.serverLog")}>
