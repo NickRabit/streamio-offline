@@ -8,9 +8,10 @@ describe("HLS_PLAYER_CONFIG", () => {
     expect(HLS_PLAYER_CONFIG.maxBufferSize).toBeLessThanOrEqual(60 * 1000 * 1000);
   });
 
-  it("still treats EVENT playlists as VOD-like, not live TV", () => {
+  it("keeps enough of a growing EVENT playlist behind its edge to survive startup", () => {
     expect(HLS_PLAYER_CONFIG.liveDurationInfinity).toBe(true);
-    expect(HLS_PLAYER_CONFIG.liveSyncDurationCount).toBe(1);
+    expect(HLS_PLAYER_CONFIG.liveSyncDurationCount).toBeGreaterThanOrEqual(3);
+    expect(HLS_PLAYER_CONFIG.startOnSegmentBoundary).toBe(true);
     expect(HLS_PLAYER_CONFIG.testBandwidth).toBe(false);
   });
 });

@@ -9,7 +9,8 @@ export const HLS_PLAYER_CONFIG = {
   maxBufferHole: 1,
   maxBufferSize: 40 * 1000 * 1000,
   liveDurationInfinity: true,
-  liveSyncDurationCount: 1,
+  liveSyncDurationCount: 3,
+  startOnSegmentBoundary: true,
   maxLiveSyncPlaybackRate: 1,
   testBandwidth: false,
 };
