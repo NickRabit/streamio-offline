@@ -849,3 +849,40 @@ test("the player asking for a segment is what counts as watching", () => {
   manager.attended(session.id);
   assert.ok(session.clientAt !== undefined && Date.now() - session.clientAt < 1000);
 });
+
+/** The rule the tracks are chosen by, spelled out once and exercised four ways. */
+const subtitlePick = async (name: string, subtitleTracks: any[], options: Record<string, unknown>) => {
+  const manager = new PlaybackManager(`/tmp/test-playback-${name}`) as any;
+  manager.inspect = async () => ({
+    container: "mov,mp4,m4a,3gp,3g2,mj2",
+    video: { codec: "h264" }, audio: { codec: "aac" }, duration: 120,
+    audioTracks: [{ index: 0, codec: "aac", language: "cs" }, { index: 1, codec: "aac", language: "en" }],
+    subtitleTracks,
+  });
+  manager.spawnAt = async () => "/nope";
+  manager.sidecars.run = async (_args: string[], _file: string, _append: boolean, signal: AbortSignal) =>
+    new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+  const started = await manager.start({ url: "https://cdn.example/movie.mp4" }, playCaps, options);
+  await manager.stop(started.id);
+  return started.subtitleTrack;
+};
+
+const czechForced = { index: 0, codec: "subrip", language: "cs", title: "CZ forced", forced: true };
+const czech = { index: 1, codec: "subrip", language: "cs", title: "CZ" };
+const english = { index: 2, codec: "subrip", language: "en" };
+
+test("a viewer who understands the audio is given the forced lines and nothing else", async () => {
+  assert.equal(await subtitlePick("forced", [czechForced, czech, english], { audioLanguage: "cs", subtitleLanguage: "cs" }), 0);
+});
+
+test("understood audio with no forced track leaves the subtitles off", async () => {
+  assert.equal(await subtitlePick("forced-none", [czech, english], { audioLanguage: "cs", subtitleLanguage: "cs" }), null);
+});
+
+test("audio in a language the viewer did not ask for brings the whole film subtitled", async () => {
+  assert.equal(await subtitlePick("full", [czechForced, czech, english], { audioLanguage: "de", subtitleLanguage: "cs" }), 1);
+});
+
+test("subtitles the viewer's language does not have fall back to English", async () => {
+  assert.equal(await subtitlePick("fallback", [english], { audioLanguage: "de", subtitleLanguage: "cs" }), 2);
+});

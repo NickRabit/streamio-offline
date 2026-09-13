@@ -339,7 +339,7 @@ export class PlaybackManager {
     const audioTrack = options.audioTrack ?? Math.max(0, pickByLanguage(audioTracks, options.audioLanguage));
     const subtitleTrack = options.subtitleTrack !== undefined
       ? options.subtitleTrack
-      : this.preferredSubtitle(subtitleTracks, options.subtitleLanguage);
+      : this.preferredSubtitle(subtitleTracks, options.subtitleLanguage, audioTracks[audioTrack]?.language, options.audioLanguage);
 
     const quality = options.quality != null && QUALITY_BITRATE[options.quality] ? options.quality : null;
     const session: Session = {
@@ -634,9 +634,18 @@ export class PlaybackManager {
   }
 
   /** Embedded subtitles are switched on by themselves only when the preferred language really matches. */
-  private preferredSubtitle(tracks: Track[], preferred?: string): number | null {
-    if (!tracks.length || !preferred) return null;
-    return tracks.find((track) => track.language === preferred)?.index ?? null;
+  /** What a viewer who has not chosen a track themselves is given. Someone who understands
+   *  what is being said wants only the lines spoken in another language -- the forced track --
+   *  and nothing at all when the film carries none. Someone who does not understand it wants
+   *  the film subtitled: in their language when it is there, in English when it is not. */
+  private preferredSubtitle(tracks: Track[], preferred?: string, spoken?: string, understood?: string): number | null {
+    if (!tracks.length) return null;
+    const inLanguage = (language?: string) => language ? tracks.filter((track) => track.language === language) : [];
+    if (understood && spoken === understood) return inLanguage(preferred).find((track) => track.forced)?.index ?? null;
+    // A forced track subtitles a handful of lines, so a full one is worth more even in the
+    // second language: the point here is to follow a film nobody in the room can otherwise.
+    const offered = [...inLanguage(preferred), ...inLanguage("en")];
+    return (offered.find((track) => !track.forced) ?? offered[0])?.index ?? null;
   }
 
   private proxyPath(stream: StreamItem) { return mediaResources.path(stream); }
