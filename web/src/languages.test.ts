@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bingeGroupLanguages, guessLanguages, label, leavesLanguageBlank, titleLanguage } from "./languages";
+import { bingeGroupLanguages, guessLanguages, label, leavesLanguageBlank, pickAddonSubtitle, titleLanguage } from "./languages";
 
 describe("guessLanguages", () => {
   it("reads flags", () => {
@@ -105,5 +105,29 @@ describe("label", () => {
 
   it("marks a missing code", () => {
     expect(label(undefined)).toBe("?");
+  });
+});
+
+describe("pickAddonSubtitle", () => {
+  const offered = [{ lang: "en" }, { lang: "cs" }];
+
+  it("leaves the film alone when its audio is the language the viewer asked for", () => {
+    expect(pickAddonSubtitle(offered, "cs", "cs", "cs")).toBeNull();
+  });
+
+  it("takes the viewer's language when the audio is something else", () => {
+    expect(pickAddonSubtitle(offered, "cs", "en", "cs")).toEqual({ lang: "cs" });
+  });
+
+  it("falls back to English when the viewer's language is not on offer", () => {
+    expect(pickAddonSubtitle([{ lang: "en" }, { lang: "de" }], "cs", "de", "cs")).toEqual({ lang: "en" });
+  });
+
+  it("chooses for a film whose audio language nobody could read", () => {
+    expect(pickAddonSubtitle(offered, "cs", undefined, "cs")).toEqual({ lang: "cs" });
+  });
+
+  it("has nothing to offer when no language fits", () => {
+    expect(pickAddonSubtitle([{ lang: "de" }], "cs", "fr", "cs")).toBeNull();
   });
 });

@@ -72,3 +72,15 @@ export function guessLanguages(text: string): string[] {
   for (const [pattern, code] of WORDS) if (pattern.test(text)) found.add(code);
   return [...found];
 }
+
+/** Which subtitles an addon should supply when the viewer has not chosen for themselves.
+ *  Addon subtitles are always the whole film, never the forced lines alone, so they belong
+ *  to a viewer who cannot follow the dialogue: nothing at all while the audio is the language
+ *  they asked for, and otherwise their language, with English after it. */
+export function pickAddonSubtitle<T extends { lang?: string }>(
+  items: T[], preferred: string, spoken?: string, understood?: string,
+): T | null {
+  if (understood && spoken === understood) return null;
+  const speaks = (item: T, language: string) => (item.lang ?? "").toLowerCase().startsWith(language);
+  return items.find((item) => speaks(item, preferred)) ?? items.find((item) => speaks(item, "en")) ?? null;
+}
